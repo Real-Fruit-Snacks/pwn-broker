@@ -36,6 +36,15 @@ def _validate(values: dict) -> None:
         raise CredError(f"kind must be one of: {', '.join(KINDS)}")
 
 
+def _targets(targets) -> list[str]:
+    if isinstance(targets, str):
+        raise CredError("targets must be a list of names, not one string")
+    unique = list(dict.fromkeys(targets))
+    for target in unique:
+        check_field("works_on", target)
+    return unique
+
+
 def _find(creds: list[Cred], n: int) -> Cred:
     for cred in creds:
         if cred.n == n:
@@ -75,7 +84,8 @@ def edit_cred(creds: list[Cred], n: int, /, **changes) -> Cred:
         raise CredError(f"cannot edit: {', '.join(unknown)}")
     values = {name: getattr(cred, name) for name in EDITABLE}
     values.update(changes)
-    values["works_on"] = list(values["works_on"])
+    if "works_on" in changes:
+        values["works_on"] = _targets(changes["works_on"])
     _validate(values)
     if values["secret"] == "":
         values["kind"] = ""
@@ -92,9 +102,7 @@ def remove_cred(creds: list[Cred], n: int) -> Cred:
 
 def mark_works(creds: list[Cred], n: int, targets: list[str]) -> Cred:
     cred = _find(creds, n)
-    for target in targets:
-        check_field("works_on", target)
-    for target in targets:
+    for target in _targets(targets):
         if target not in cred.works_on:
             cred.works_on.append(target)
     return cred
@@ -107,6 +115,7 @@ def import_usernames(
     domain: str,
     found_on: str,
     now: datetime,
+    floor: int = 0,
 ) -> int:
     check_field("domain", domain)
     check_field("found_on", found_on)
@@ -122,7 +131,7 @@ def import_usernames(
             continue
         add_cred(
             creds, username=line, domain=domain, secret="", kind="",
-            found_on=found_on, note="", now=now,
+            found_on=found_on, note="", now=now, floor=floor,
         )  # fmt: skip
         seen.add(line)
         added += 1

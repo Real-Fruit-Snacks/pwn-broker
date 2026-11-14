@@ -223,3 +223,50 @@ def test_last_domain():
     creds.append(make_cred(n=4, domain="TIE", added=NOW + timedelta(hours=1)))
     assert last_domain(creds) == "TIE"
     assert last_domain([make_cred(domain="")]) == ""
+
+
+def test_import_respects_floor():
+    creds = [make_cred(n=1), make_cred(n=2)]
+    import_usernames(creds, ["bob"], domain="", found_on="", now=NOW, floor=3)
+    assert creds[-1].n == 4
+
+
+def test_floor_below_highest_is_ignored():
+    creds = [make_cred(n=5)]
+    assert add_cred(creds, floor=2, **FIELDS).n == 6
+
+
+def test_bare_string_targets_rejected():
+    creds = []
+    c = add_cred(creds, **FIELDS)
+    with pytest.raises(CredError):
+        mark_works(creds, c.n, "dc01")
+    with pytest.raises(CredError):
+        edit_cred(creds, c.n, works_on="dc01")
+    assert c.works_on == []
+
+
+def test_multi_line_target_rejected():
+    creds = []
+    c = add_cred(creds, **FIELDS)
+    with pytest.raises(CredError, match="creds/"):
+        mark_works(creds, c.n, ["ok", "a\nb"])
+    with pytest.raises(CredError, match="creds/"):
+        edit_cred(creds, c.n, works_on=["a\rb"])
+    assert c.works_on == []
+
+
+def test_edit_works_on_drops_duplicates_keeping_order():
+    creds = []
+    c = add_cred(creds, **FIELDS)
+    edit_cred(creds, c.n, works_on=["b", "a", "b"])
+    assert c.works_on == ["b", "a"]
+
+
+def test_import_multi_line_domain_or_found_on_adds_nothing():
+    creds = []
+    with pytest.raises(CredError):
+        import_usernames(creds, ["bob"], domain="a\nb", found_on="", now=NOW)
+    with pytest.raises(CredError):
+        import_usernames(creds, ["bob"], domain="", found_on="a\rb", now=NOW)
+    assert creds == []
