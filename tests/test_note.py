@@ -1,8 +1,11 @@
 from dataclasses import replace
 from importlib import resources
 
+import pytest
+
 from pwn_broker.note import (
     NOTE_NAME,
+    NoteError,
     SECTION_MARK,
     TABLE_BEGIN,
     TABLE_END,
@@ -116,3 +119,37 @@ def test_note_round_trip_keeps_line_endings(box):
     assert (box.path / NOTE_NAME).read_bytes() == b"a\r\nb\nc"
     assert read_note(box) == text
     assert [p.name for p in box.path.iterdir() if p.suffix == ".tmp"] == []
+
+
+def _broken(dc01, text):
+    before = f"mine\n{text}\nmy own writing\n"
+    for _ in range(2):
+        with pytest.raises(NoteError):
+            update_table(before, [dc01])
+    return before
+
+
+def test_update_table_refuses_when_only_end_is_missing(dc01):
+    _broken(dc01, f"{TABLE_BEGIN}\nrow")
+
+
+def test_update_table_refuses_when_only_begin_is_missing(dc01):
+    _broken(dc01, f"row\n{TABLE_END}")
+
+
+def test_update_table_refuses_when_end_comes_first(dc01):
+    _broken(dc01, f"{TABLE_END}\nrow\n{TABLE_BEGIN}")
+
+
+def test_update_table_refuses_duplicated_marker(dc01):
+    _broken(dc01, f"{TABLE_BEGIN}\n{TABLE_BEGIN}\nrow\n{TABLE_END}")
+
+
+def test_update_table_accepts_markers_with_trailing_spaces(dc01):
+    before = f"{TABLE_BEGIN}  \nold\n{TABLE_END}\t\n"
+    after = update_table(before, [dc01])
+    assert "old" not in after and "dc01" in after
+
+
+def test_append_section_with_empty_template_changes_nothing(dc01):
+    assert append_section("text\n\n", "", dc01) == "text\n\n"

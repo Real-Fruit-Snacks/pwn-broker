@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import tomllib
 from dataclasses import asdict
@@ -15,13 +16,19 @@ class StoreError(Exception):
     pass
 
 
-def write_toml(path: Path, data: dict) -> None:
-    text = tomli_w.dumps(data)
+def write_text(path: Path, text: str, *, newline: str = "\n") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as fh:
             fh.write(text)
+        # mkstemp makes the file 0600; keep the old mode, or the usual default for a new file
+        if path.exists():
+            shutil.copymode(path, tmp_name)
+        else:
+            umask = os.umask(0)
+            os.umask(umask)
+            os.chmod(tmp_name, 0o666 & ~umask)
         os.replace(tmp_name, path)
     except BaseException:
         try:
@@ -29,6 +36,10 @@ def write_toml(path: Path, data: dict) -> None:
         except OSError:
             pass
         raise
+
+
+def write_toml(path: Path, data: dict) -> None:
+    write_text(path, tomli_w.dumps(data))
 
 
 def read_toml(path: Path) -> dict:

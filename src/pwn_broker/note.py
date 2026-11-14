@@ -1,14 +1,17 @@
-import os
 import re
-import tempfile
 from string import Template
 
 from pwn_broker.model import Box, Target
+from pwn_broker.store import write_text
 
 TABLE_BEGIN = "<!-- pwn-broker:targets -->"
 TABLE_END = "<!-- /pwn-broker:targets -->"
 SECTION_MARK = "<!-- pwn-broker:section -->"
 NOTE_NAME = "notes.md"
+
+
+class NoteError(Exception):
+    pass
 
 
 def split_template(text: str) -> tuple[str, str]:
@@ -61,24 +64,26 @@ def _append(text: str, block: str) -> str:
 
 def update_table(text: str, targets: list[Target]) -> str:
     lines = text.splitlines(keepends=True)
-    begin = end = None
-    for i, line in enumerate(lines):
-        bare = line.rstrip("\r\n")
-        if begin is None and bare == TABLE_BEGIN:
-            begin = i
-        elif begin is not None and bare == TABLE_END:
-            end = i
-            break
+    begins = [i for i, line in enumerate(lines) if line.rstrip() == TABLE_BEGIN]
+    ends = [i for i, line in enumerate(lines) if line.rstrip() == TABLE_END]
     rows = table_lines(targets)
-    if begin is None or end is None:
+    if not begins and not ends:
         block = "".join(f"{line}\n" for line in ["## targets", TABLE_BEGIN, *rows, TABLE_END])
         return _append(text, block)
+    if len(begins) != 1 or len(ends) != 1 or ends[0] < begins[0]:
+        raise NoteError(
+            f"the targets table needs exactly one {TABLE_BEGIN} line followed by one {TABLE_END} line; "
+            "restore them in the note"
+        )
+    begin, end = begins[0], ends[0]
     eol = _line_end(lines[begin]) or "\n"
     new = [row + eol for row in rows]
     return "".join(lines[: begin + 1] + new + lines[end:])
 
 
 def append_section(text: str, section_template: str, target: Target) -> str:
+    if not section_template:
+        return text
     section = Template(section_template).safe_substitute(target=target.name)
     section = section.rstrip("\r\n") + "\n"
     base = text.rstrip("\r\n")
@@ -96,15 +101,4 @@ def read_note(box: Box) -> str:
 
 
 def write_note(box: Box, text: str) -> None:
-    path = box.path / NOTE_NAME
-    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
-            fh.write(text)
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+    write_text(box.path / NOTE_NAME, text, newline="")

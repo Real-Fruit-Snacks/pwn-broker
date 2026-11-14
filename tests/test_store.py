@@ -1,4 +1,5 @@
 import os
+import sys
 from datetime import timedelta
 
 import pytest
@@ -17,6 +18,7 @@ from pwn_broker.store import (
     save_creds,
     save_files,
     save_target,
+    write_text,
     write_toml,
 )
 
@@ -134,3 +136,30 @@ def test_none_values_are_omitted_and_read_back_as_none(box):
     got = load_box(box.path)
     assert got.finished is None and got.last_target is None
     assert os.path.exists(box.path / "box.toml")
+
+
+def test_write_text_writes_content_and_leaves_no_temp_file(tmp_path):
+    target = tmp_path / "sub" / "a.txt"
+    write_text(target, "x\ny", newline="")
+    write_text(target, "a\r\nb", newline="")
+    assert target.read_bytes() == b"a\r\nb"
+    assert [p.name for p in target.parent.iterdir()] == ["a.txt"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_write_text_keeps_existing_mode(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("old")
+    target.chmod(0o640)
+    write_text(target, "new")
+    assert target.stat().st_mode & 0o777 == 0o640
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+def test_write_text_new_file_uses_umask_default(tmp_path):
+    old = os.umask(0o022)
+    try:
+        write_text(tmp_path / "a.txt", "new")
+    finally:
+        os.umask(old)
+    assert (tmp_path / "a.txt").stat().st_mode & 0o777 == 0o644
