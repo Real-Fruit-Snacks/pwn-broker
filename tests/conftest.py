@@ -33,3 +33,29 @@ def box(paths):
     )
     save_box(value)
     return value
+
+
+@pytest.fixture
+def other(paths):
+    from pwn_broker.boxes import create_box
+
+    return create_box(
+        paths,
+        name="Cascade",
+        platform="htb",
+        day=NOW.date(),
+        os_name="windows",
+        difficulty="medium",
+        now=NOW,
+        new_id=lambda: "id-other",
+    )
+
+
+@pytest.fixture
+def dc01(box):
+    from pwn_broker.boxes import add_target
+
+    return add_target(
+        box, [], ips=["10.10.10.161"], hostnames=["forest.htb.local"],
+        scope="external", name="dc01", now=NOW,
+    )  # fmt: skip
