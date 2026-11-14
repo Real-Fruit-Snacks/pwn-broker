@@ -1,12 +1,10 @@
-import os
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-import tomli_w
-
 from pwn_broker.paths import AppPaths
+from pwn_broker.store import write_toml
 
 DEFAULT_OPT = Path("/opt/pwn-broker")
 
@@ -96,11 +94,7 @@ def save_state(state_file: Path, state: State) -> None:
     data: dict = {"schema": 1}
     if state.last_platform is not None:
         data["last_platform"] = state.last_platform
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp = state_file.with_name(state_file.name + ".tmp")
-    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(tomli_w.dumps(data))
-    os.replace(tmp, state_file)
+    write_toml(state_file, data)
 
 
 def platform_default(state: State, settings: Settings) -> str:
