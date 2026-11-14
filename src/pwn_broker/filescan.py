@@ -1,5 +1,6 @@
 import hashlib
 import os
+import stat
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -46,7 +47,14 @@ def scan(
         if on_skip is not None:
             on_skip(rel, _reason(exc))
 
-    for root, dirs, files in os.walk(box.path, followlinks=False):
+    unreadable: list[str] = []
+
+    def dir_failed(exc: OSError) -> None:
+        rel = Path(exc.filename).relative_to(box.path).as_posix()
+        unreadable.append(rel)
+        skip(rel, exc)
+
+    for root, dirs, files in os.walk(box.path, followlinks=False, onerror=dir_failed):
         dirs[:] = [d for d in dirs if not d.startswith(".")]
         for name in files:
             if is_skipped(name):
@@ -54,9 +62,14 @@ def scan(
             full = Path(root) / name
             rel = full.relative_to(box.path).as_posix()
             try:
-                if full.is_symlink():
+                st = os.lstat(full)
+                if stat.S_ISLNK(st.st_mode):
                     continue
-                st = os.stat(full)
+                # decided from the stat alone: opening a FIFO would block the shell
+                if not stat.S_ISREG(st.st_mode):
+                    if on_skip is not None:
+                        on_skip(rel, "not a regular file")
+                    continue
                 old = previous.get(rel)
                 wants_hash = hash_all or st.st_size <= limit
                 if old and old.size == st.st_size and old.mtime == st.st_mtime:
@@ -80,4 +93,8 @@ def scan(
                     sha256=checksum,
                 )
             )
+    # keep what was recorded under a folder we could not list, so first_seen survives
+    for r in records:
+        if any(r.path.startswith(d + "/") for d in unreadable):
+            found.append(r)
     return sorted(found, key=lambda r: r.path)

@@ -1,11 +1,12 @@
 import hashlib
 import os
+import stat
 import sys
 from datetime import timedelta
 
 import pytest
 
-from conftest import NOW
+from helpers import NOW
 from pwn_broker import filescan
 from pwn_broker.filescan import is_skipped, scan, sha256_file
 
@@ -111,7 +112,7 @@ def test_symlinks_are_not_followed(box, tmp_path):
     (outside / "f.txt").write_text("x")
     (box.path / "link").symlink_to(outside, target_is_directory=True)
     (box.path / "flink").symlink_to(outside / "f.txt")
-    assert not [r for r in scan(box, [], now=NOW) if r.path.startswith(("link", "flink"))]
+    assert [r.path for r in scan(box, [], now=NOW)] == ["box.toml"]
 
 
 def test_unreadable_file_is_skipped_with_reason(box, loot, monkeypatch):
@@ -136,14 +137,14 @@ def test_unreadable_file_is_skipped_with_reason(box, loot, monkeypatch):
 def test_file_vanishing_mid_scan(box, loot, monkeypatch):
     (loot / "a.txt").write_bytes(b"x")
     (loot / "b.txt").write_bytes(b"x")
-    real_stat = os.stat
+    real_stat = os.lstat
 
     def fake_stat(path, *args, **kwargs):
         if os.fspath(path).endswith("a.txt"):
             raise FileNotFoundError(path)
         return real_stat(path, *args, **kwargs)
 
-    monkeypatch.setattr(filescan.os, "stat", fake_stat)
+    monkeypatch.setattr(filescan.os, "lstat", fake_stat)
     skipped = []
     result = scan(box, [], now=NOW, on_skip=lambda p, why: skipped.append((p, why)))
     assert not [r for r in result if r.path.endswith("a.txt")]
@@ -164,3 +165,72 @@ def test_sha256_file_reads_in_chunks(tmp_path):
     data = b"z" * (3 * 1024 * 1024 + 5)
     f.write_bytes(data)
     assert sha256_file(f) == hashlib.sha256(data).hexdigest()
+
+
+def test_file_directly_under_targets_has_no_target(box):
+    (box.path / "targets").mkdir()
+    (box.path / "targets/stray.txt").write_text("x")
+    [r] = [r for r in scan(box, [], now=NOW) if r.path.startswith("targets/")]
+    assert (r.path, r.target) == ("targets/stray.txt", "")
+
+
+def test_changed_file_over_limit_keeps_first_seen_and_defers_hash(box, loot):
+    f = loot / "big.bin"
+    f.write_bytes(b"abc")
+    first = scan(box, [], now=NOW)
+    f.write_bytes(b"abcdefgh")
+    os.utime(f, (1, 1))
+    [r] = [r for r in scan(box, first, now=NOW + timedelta(hours=1), limit=2) if r.path.endswith("big.bin")]
+    assert (r.first_seen, r.size, r.sha256) == (NOW, 8, "")
+
+
+def test_unlistable_directory_keeps_its_records(box, loot, monkeypatch):
+    (loot / "a.txt").write_bytes(b"abc")
+    (box.path / "notes.md").write_text("n")
+    first = scan(box, [], now=NOW)
+    real = os.scandir
+
+    def fake(path="."):
+        if os.fspath(path).replace("\\", "/").endswith("targets/dc01"):
+            raise PermissionError(13, "denied", os.fspath(path))
+        return real(path)
+
+    monkeypatch.setattr(os, "scandir", fake)
+    skipped = []
+    later = scan(box, first, now=NOW + timedelta(hours=1), on_skip=lambda p, why: skipped.append((p, why)))
+    assert skipped == [("targets/dc01", "cannot read")]
+    assert later == first
+
+
+def test_non_regular_file_is_never_opened(box, loot, monkeypatch):
+    (loot / "pipe").write_bytes(b"")
+    (loot / "ok.txt").write_bytes(b"x")
+    real = os.lstat
+
+    def fake(path, *args, **kwargs):
+        st = real(path, *args, **kwargs)
+        if os.fspath(path).endswith("pipe"):
+            values = list(st)
+            values[0] = stat.S_IFIFO | 0o644
+            return os.stat_result(values)
+        return st
+
+    monkeypatch.setattr(filescan.os, "lstat", fake)
+    opened = []
+    real_hash = filescan.sha256_file
+    monkeypatch.setattr(filescan, "sha256_file", lambda p: opened.append(p.name) or real_hash(p))
+    skipped = []
+    result = scan(box, [], now=NOW, on_skip=lambda p, why: skipped.append((p, why)))
+    assert "pipe" not in opened
+    assert "targets/dc01/loot/ok.txt" in [r.path for r in result]
+    assert "targets/dc01/loot/pipe" not in [r.path for r in result]
+    assert skipped == [("targets/dc01/loot/pipe", "not a regular file")]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs mkfifo")
+def test_real_fifo_does_not_hang(box, loot):
+    os.mkfifo(loot / "rev")
+    skipped = []
+    result = scan(box, [], now=NOW, on_skip=lambda p, why: skipped.append(why))
+    assert not [r for r in result if r.path.endswith("rev")]
+    assert skipped == ["not a regular file"]
