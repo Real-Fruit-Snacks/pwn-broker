@@ -621,3 +621,121 @@ def test_copy_out_keeps_an_existing_copy_when_it_fails(tmp_path, monkeypatch):
         copy_out(src, target)
     assert (target / "a.tar.gz").read_bytes() == b"earlier"
     assert os.listdir(target) == ["a.tar.gz"]
+
+
+# --- replace rollback ---
+
+
+@pytest.fixture
+def replacing(filled, tmp_path):
+    dest = tmp_path / "forest.tar.gz"
+    pack(filled, dest)
+    active = tmp_path / "active"
+    existing = active / filled.path.name
+    existing.mkdir(parents=True)
+    (existing / "old.txt").write_text("old")
+    return dest, active, existing
+
+
+def fail_move_into(monkeypatch, top, *, times, exc):
+    real = os.replace
+    calls = []
+
+    def flaky(src, dst):
+        if os.path.basename(dst) == top:
+            calls.append(src)
+            if len(calls) <= times:
+                raise exc
+        return real(src, dst)
+
+    monkeypatch.setattr(archive.os, "replace", flaky)
+
+
+def test_replace_restores_old_box_when_the_move_fails(replacing, monkeypatch):
+    dest, active, existing = replacing
+    fail_move_into(monkeypatch, existing.name, times=1, exc=OSError("nope"))
+    with pytest.raises(ArchiveError):
+        unpack(dest, active, replace=True)
+    assert (existing / "old.txt").read_text() == "old"
+    assert os.listdir(active) == [existing.name]
+
+
+def test_replace_reports_where_the_old_box_is_when_restore_fails(replacing, monkeypatch):
+    dest, active, existing = replacing
+    fail_move_into(monkeypatch, existing.name, times=2, exc=OSError("nope"))
+    with pytest.raises(ArchiveError) as caught:
+        unpack(dest, active, replace=True)
+    [parked] = [active / n for n in os.listdir(active) if ".replaced-" in n]
+    assert str(parked) in str(caught.value)
+    assert (parked / "old.txt").read_text() == "old"
+    assert not any(n.startswith(".import-") for n in os.listdir(active))
+
+
+def test_replace_restores_old_box_on_interrupt(replacing, monkeypatch):
+    dest, active, existing = replacing
+    fail_move_into(monkeypatch, existing.name, times=1, exc=KeyboardInterrupt())
+    with pytest.raises(KeyboardInterrupt):
+        unpack(dest, active, replace=True)
+    assert (existing / "old.txt").read_text() == "old"
+    assert os.listdir(active) == [existing.name]
+
+
+def test_replace_success_leaves_no_helper_folders(replacing):
+    dest, active, existing = replacing
+    unpack(dest, active, replace=True)
+    assert os.listdir(active) == [existing.name]
+
+
+def test_replace_survives_failure_to_delete_the_parked_box(replacing, monkeypatch):
+    dest, active, existing = replacing
+    monkeypatch.setattr(archive.shutil, "rmtree", lambda *a, **k: None)
+    folder = unpack(dest, active, replace=True)
+    assert (folder / "notes.md").read_text() == "hello"
+
+
+# --- malformed manifests, limits, names ---
+
+
+def toml_archive(tmp_path, text: bytes):
+    def build(tar):
+        add_dir(tar, "b")
+        add_bytes(tar, "b/manifest.toml", text)
+
+    return raw_archive(tmp_path / "m.tar.gz", build)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"file = [1]",
+        b'file = ["x"]',
+        b'file = "x"',
+        b'[[file]]\nsize = 1\nsha256 = "aa"',
+        b'[[file]]\npath = "a"\nsize = -1\nsha256 = "aa"',
+        b'[[file]]\npath = "a"\nsize = true\nsha256 = "aa"',
+        b'[[file]]\npath = "a"\nsize = 1\nsha256 = 5',
+        b'[[file]]\npath = 3\nsize = 1\nsha256 = "aa"',
+    ],
+)
+def test_verify_rejects_malformed_manifest_rows(tmp_path, body):
+    with pytest.raises(ArchiveError, match="manifest.toml"):
+        verify(toml_archive(tmp_path, b"schema = 1\n" + body))
+
+
+def test_verify_accepts_a_manifest_without_files(tmp_path):
+    verify(toml_archive(tmp_path, b"schema = 1\n"))
+
+
+def test_verify_rejects_an_oversized_manifest(tmp_path, monkeypatch):
+    monkeypatch.setattr(archive, "_MANIFEST_LIMIT", 10)
+    with pytest.raises(ArchiveError, match="too large"):
+        verify(toml_archive(tmp_path, b"schema = 1\n"))
+
+
+@posix_only
+def test_pack_refuses_a_name_with_a_backslash(filled, tmp_path):
+    (filled.path / "bad\name.txt").write_text("x")
+    dest = tmp_path / "forest.tar.gz"
+    with pytest.raises(ArchiveError, match="rename"):
+        pack(filled, dest)
+    assert not dest.exists() and not part_of(dest).exists()

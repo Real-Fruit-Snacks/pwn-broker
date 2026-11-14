@@ -1,5 +1,6 @@
 import hashlib
 import os
+import secrets
 import shutil
 import stat
 import tarfile
@@ -18,6 +19,7 @@ from pwn_broker.store import SCHEMA, write_toml
 
 MANIFEST = "manifest.toml"
 _CHUNK = 1024 * 1024
+_MANIFEST_LIMIT = 64 * 1024 * 1024
 _READ_ERRORS = (tarfile.TarError, OSError, EOFError, zlib.error)
 
 
@@ -62,6 +64,11 @@ def _raise(exc: OSError) -> None:
     raise exc
 
 
+def _check_name(name: str) -> None:
+    if "\\" in name:
+        raise ArchiveError(f"{name!r} has a backslash in its name and could not be unpacked; rename it")
+
+
 def _entries(root: Path) -> list[tuple[str, Path]]:
     found = [("", root)]
     for current, dirs, files in os.walk(root, followlinks=False, onerror=_raise):
@@ -69,6 +76,7 @@ def _entries(root: Path) -> list[tuple[str, Path]]:
         keep = []
         for name in dirs:
             if stat.S_ISDIR(os.lstat(here / name).st_mode):
+                _check_name(name)
                 keep.append(name)
                 found.append(((here / name).relative_to(root).as_posix(), here / name))
         dirs[:] = keep
@@ -76,6 +84,7 @@ def _entries(root: Path) -> list[tuple[str, Path]]:
             if _left_out(name):
                 continue
             if stat.S_ISREG(os.lstat(here / name).st_mode):
+                _check_name(name)
                 found.append(((here / name).relative_to(root).as_posix(), here / name))
     return sorted(found, key=lambda e: e[0])
 
@@ -147,6 +156,8 @@ def peek_folder(archive: Path) -> str:
 def _manifest_rows(tar: tarfile.TarFile, member: tarfile.TarInfo | None) -> list[dict]:
     if member is None or not member.isreg():
         raise ArchiveError(f"{MANIFEST} is missing from the archive")
+    if member.size > _MANIFEST_LIMIT:
+        raise ArchiveError(f"{MANIFEST} is too large ({member.size} bytes)")
     try:
         data = tomllib.loads(tar.extractfile(member).read().decode("utf-8"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
@@ -154,6 +165,16 @@ def _manifest_rows(tar: tarfile.TarFile, member: tarfile.TarInfo | None) -> list
     rows = data.get("file", [])
     if data.get("schema") != SCHEMA or not isinstance(rows, list):
         raise ArchiveError(f"{MANIFEST} is not a schema {SCHEMA} manifest")
+    for row in rows:
+        if not (
+            isinstance(row, dict)
+            and isinstance(row.get("path"), str)
+            and isinstance(row.get("size"), int)
+            and not isinstance(row["size"], bool)
+            and row["size"] >= 0
+            and isinstance(row.get("sha256"), str)
+        ):
+            raise ArchiveError(f"{MANIFEST} has a malformed file record: {row!r}")
     return rows
 
 
@@ -167,8 +188,6 @@ def verify(archive: Path) -> None:
             wanted = []
             for row in rows:
                 path, size, checksum = row.get("path"), row.get("size"), row.get("sha256")
-                if not isinstance(path, str) or not isinstance(size, int) or not isinstance(checksum, str):
-                    raise ArchiveError(f"{MANIFEST} has a malformed file record: {row!r}")
                 if not checksum:
                     raise ArchiveError(f"{path}: no checksum recorded")
                 member = by_name.get(f"{top}/{path}")
@@ -216,7 +235,7 @@ def unpack(archive: Path, active: Path, *, replace: bool = False) -> Path:
             active.mkdir(parents=True, exist_ok=True)
             tmp = Path(tempfile.mkdtemp(prefix=".import-", dir=active))
             tar.extractall(tmp, filter=tarfile.data_filter)
-        _move_into_place(tmp / top, final, tmp / "old", replace)
+        _move_into_place(tmp / top, final, replace)
         return final
     except ArchiveError:
         raise
@@ -227,20 +246,28 @@ def unpack(archive: Path, active: Path, *, replace: bool = False) -> Path:
             shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _move_into_place(new: Path, final: Path, aside: Path, replace: bool) -> None:
-    displaced = False
-    if os.path.lexists(final):
-        if not replace:
-            raise ArchiveError(f"{final} already exists")
-        # parked inside the temp folder rather than deleted, so a failed move can put it back
-        os.replace(final, aside)
-        displaced = True
+def _move_into_place(new: Path, final: Path, replace: bool) -> None:
+    parked = None
     try:
+        if os.path.lexists(final):
+            if not replace:
+                raise ArchiveError(f"{final} already exists")
+            # a sibling, never inside the temp folder, so no cleanup can delete the old box
+            parked = final.with_name(f".{final.name}.replaced-{secrets.token_hex(4)}")
+            os.replace(final, parked)
         os.replace(new, final)
-    except BaseException:
-        if displaced:
-            os.replace(aside, final)
+    except BaseException as exc:
+        if parked is not None and os.path.lexists(parked) and not os.path.lexists(final):
+            try:
+                os.replace(parked, final)
+            except OSError as restore_exc:
+                raise ArchiveError(
+                    f"could not put the old box back; it is kept at {parked} ({restore_exc})"
+                ) from exc
         raise
+    if parked is not None:
+        # the new box is in place; a leftover parked folder is harmless
+        shutil.rmtree(parked, ignore_errors=True)
 
 
 def copy_out(archive: Path, copy_to: Path) -> Path:
