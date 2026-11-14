@@ -1,6 +1,7 @@
 import io
 
 import pytest
+from rich.console import Console as RichConsole
 
 from pwn_broker.console import Cancelled, FakeConsole, TermConsole, status_line
 from pwn_broker.theme import color_enabled
@@ -68,3 +69,21 @@ def test_fake_records_lines_and_tables():
     c.table(["h"], [["v"]])
     assert c.lines == [("ok", "a"), ("warn", "b"), ("fail", "c"), ("info", "d")]
     assert c.tables == [(["h"], [["v"]])]
+
+
+def test_wide_table_not_cut_off_terminal(monkeypatch):
+    out = io.StringIO()
+    monkeypatch.setattr("sys.stdout", out)
+    c = TermConsole({"NO_COLOR": "1"})
+    c.table(["a", "b"], [["x" * 70, "y" * 40]])
+    assert "x" * 70 in out.getvalue() and "y" * 40 in out.getvalue()
+
+
+def test_table_cells_fold_on_narrow_terminal():
+    out = io.StringIO()
+    c = TermConsole({"NO_COLOR": "1"}, out=out)
+    c._rich = RichConsole(file=out, force_terminal=True, width=40, color_system=None)
+    c.table(["a", "b"], [["x" * 70, "y" * 40]])
+    text = out.getvalue()
+    assert "\u2026" not in text
+    assert text.count("x") == 70 and text.count("y") == 40

@@ -82,17 +82,19 @@ class TermConsole:
             options["color_system"] = None
         if out is not None:
             options["file"] = out
-            # Off a terminal, user text must reach the stream unwrapped.
-            options["width"] = 100_000
         self._rich = RichConsole(**options)
+        # Off a terminal (piped stdout, tests), user text must reach the stream unwrapped.
+        if not self._rich.is_terminal:
+            self._rich.width = 100_000
 
     def _style(self, color: str, bold: bool = False) -> Style:
         return Style(color=color, bold=bold) if self._color else Style()
 
     def _status(self, kind: str, text: str) -> None:
         line = Text(no_wrap=True)
-        line.append(f"{kind:<4}", self._style(_KIND_COLOR[kind]))
-        line.append(f"  {text}", self._style(theme.TEXT))
+        full = status_line(kind, text)
+        line.append(full[:4], self._style(_KIND_COLOR[kind]))
+        line.append(full[4:], self._style(theme.TEXT))
         self._rich.print(line, soft_wrap=True)
 
     def ok(self, text: str) -> None:
@@ -111,7 +113,7 @@ class TermConsole:
         mute = self._style(theme.MUTE)
         table = Table(box=None, show_edge=False, pad_edge=False)
         for name in columns:
-            table.add_column(Text(name, style=self._style(theme.MUTE, bold=True)), no_wrap=True)
+            table.add_column(Text(name, style=self._style(theme.MUTE, bold=True)), overflow="fold")
         for row in rows:
             table.add_row(*(Text(cell, style=mute) for cell in row))
         self._rich.print(table)
