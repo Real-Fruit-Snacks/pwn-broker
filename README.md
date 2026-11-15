@@ -265,7 +265,7 @@ certipy    5.1.0-3    2026-11-15 14:32   -                  python-3.13 3.13.18-
 
 That is the shape of the output, not a recorded run. A tool installed again at the same build, when its line is current, keeps that line with the latest install's time.
 
-`~/pwn-broker/tools.log` spans every box: one line each time a box installs a tool, removes it with `tool remove`, or takes it off at `finish`, with the time, the box's name and ID, the tool's version and build and the package's SHA-256. A runtime's lines end in `runtime`. Removals by the launch checks are not logged. The app only ever adds to the file, never reads it back, and keeps it readable only by you (mode 600). It follows the `home` setting, so removing or reinstalling the app does not lose it. If it cannot be written, the app warns once a session and the install or removal goes ahead.
+`~/pwn-broker/tools.log` spans every box: one line each time a box installs a tool, removes it with `tool remove`, or takes it off at `finish`. Each line holds, in order, the time, the event (`install`, `remove` or `finish`), the box's name and ID, the tool's name with its version and build, and the package's SHA-256. A runtime's lines end in `runtime`. Removals by the launch checks are not logged. The app only ever adds to the file, never reads it back, and keeps it readable only by you (mode 600). It follows the `home` setting, so removing or reinstalling the app does not lose it. If it cannot be written, the app warns once a session and the install or removal goes ahead.
 
 ### The tools index
 
