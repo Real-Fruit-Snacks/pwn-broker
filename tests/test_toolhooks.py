@@ -118,6 +118,7 @@ def test_block_names_a_running_tool(tooled):
     mark(tooled)
     reason = toolhooks.block(tooled, alive=lambda pid: True, started=lambda pid: None)
     assert "kerbrute" in reason and "4321" in reason
+    assert str(toolstate.mark_path(tooled.paths, "kerbrute", 4321)) in reason
 
 
 def test_block_is_none_without_a_running_tool(tooled):
@@ -142,9 +143,11 @@ def test_stale_run_box_file_and_dead_marker_do_not_block_finish(tooled):
     toolstate.write_open_box(tooled.paths, tooled.box.path, 4321)
     marker = mark(tooled)
     say(tooled, "y", "n")
+    stale = mark(tooled, 4322, text="99")
+    assert toolhooks.block(tooled) is None
     assert finish_box(tooled, **SAVED) is not None
-    assert not marker.exists()
-    assert toolstate.open_box(tooled.paths, alive=lambda pid: False) is None
+    assert not lines(tooled, "fail")
+    assert not marker.exists() and not stale.exists()
 
 
 # ---- summary
@@ -210,7 +213,7 @@ def test_undo_releases_the_tool_and_deletes_new_home_paths(tooled, user):
     assert load_installed(tooled.paths) == {}
     assert not (user / ".kerb").exists()
     assert (user / ".old").read_text() == "before"
-    assert load_box(tooled.box.path).tools == []
+    assert [t.name for t in load_box(tooled.box.path).tools] == ["kerbrute"]
     assert any(".old" in t for t in lines(tooled, "warn"))
 
 
@@ -554,3 +557,112 @@ def test_import_with_a_changed_sha256_warns_and_skips(tooled, tmp_path):
 
 def tooled_sha(session):
     return session.box.tools[0].sha256
+
+
+# ---- review fixes
+
+
+def break_box(box_dir):
+    (box_dir / "box.toml").write_text("nope [", encoding="utf-8")
+
+
+def test_undo_keeps_the_box_recording_its_tools(tooled, user):
+    toolhooks.undo(tooled)
+    saved = load_box(tooled.box.path)
+    assert [t.name for t in saved.tools] == ["kerbrute"]
+    assert load_installed(tooled.paths) == {}
+
+
+def test_reopen_after_a_failed_removal_offers_the_tools_again(tooled, env, monkeypatch):
+    def stuck(paths, item):
+        raise ToolError("cannot remove it")
+
+    real = toolinstall.remove_files
+    monkeypatch.setattr(toolinstall, "remove_files", stuck)
+    say(tooled, "y")
+    assert finish_box(tooled, **SAVED) is not None
+    monkeypatch.setattr(toolinstall, "remove_files", real)
+    assert [t.name for t in load_box(tooled.box.path).tools] == ["kerbrute"]
+    from pwn_broker import cli
+
+    env.settings = tooled.settings
+    env.console = FakeConsole(["3", "y"])
+    reopened = cli.choose(env)
+    assert reopened.box.status == "active"
+    assert env.console.asked[-1] == "install these tools again?"
+    assert any("kerbrute 1.0.3" in t for k, t in env.console.lines if k == "info")
+    assert reopened.box.id in load_installed(tooled.paths)["kerbrute"].users
+
+
+def test_finishing_one_box_keeps_the_tool_for_a_box_that_cannot_be_read(tooled, other, user):
+    item = load_installed(tooled.paths)["kerbrute"]
+    item.users.append(other.id)
+    toolstate.save_installed(tooled.paths, {"kerbrute": item})
+    break_box(other.path)
+    toolhooks.undo(tooled)
+    assert load_installed(tooled.paths)["kerbrute"].users == [other.id]
+    assert (user / ".kerb" / "found.txt").exists()
+    assert any(".old" in t for t in lines(tooled, "warn"))
+
+
+def test_a_loaded_finished_box_still_does_not_count_while_another_is_unreadable(tooled, user):
+    from pwn_broker.boxes import create_box
+
+    done = create_box(
+        tooled.paths, name="Done", platform="htb", day=NOW.date(), os_name="linux",
+        difficulty="easy", now=NOW, new_id=lambda: "id-done",
+    )  # fmt: skip
+    done.status = "finished"
+    save_box(done)
+    broken = create_box(
+        tooled.paths, name="Broken", platform="htb", day=NOW.date(), os_name="linux",
+        difficulty="easy", now=NOW, new_id=lambda: "id-broken",
+    )  # fmt: skip
+    break_box(broken.path)
+    item = load_installed(tooled.paths)["kerbrute"]
+    item.users += [done.id]
+    toolstate.save_installed(tooled.paths, {"kerbrute": item})
+    toolhooks.undo(tooled)
+    assert load_installed(tooled.paths) == {}
+    assert not (user / ".kerb").exists()
+
+
+def test_leftovers_make_no_offer_while_a_box_cannot_be_read(tooled, other):
+    finish_without_undo(tooled)
+    break_box(other.path)
+    console = FakeConsole(["y"])
+    toolhooks.leftovers(tooled.paths, console)
+    assert console.asked == []
+    assert [k for k, _ in console.lines] == ["warn"]
+    assert console.lines[0][1] == (
+        f"tools left by finished boxes were not checked: {other.path.name} cannot be read"
+    )
+    assert "kerbrute" in load_installed(tooled.paths)
+
+
+def corrupt_installed(session):
+    session.paths.tools_state.write_text("not toml [", encoding="utf-8")
+
+
+def test_export_with_an_unreadable_installed_list_still_writes_the_archive(tooled):
+    corrupt_installed(tooled)
+    path = export_box(tooled, fix=lambda p: 0)
+    assert path is not None and path.exists()
+    assert any("tool data was not copied" in t for t in lines(tooled, "warn"))
+    assert not lines(tooled, "fail")
+
+
+def test_finish_with_an_unreadable_installed_list_stops_before_any_question(tooled):
+    corrupt_installed(tooled)
+    say(tooled)
+    assert finish_box(tooled, **SAVED) is None
+    failed = lines(tooled, "fail")
+    assert len(failed) == 1 and "cannot be read; fix or remove it, then finish again" in failed[0]
+    assert str(tooled.paths.tools_state) in failed[0]
+    assert tooled.console.asked == []
+    assert load_box(tooled.box.path).status == "active"
+
+
+def test_summary_is_empty_when_the_installed_list_is_unreadable(tooled):
+    corrupt_installed(tooled)
+    assert toolhooks.summary(tooled) == []

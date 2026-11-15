@@ -15,6 +15,7 @@ from pwn_broker.toolstate import (
     running,
     save_installed,
     unfinished_boxes,
+    unreadable_boxes,
     write_open_box,
 )
 
@@ -269,3 +270,12 @@ def test_parse_start_time():
 
 def test_process_start_is_none_for_missing_process():
     assert toolstate.process_start(2**22 + 12345) is None
+
+
+def test_unreadable_boxes_names_the_folders_that_cannot_be_loaded(paths, box):
+    assert unreadable_boxes(paths) == []
+    broken = paths.active / "broken"
+    broken.mkdir()
+    (broken / "box.toml").write_text("nope [", encoding="utf-8")
+    [problem] = unreadable_boxes(paths)
+    assert problem.startswith("broken: ")

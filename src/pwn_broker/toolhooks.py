@@ -1,11 +1,12 @@
 from collections.abc import Callable
 from pathlib import Path
 
-from pwn_broker import lifecycle, tooldata, toolindex, toolinstall, toolstate
+from pwn_broker import boxes as boxlist, lifecycle, tooldata, toolindex, toolinstall, toolstate
 from pwn_broker.console import Cancelled, Console
 from pwn_broker.model import ToolRecord
 from pwn_broker.paths import AppPaths
 from pwn_broker.session import Session
+from pwn_broker.store import StoreError, save_box
 from pwn_broker.toolpkg import ToolError, build_id
 from pwn_broker.toolstate import Installed, load_installed, unfinished_boxes
 
@@ -47,20 +48,28 @@ def block(
     if not names:
         return None
     found = toolstate.running(session.paths, names, alive=alive, started=started)
-    if not found:
-        return None
-    tool, pid = found[0]
-    return f"{tool} is still running (process {pid}); stop it first"
+    if found:
+        tool, pid = found[0]
+        marker = toolstate.mark_path(session.paths, tool, pid)
+        return f"{tool} is still running (process {pid}); stop it first, or remove {marker} if it is not"
+    try:
+        load_installed(session.paths)
+    except ToolError:
+        return f"{session.paths.tools_state} cannot be read; fix or remove it, then finish again"
+    return None
 
 
 def summary(session: Session) -> list[str]:
     box = session.box
     if not box.tools:
         return []
+    try:
+        installed = load_installed(session.paths)
+    except (ToolError, OSError):
+        return []
     names = ", ".join(f"{t.name} {t.version}" for t in box.tools)
     shown = [f"tools     {names}   (will be removed)"]
     try:
-        installed = load_installed(session.paths)
         unfinished = unfinished_boxes(session.paths)
         homes = _homes()
         for record in box.tools:
@@ -78,7 +87,12 @@ def pre_pack(session: Session) -> None:
     box = session.box
     if not box.tools:
         return
-    installed = load_installed(session.paths)
+    try:
+        installed = load_installed(session.paths)
+    except ToolError as exc:
+        # the box's own files are fine; an export must still be written
+        session.console.warn(f"tool data was not copied: {exc}")
+        return
     homes = _homes()
     for record in box.tools:
         item = installed.get(record.name)
@@ -102,9 +116,17 @@ def undo(session: Session) -> None:
     unfinished = unfinished_boxes(session.paths)
     # the box being finished is freed whatever its status reads at this moment
     unfinished.pop(box.id, None)
+    if toolstate.unreadable_boxes(session.paths):
+        # a box that cannot be read may still use a tool: keep it for every user not known to be done
+        known = {b.id for b in boxlist.list_boxes(session.paths)[0]}
+        for item in installed.values():
+            for user in item.users:
+                if user != box.id and user not in known:
+                    unfinished[user] = "a box that cannot be read"
     homes = _homes()
     problems: list[str] = []
-    for record in list(box.tools):
+    kept_records = list(box.tools)
+    for record in kept_records:
         name = record.name
         item = installed.get(name)
         doomed: list[Path] = []
@@ -123,6 +145,12 @@ def undo(session: Session) -> None:
             tooldata.delete(doomed, homes)
         except (ToolError, OSError) as exc:
             problems.append(f"{name}: {exc}")
+    # release drops the records; the finished box keeps them so that reopening can offer the tools
+    box.tools = kept_records
+    try:
+        save_box(box)
+    except (OSError, StoreError) as exc:
+        problems.append(f"the box record could not be saved: {exc}")
     if problems:
         raise ToolError("; ".join(problems))
 
@@ -144,7 +172,7 @@ def restore(session: Session) -> None:
         _restore(session)
     except Cancelled:
         pass
-    except Exception as exc:  # a box must always open
+    except Exception as exc:  # a box must open whatever state the tools are in
         console.warn(f"tools could not be installed again: {exc}")
 
 
@@ -169,17 +197,11 @@ def _restore(session: Session) -> None:
     for record in wanted:
         label = f"{record.name} {record.version}"
         try:
-            entry = next(
-                (
-                    b
-                    for tool in index.tools
-                    if tool.name == record.name
-                    for b in tool.builds
-                    if (b.version, b.build) == (record.version, record.build)
-                ),
-                None,
-            )
-            if entry is None:
+            try:
+                entry = toolindex.pick_build(
+                    toolindex.find_tool(index, record.name), build_id(record.version, record.build)
+                )
+            except ToolError:
                 console.warn(f"{label}   not in the tool index; skipped")
                 continue
             if entry.sha256.lower() != record.sha256.lower():
@@ -197,7 +219,7 @@ def _restore(session: Session) -> None:
                 console=console,
                 now=session.clock(),
             )
-        except Exception as exc:
+        except Exception as exc:  # one tool failing must not stop the rest
             console.warn(f"{label}   {exc}")
 
 
@@ -205,6 +227,11 @@ def leftovers(paths: AppPaths, console: Console) -> None:
     try:
         installed = load_installed(paths)
         if not installed:
+            return
+        unreadable = toolstate.unreadable_boxes(paths)
+        if unreadable:
+            names = ", ".join(p.split(":", 1)[0] for p in unreadable)
+            console.warn(f"tools left by finished boxes were not checked: {names} cannot be read")
             return
         orphans = toolstate.orphans(installed, set(unfinished_boxes(paths)))
         if not orphans:
@@ -223,5 +250,5 @@ def leftovers(paths: AppPaths, console: Console) -> None:
             console.ok(f"removed {item.name} {item.version}")
     except Cancelled:
         pass
-    except Exception as exc:  # the prompt must still open
+    except Exception as exc:  # the prompt must open whatever state the tools are in
         console.warn(f"tools left by finished boxes could not be checked: {exc}")

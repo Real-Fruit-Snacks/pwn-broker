@@ -117,6 +117,13 @@ def unfinished_boxes(paths: AppPaths) -> dict[str, str]:
     return {b.id: b.name for b in found if b.status == "active"}
 
 
+def unreadable_boxes(paths: AppPaths) -> list[str]:
+    from pwn_broker import boxes
+
+    _found, problems = boxes.list_boxes(paths)
+    return problems
+
+
 def _resolve_alive(alive: Callable[[int], bool] | None) -> Callable[[int], bool]:
     if alive is not None:
         return alive
