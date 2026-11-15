@@ -323,6 +323,7 @@ def test_secret_is_exact_on_disk_in_the_table_and_in_show(session, secret):
     columns, rows = session.console.tables[0]
     assert columns == ["n", "user", "domain", "secret", "kind", "found on", "works on"]
     assert rows[0][3] == secret
+    session.console = FakeConsole()
     dispatch(session, "cred show 1")
     if secret:
         assert session.console.lines == [("raw", secret)]
@@ -687,3 +688,47 @@ def test_cred_clear_cancel_leaves_the_file_alone(session, monkeypatch):
     assert (session.box.path / "creds.toml").read_bytes() == before
     assert session.creds[0].secret == "s3cret"
     assert session.console.lines[-1] == ("info", "cancelled")
+
+
+def _list(session):
+    session.console = FakeConsole()
+    dispatch(session, "cred list")
+    return session.console.tables[0][1], _lines(session, "info")
+
+
+NOTE_ONE = "* the table cannot show this secret exactly. use: cred show {}"
+
+
+def test_cred_list_flags_a_secret_with_a_tab(session):
+    _seed(session, secret="plain")
+    _seed(session, n=2, secret="tab\there")
+    rows, info = _list(session)
+    assert [r[0] for r in rows] == ["1", "2*"]
+    assert rows[1][3] == "tab\there"
+    assert info == [NOTE_ONE.format(2)]
+
+
+@pytest.mark.parametrize("secret", [" lead", "trail ", "  both  ", "\u00a0nbsp", "x\x1b[0m", "a\x00b"])
+def test_cred_list_flags_edge_space_and_control_characters(session, secret):
+    _seed(session, secret=secret)
+    rows, info = _list(session)
+    assert rows[0][0] == "1*"
+    assert rows[0][3] == secret
+    assert info == [NOTE_ONE.format(1)]
+
+
+def test_cred_list_two_flagged_rows_give_the_generic_line(session):
+    _seed(session, secret=" a")
+    _seed(session, n=2, secret="plain")
+    _seed(session, n=3, secret="b\t")
+    rows, info = _list(session)
+    assert [r[0] for r in rows] == ["1*", "2", "3*"]
+    assert info == [NOTE_ONE.format("<n>")]
+
+
+@pytest.mark.parametrize("secret", ["", "Passw0rd!", "a b", "[red]x[/red]", "pässwörd", "'"])
+def test_cred_list_does_not_flag_a_plain_secret(session, secret):
+    _seed(session, secret=secret)
+    rows, info = _list(session)
+    assert rows[0][0] == "1" and rows[0][3] == secret
+    assert info == []

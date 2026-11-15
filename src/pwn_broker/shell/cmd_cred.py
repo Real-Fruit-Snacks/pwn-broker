@@ -1,4 +1,5 @@
 import copy
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
@@ -91,19 +92,31 @@ def cred_add(session: Session, args: list[str]) -> None:
     _report_lists(session, summary)
 
 
+def _table_hides(secret: str) -> bool:
+    # a table turns a tab into spaces and cannot show edge whitespace or control characters
+    return secret != secret.strip() or any(unicodedata.category(ch) == "Cc" for ch in secret)
+
+
 @command("cred list", "list the credentials")
 def cred_list(session: Session, args: list[str]) -> None:
     take_args(args)
     if not session.creds:
         session.console.info("no creds yet")
         return
+    flagged = [c.n for c in session.creds if _table_hides(c.secret)]
     rows = [
-        [str(c.n), c.username, c.domain, c.secret, c.kind, c.found_on, ", ".join(c.works_on)]
+        [
+            f"{c.n}*" if c.n in flagged else str(c.n),
+            c.username, c.domain, c.secret, c.kind, c.found_on, ", ".join(c.works_on),
+        ]
         for c in session.creds
-    ]
+    ]  # fmt: skip
     session.console.table(
         ["n", "user", "domain", "secret", "kind", "found on", "works on"], rows
     )
+    if flagged:
+        which = str(flagged[0]) if len(flagged) == 1 else "<n>"
+        session.console.info(f"* the table cannot show this secret exactly. use: cred show {which}")
 
 
 @command("cred show", "print one secret and nothing else")

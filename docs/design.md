@@ -371,7 +371,7 @@ ok  lists updated: 3 usernames, 2 passwords, 2 pairs
 - Kinds are `password`, `hash`, `token` and `other`.
 - The domain is optional and defaults to the last one used in this box. It is kept in the record beside the username, never joined onto it.
 - The secret may be left blank. That records a username I have found but have no password for, and the kind question is skipped.
-- `cred list` shows the table. `cred show <n>` prints one secret alone on a line, ready to copy.
+- `cred list` shows the table and puts `*` after the number of a row whose secret a table cannot show exactly (a tab, another control character, or a space at either end). `cred show <n>` prints one secret alone on a line, ready to copy.
 - `cred edit <n>` asks the questions again with the current answers as defaults. `cred remove <n>` asks first.
 - `cred clear <n> secret` or `cred clear <n> note` empties that field, after asking. Clearing the secret also clears its kind and where it was marked as working.
 - `cred works <n> [target ...]` marks a credential as confirmed on one or more targets, defaulting to the current one. The record keeps the list of targets, `cred list` shows it in a "works on" column, and `cred edit` can take a target back off.

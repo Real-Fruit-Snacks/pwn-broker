@@ -112,7 +112,7 @@ Edits made by hand to these files are overwritten at the next rebuild.
 - Recording and tool install are not in this release. They are later phases in `docs/design.md`.
 - No release has been published, so the `curl` install line does not work yet. Install from a clone.
 - A file whose name contains a backslash stops `finish` and `export` until it is renamed.
-- Tabs inside a secret show as spaces in `cred list`. `cred show` prints them unchanged.
+- `cred list` marks a secret it cannot show exactly (a tab, another control character, or a space at either end) with `*` after the number. `cred show` prints it unchanged.
 - Links and special files (named pipes, sockets, devices) in a box are not archived. `export` and `finish` list them, and `finish` says how many will go when the folder is removed.
 
 ## Configuration
