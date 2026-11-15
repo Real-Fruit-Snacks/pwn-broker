@@ -379,6 +379,13 @@ def undo(session: Session) -> None:
     installed = load_installed(session.paths)
     # the box being finished is freed whatever its status reads at this moment
     unfinished = toolstate.holding_boxes(session.paths, installed, excluding=box.id)
+    # only a runtime a tool the box held required is the box's to log; any other is housekeeping
+    required = {
+        runtime
+        for record in records
+        if (item := installed.get(record.name)) is not None and box.id in item.users
+        for runtime in item.requires
+    }
     homes = user_homes()
     problems: list[str] = []
     try:
@@ -396,7 +403,8 @@ def undo(session: Session) -> None:
     # a runtime left behind is only a warn: the launch check offers it again
     try:
         for item in remove_idle_runtimes(session.paths, installed, session.console):
-            log_tool(session, "finish", item, kind="runtime")
+            if item.name in required:
+                log_tool(session, "finish", item, kind="runtime")
     except Exception as exc:
         session.console.warn(f"runtimes could not be checked: {exc}")
     if problems:

@@ -266,14 +266,26 @@ def _runtime_note(
 # ---- install
 
 
+def _ask_for(name: str, version: str, build: int, entry: BuildEntry, which: str) -> str:
+    # builds change under one version, so a version alone cannot ask for the build there is
+    if version != entry.version:
+        return ""
+    return f", or ask for the build {which}: tool install {name}@{build_id(version, build)}"
+
+
+def _already_has(box: Box, name: str, version: str, build: int, entry: BuildEntry) -> ToolError:
+    return ToolError(
+        f"{box.name} already has {name} {build_id(version, build)}, not "
+        f"{build_id(entry.version, entry.build)}; run tool remove {name} first"
+        f"{_ask_for(name, version, build, entry, 'it has')}"
+    )
+
+
 def check_recorded(box: Box, entry: BuildEntry) -> None:
     wanted = build_id(entry.version, entry.build)
     for record in current_tools(box):
         if record.name == entry.name and build_id(record.version, record.build) != wanted:
-            raise ToolError(
-                f"{box.name} already has {entry.name} {build_id(record.version, record.build)}; "
-                f"run tool remove {entry.name} first"
-            )
+            raise _already_has(box, entry.name, record.version, record.build, entry)
 
 
 def _check_commands(installed: dict[str, Installed], name: str, commands: list[str]) -> None:
@@ -299,14 +311,13 @@ def check_install(
         others = [u for u in users if u != box.id]
         if build_id(current.version, current.build) != build_id(entry.version, entry.build):
             if box.id in users:
-                raise ToolError(
-                    f"{box.name} already has {name} {current.version}; "
-                    f"run tool remove {name} first"
-                )
+                raise _already_has(box, name, current.version, current.build, entry)
             if others:
                 raise ToolError(
-                    f"{name} {current.version} is in use by {unfinished[others[0]]}; "
-                    f"finish or remove it there before installing {entry.version}"
+                    f"{name} {build_id(current.version, current.build)} is in use by "
+                    f"{unfinished[others[0]]}; finish or remove it there before installing "
+                    f"{build_id(entry.version, entry.build)}"
+                    f"{_ask_for(name, current.version, current.build, entry, 'in use')}"
                 )
     _check_commands(installed, name, entry.commands)
 

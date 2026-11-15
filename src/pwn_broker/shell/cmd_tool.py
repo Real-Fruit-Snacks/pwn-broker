@@ -305,6 +305,8 @@ def tool_remove(session: Session, args: list[str]) -> None:
     installed = toolstate.load_installed(session.paths)
     holding = toolstate.holding_boxes(session.paths, installed, excluding=box.id)
     item = installed.get(name)
+    # only a runtime this tool required is this box's to log; any other idle one is housekeeping
+    required = set(item.requires) if item is not None else set()
     # the last box to let go takes the tool's home data with it, as finish does
     last = item is not None and bool(item.home) and not any(u in holding for u in item.users)
     homes = toolhooks.user_homes() if last else []
@@ -335,7 +337,8 @@ def tool_remove(session: Session, args: list[str]) -> None:
             f"{name} removed from {box.name}; {', '.join(users)} {verb} it, so its files stay"
         )
     for runtime in toolhooks.remove_idle_runtimes(session.paths, installed, console):
-        toolhooks.log_tool(session, "remove", runtime, kind="runtime")
+        if runtime.name in required:
+            toolhooks.log_tool(session, "remove", runtime, kind="runtime")
 
 
 def _shown_time(session: Session, when: datetime) -> str:

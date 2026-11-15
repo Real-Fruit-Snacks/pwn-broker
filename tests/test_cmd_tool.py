@@ -893,10 +893,24 @@ def test_an_install_the_box_refuses_fetches_nothing(session, shop, pyshop, other
     console = run(session, "tool install certipy")
     failed = lines(console, "fail")
     assert len(failed) == 1
-    said = "already belongs to taker" if refusal == "a command name" else "in use by Cascade"
-    assert said in failed[0]
+    said = (
+        "the command certipy already belongs to taker"
+        if refusal == "a command name"
+        else "certipy 5.1.0-2 is in use by Cascade; finish or remove it there before installing "
+        "5.1.0-3, or ask for the build in use: tool install certipy@5.1.0-2"
+    )
+    assert failed == [said]
     assert pyshop.fetched == [] and lines(console, "ok") == []
     nothing_of(session, "python-3.13")
+
+
+def test_the_build_a_refusal_names_can_be_asked_for(session, shop, pyshop, other):
+    install_for(other, shop, schema_1_certipy(shop, pyshop), session.paths)
+    hint = lines(run(session, "tool install certipy"), "fail")[0].rsplit(": ", 1)[1]
+    assert hint == "tool install certipy@5.1.0-2"
+    console = run(session, hint)
+    assert lines(console, "ok") == ["certipy 5.1.0 installed"]
+    assert toolstate.load_installed(session.paths)["certipy"].users == [other.id, session.box.id]
 
 
 def test_install_tool_refuses_another_build_of_the_boxs_own_before_fetching(session, shop, pyshop):
@@ -906,12 +920,16 @@ def test_install_tool_refuses_another_build_of_the_boxs_own_before_fetching(sess
     old = schema_1_certipy(shop, pyshop)
     session.box.tools.append(ToolRecord("certipy", "5.1.0", 2, old.sha256, NOW))
     index = toolindex.load_index(session.paths, session.settings, now=NOW)
-    with pytest.raises(ToolError, match="forest already has certipy 5.1.0-2"):
+    with pytest.raises(ToolError) as err:
         toolhooks.install_tool(
             session, index, pyshop.certipy,
             installed=toolstate.load_installed(session.paths),
             unfinished={session.box.id: session.box.name},
         )  # fmt: skip
+    assert str(err.value) == (
+        "forest already has certipy 5.1.0-2, not 5.1.0-3; run tool remove certipy first, "
+        "or ask for the build it has: tool install certipy@5.1.0-2"
+    )
     assert pyshop.fetched == []
     nothing_of(session, "python-3.13")
 
@@ -1271,6 +1289,32 @@ def test_install_and_remove_are_logged_with_the_runtime_beside_the_tool(session,
         logged("install", pyshop.certipy),
         logged("remove", pyshop.certipy),
         logged("remove", pyshop.runtime, runtime=True),
+    ]
+
+
+def leave_the_runtime_idle(session):
+    # a runtime no tool requires, left by a removal that did not take it (as one kept while a
+    # box could not be read is)
+    toolinstall.release(
+        session.paths, session.box, "certipy", installed=toolstate.load_installed(session.paths),
+        unfinished={}, removed=NOW,
+    )  # fmt: skip
+    assert [t.name for t in toolstate.idle_runtimes(toolstate.load_installed(session.paths))] == [
+        "python-3.13"
+    ]
+
+
+def test_a_runtime_that_was_idle_before_is_removed_but_not_logged(session, shop, pyshop):
+    run(session, "tool install certipy")
+    leave_the_runtime_idle(session)
+    run(session, "tool install kerbrute")
+    console = run(session, "tool remove kerbrute", "y")
+    assert lines(console, "ok") == ["kerbrute removed; its files are deleted", RT_GONE]
+    assert runtime_row(session) is None
+    # this box took kerbrute off; the runtime it removed was nobody's
+    assert log_lines(session)[2:] == [
+        logged("install", shop.entries[1]),
+        logged("remove", shop.entries[1]),
     ]
 
 

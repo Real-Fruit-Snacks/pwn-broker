@@ -477,10 +477,38 @@ def test_different_build_names_the_other_box(paths, box, other, tmp_path):
     unfinished = {box.id: box.name, other.id: other.name}
     _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path, unfinished=unfinished)
     zip2, entry2 = build(tmp_path, build=2)
-    with pytest.raises(ToolError, match=box.name):
+    with pytest.raises(ToolError) as err:
         do_install(paths, other, entry2, zip2, tmp_path, installed=installed, unfinished=unfinished)
+    assert str(err.value) == (
+        "kerbrute 1.0.3-1 is in use by forest; finish or remove it there before installing "
+        "1.0.3-2, or ask for the build in use: tool install kerbrute@1.0.3-1"
+    )
     assert installed["kerbrute"].users == [box.id]
     assert other.tools == []
+    # another version: the version is enough to ask for it
+    zip3, entry3 = build(tmp_path, version="1.0.4")
+    with pytest.raises(ToolError) as err:
+        do_install(paths, other, entry3, zip3, tmp_path, installed=installed, unfinished=unfinished)
+    assert str(err.value) == (
+        "kerbrute 1.0.3-1 is in use by forest; finish or remove it there before installing 1.0.4-1"
+    )
+
+
+def test_a_box_the_installed_list_names_with_another_build_is_refused(paths, box, tmp_path):
+    zip_path, entry = build(tmp_path)
+    _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path)
+    box.tools = []  # the list still names the box, its record does not
+    for version, build_no, said in [
+        ("1.0.3", 2, ", or ask for the build it has: tool install kerbrute@1.0.3-1"),
+        ("1.0.4", 1, ""),
+    ]:
+        zip2, entry2 = build(tmp_path, version=version, build=build_no)
+        with pytest.raises(ToolError) as err:
+            do_install(paths, box, entry2, zip2, tmp_path, installed=installed)
+        assert str(err.value) == (
+            f"forest already has kerbrute 1.0.3-1, not {version}-{build_no}; "
+            f"run tool remove kerbrute first{said}"
+        )
 
 
 def test_finished_users_do_not_count(paths, box, other, tmp_path):
@@ -893,8 +921,12 @@ def test_box_with_another_build_is_refused_untouched(paths, box, tmp_path):
         "state": paths.tools_state.read_bytes(),
         "box": (box.path / "box.toml").read_bytes(),
     }
-    with pytest.raises(ToolError, match="tool remove kerbrute"):
+    with pytest.raises(ToolError) as err:
         do_install(paths, box, entry2, zip2, tmp_path, installed=installed)
+    assert str(err.value) == (
+        "forest already has kerbrute 1.0.3-1, not 1.0.3-2; run tool remove kerbrute first, "
+        "or ask for the build it has: tool install kerbrute@1.0.3-1"
+    )
     assert (paths.tools / "kerbrute" / "1.0.3-1" / "files" / "kerbrute").is_file()
     assert not (paths.tools / "kerbrute" / "1.0.3-2").exists()
     assert (paths.bin / "kerbrute").read_bytes() == files["launcher"]

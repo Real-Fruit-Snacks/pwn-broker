@@ -1443,6 +1443,20 @@ def test_finish_logs_each_tool_and_the_runtime_taken_off(tooled, pyshop, shop):
     ]
 
 
+def test_finish_removes_a_runtime_that_was_idle_before_but_does_not_log_it(
+    tooled, pyshop, shop
+):
+    put(tooled, pyshop.certipy)
+    toolinstall.release(
+        tooled.paths, tooled.box, "certipy",
+        installed=load_installed(tooled.paths), unfinished={}, removed=NOW,
+    )  # fmt: skip
+    say(tooled)
+    toolhooks.undo(tooled)
+    assert RT_GONE in tooled.console.lines and runtime_row(tooled.paths) is None
+    assert log_lines(tooled.paths) == [logged("finish", shop.entry)]
+
+
 def test_finish_logs_a_tool_another_box_keeps_but_not_its_runtime(tooled, pyshop, shop, other):
     put(tooled, pyshop.certipy)
     installed = load_installed(tooled.paths)
