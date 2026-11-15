@@ -152,7 +152,11 @@ def _length(minutes: int) -> str:
 
 def run(env: Env, argv: list[str]) -> int:
     console = env.console
-    if len(argv) > 1:
+    if argv in (["--help"], ["-h"]):
+        console.info(USAGE)
+        return 0
+    # an option is never a target name, IP or hostname, and must not be offered as one
+    if len(argv) > 1 or (argv and argv[0].startswith("-")):
         console.fail(USAGE)
         return 2
     owner = env.owner(env.paths.opt)
@@ -212,10 +216,7 @@ def _record(env: Env, box: Box, target: Target) -> int:
     argv = recorder.rec_argv(paths, cast, f"{box.name} {target.name} {box.id}", command)
     environment = {**recorder.base_env(paths, env.environ, target.name), **extra}
 
-    console.ok(f"recording this window for {target.name} ({box.name})")
-    console.info(f"    {shown(cast)}")
-    console.info("    exit this shell to stop")
-
+    # the marker first, so the ok lines are printed only for a window that is recorded
     try:
         recstate.mark(paths, env.pid, env.start_of(env.pid) or "", target.name, cast)
     except OSError as exc:
@@ -224,10 +225,14 @@ def _record(env: Env, box: Box, target: Target) -> int:
     status: int | None = None
     error: OSError | None = None
     try:
-        with _interrupts_ignored():
-            status = env.run(argv, env=environment).returncode
-    except OSError as exc:
-        error = exc
+        console.ok(f"recording this window for {target.name} ({box.name})")
+        console.info(f"    {shown(cast)}")
+        console.info("    exit this shell to stop")
+        try:
+            with _interrupts_ignored():
+                status = env.run(argv, env=environment).returncode
+        except OSError as exc:
+            error = exc
     finally:
         recstate.clear(paths, env.pid)
 

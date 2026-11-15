@@ -111,22 +111,24 @@ add-zsh-hook precmd _pwn_broker_rec_prefix
 """
 
 _BASHRC = """# Written by pwn-broker for record; rewritten each time record runs.
-# Loads your own .bashrc, then keeps [rec <target>] in front of the prompt.
+# --rcfile stands in for both files bash would read, so this loads the system's and your own,
+# then keeps [rec <target>] in front of the prompt.
+[ -f /etc/bash.bashrc ] && . /etc/bash.bashrc
 [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"
 _pwn_broker_rec_prefix() {
-  local last=$?
   local prefix="[rec ${PWN_BROKER_RECORDING-}] "
   case "${PS1-}" in
     "$prefix"*) ;;
     *) PS1="$prefix${PS1-}" ;;
   esac
-  return $last
 }
-# last, so a prompt command of your own that sets PS1 runs first
+# Last, so a prompt command of your own that sets PS1 runs first. Bash puts $? back for the
+# prompt itself. The call is guarded: a bash started inside inherits an exported
+# PROMPT_COMMAND but not this function.
 case "${PROMPT_COMMAND-}" in
   *_pwn_broker_rec_prefix*) ;;
   *) PROMPT_COMMAND="${PROMPT_COMMAND:+${PROMPT_COMMAND}
-}_pwn_broker_rec_prefix" ;;
+}declare -F _pwn_broker_rec_prefix >/dev/null && _pwn_broker_rec_prefix" ;;
 esac
 """
 

@@ -1,6 +1,7 @@
 import hashlib
 import stat
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -181,16 +182,20 @@ def test_the_zshrc_restores_zdotdir_loads_the_users_own_then_adds_the_prefix(pat
     assert 'PROMPT="$prefix${PROMPT-}"' in text
 
 
-def test_the_bashrc_loads_the_users_own_then_keeps_the_prefix(paths):
+def test_the_bashrc_loads_the_system_file_and_the_users_own_then_keeps_the_prefix(paths):
     recorder.shell_files(paths)
     text = shell_text(paths, "bashrc")
+    # --rcfile replaces both files bash would otherwise read
+    system = text.index("[ -f /etc/bash.bashrc ] && . /etc/bash.bashrc")
     load = text.index('[ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"')
     hook = text.index("PROMPT_COMMAND=")
-    assert load < hook
+    assert system < load < hook
     assert 'local prefix="[rec ${PWN_BROKER_RECORDING-}] "' in text
     assert 'PS1="$prefix${PS1-}"' in text
     # the hook is added once, however often the file is read
     assert "*_pwn_broker_rec_prefix*) ;;" in text
+    # a bash started inside inherits an exported PROMPT_COMMAND but not the function
+    assert HOOK in text
 
 
 def test_record_command_for_zsh(paths):
@@ -246,10 +251,24 @@ def test_base_env_replaces_asciinema_settings_from_home(paths):
 LINUX_ONLY = pytest.mark.skipif(sys.platform == "win32", reason="the startup files are for Linux shells")
 
 
+HOOK = "declare -F _pwn_broker_rec_prefix >/dev/null && _pwn_broker_rec_prefix"
+
+
 def _shell(name):
     import shutil
 
     found = shutil.which(name)
+    if sys.platform == "win32":
+        # only Git's bash: System32's bash.exe would start WSL
+        git = shutil.which("git")
+        found = None
+        if name == "bash" and git is not None:
+            # git.exe sits in Git\cmd or Git\mingw64\bin; bash.exe in Git\bin
+            for folder in Path(git).resolve().parents[:3]:
+                candidate = folder / "bin" / "bash.exe"
+                if candidate.is_file() and (folder / "usr" / "bin").is_dir():
+                    found = str(candidate)
+                    break
     if found is None:
         pytest.skip(f"{name} is not installed")
     return found
@@ -274,7 +293,6 @@ def _home(tmp_path, files):
     return home
 
 
-@LINUX_ONLY
 @pytest.mark.parametrize("files", [{}, {".bashrc": "set -u\nPS1='me> '\n"}])
 def test_real_bash_gets_the_prefix_once(paths, tmp_path, files):
     bash = _shell("bash")
@@ -289,10 +307,9 @@ def test_real_bash_gets_the_prefix_once(paths, tmp_path, files):
     assert shown.startswith("[rec dc01] ") and shown.count("[rec dc01]") == 1
     if files:
         assert shown == "[rec dc01] me> "
-    assert hooks.count("_pwn_broker_rec_prefix") == 1
+    assert hooks.count(HOOK) == 1
 
 
-@LINUX_ONLY
 def test_real_bash_reading_the_file_again_keeps_one_hook(paths, tmp_path):
     bash = _shell("bash")
     home = _home(tmp_path, {})
@@ -306,20 +323,42 @@ def test_real_bash_reading_the_file_again_keeps_one_hook(paths, tmp_path):
     assert result.returncode == 0, result.stderr
     shown, _, hooks = result.stdout.partition("|")
     assert shown == "[rec dc01] again> "
-    assert hooks.count("_pwn_broker_rec_prefix") == 1
+    assert hooks.count(HOOK) == 1
 
 
-@LINUX_ONLY
-def test_real_bash_keeps_the_last_status_for_the_users_prompt(paths, tmp_path):
-    bash = _shell("bash")
-    home = _home(tmp_path, {})
-    recorder.shell_files(paths)
-    rcfile = str(paths.run_shell / "bashrc")
-    result = _run_shell(
-        [bash, "--rcfile", rcfile, "-i"], home, {"PWN_BROKER_RECORDING": "dc01"},
-        'false; eval "$PROMPT_COMMAND"; printf "%s" "$?"',
+def _interactive(argv, home, extra, lines):
+    """Run an interactive shell on typed lines; its prompts go to stderr, merged here."""
+    import subprocess
+
+    env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "TERM": "dumb", **extra}
+    return subprocess.run(
+        argv, env=env, input=lines, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, timeout=20, cwd=home,
     )  # fmt: skip
-    assert result.stdout == "1"
+
+
+def test_real_bash_prompt_shows_the_last_status(paths, tmp_path):
+    bash = _shell("bash")
+    home = _home(tmp_path, {".bashrc": "PS1='[$?]> '\n"})
+    recorder.shell_files(paths)
+    argv = [bash, "--rcfile", str(paths.run_shell / "bashrc"), "-i"]
+    result = _interactive(argv, home, {"PWN_BROKER_RECORDING": "dc01"}, "false\nexit\n")
+    assert "[rec dc01] [1]> " in result.stdout
+
+
+def test_real_bash_inside_a_recorded_bash_with_an_exported_prompt_command(paths, tmp_path):
+    bash = _shell("bash")
+    home = _home(tmp_path, {
+        ".bashrc": "PS1='me> '\nexport PROMPT_COMMAND=\"${PROMPT_COMMAND:+$PROMPT_COMMAND; }true\"\n",
+    })  # fmt: skip
+    recorder.shell_files(paths)
+    argv = [bash, "--rcfile", str(paths.run_shell / "bashrc"), "-i"]
+    typed = "bash -i\necho inner\nexit\nexit\n"
+    result = _interactive(argv, home, {"PWN_BROKER_RECORDING": "dc01"}, typed)
+    assert "command not found" not in result.stdout
+    assert "inner" in result.stdout
+    assert "[rec dc01] me> " in result.stdout
+    assert "[rec dc01] [rec dc01]" not in result.stdout
 
 
 @LINUX_ONLY

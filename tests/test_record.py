@@ -657,3 +657,46 @@ def test_ctrl_c_is_caught_while_asciinema_runs_and_restored_after():
         assert callable(during) and during not in (signal.SIG_IGN, signal.SIG_DFL, before)
         signal.raise_signal(signal.SIGINT)
     assert signal.getsignal(signal.SIGINT) is before
+
+
+def test_a_marker_that_cannot_be_written_prints_no_ok_line(make_env, opened, dc01, asciinema, monkeypatch):
+    def broken(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(record.recstate, "mark", broken)
+    env = make_env()
+    assert record.run(env, []) == 1
+    assert [kind for kind, _ in env.console.lines] == ["fail"]
+    assert "Permission denied" in fails(env)[0]
+    assert asciinema.calls == []
+
+
+def test_the_marker_is_cleared_when_printing_fails_before_asciinema(make_env, opened, dc01, asciinema):
+    env = make_env()
+
+    def broken_ok(text):
+        raise OSError(5, "Input/output error")
+
+    env.console.ok = broken_ok
+    with pytest.raises(OSError):
+        record.run(env, [])
+    assert list(env.paths.run_recordings.iterdir()) == []
+    assert asciinema.calls == []
+
+
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+def test_help_prints_the_usage(make_env, opened, dc01, asciinema, flag):
+    env = make_env()
+    assert record.run(env, [flag]) == 0
+    assert env.console.lines == [("info", "usage: record [target]")]
+    assert env.console.asked == []
+    assert asciinema.calls == []
+
+
+@pytest.mark.parametrize("flag", ["-x", "--title", "-"])
+def test_an_option_is_not_a_target(make_env, opened, dc01, asciinema, flag):
+    env = make_env(["y"])
+    assert record.run(env, [flag]) == 2
+    assert fails(env) == ["usage: record [target]"]
+    assert env.console.asked == []
+    assert [t.name for t in load_targets(opened)] == ["dc01"]
