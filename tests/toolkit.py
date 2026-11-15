@@ -12,6 +12,18 @@ import tomli_w
 from pwn_broker.filescan import sha256_file
 
 
+# every zip made here carries this date, so the same content always gives the same bytes and
+# checksum whenever it is built
+_ZIP_DATE = (1980, 1, 1, 0, 0, 0)
+
+
+def _put(zf: zipfile.ZipFile, name: str, data: bytes | str) -> None:
+    info = zipfile.ZipInfo(name, date_time=_ZIP_DATE)
+    info.compress_type = zf.compression
+    info.external_attr = 0o600 << 16  # what writestr gives a member named by a string
+    zf.writestr(info, data)
+
+
 def _record_line(name: str, data: bytes) -> str:
     digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
     return f"{name},sha256={digest},{len(data)}"
@@ -43,7 +55,7 @@ def make_wheel(
     path = folder / f"{stem}-{version}-py3-none-any.whl"
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
         for name, data in files.items():
-            zf.writestr(name, data)
+            _put(zf, name, data)
     return path
 
 
@@ -131,7 +143,7 @@ def make_package(
         entries["wheels.lock"] = lock
     with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as zf:
         for name, data in entries.items():
-            zf.writestr(name, data)
+            _put(zf, name, data)
     return path, path.stat().st_size, sha256_file(path)
 
 
