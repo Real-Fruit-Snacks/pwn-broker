@@ -135,7 +135,7 @@ def load_targets(box: Box) -> list[Target]:
 def save_creds(box: Box, creds: list[Cred]) -> None:
     write_toml(
         box.path / "creds.toml",
-        {"schema": SCHEMA, "cred": [_without_none(asdict(c)) for c in creds]},
+        {"schema": SCHEMA, "box_id": box.id, "cred": [_without_none(asdict(c)) for c in creds]},
     )
 
 
@@ -150,7 +150,7 @@ def load_creds(box: Box) -> list[Cred]:
 def save_files(box: Box, records: list[FileRecord]) -> None:
     write_toml(
         box.path / "files.toml",
-        {"schema": SCHEMA, "file": [_without_none(asdict(r)) for r in records]},
+        {"schema": SCHEMA, "box_id": box.id, "file": [_without_none(asdict(r)) for r in records]},
     )
 
 

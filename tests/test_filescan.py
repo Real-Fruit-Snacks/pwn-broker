@@ -31,15 +31,18 @@ def test_box_level_file_has_no_target(box):
     assert r.target == ""
 
 
-def test_hidden_file_at_top_level_recorded_hidden_dirs_not_entered(box):
+def test_hidden_files_and_folders_are_recorded(box, loot):
     (box.path / ".hidden-note").write_text("ls")
     (box.path / ".git").mkdir()
     (box.path / ".git/config").write_text("x")
     (box.path / "targets/dc01/.cache").mkdir(parents=True)
     (box.path / "targets/dc01/.cache/a").write_text("x")
+    (loot / ".git").mkdir()
+    (loot / ".git/HEAD").write_text("ref: refs/heads/main\n")
+    [head] = [r for r in scan(box, [], now=NOW) if r.path == "targets/dc01/loot/.git/HEAD"]
+    assert head.target == "dc01"
     paths = {r.path for r in scan(box, [], now=NOW)}
-    assert ".hidden-note" in paths
-    assert not any("/.cache/" in p or p.startswith(".git/") for p in paths)
+    assert {".hidden-note", ".git/config", "targets/dc01/.cache/a"} <= paths
 
 
 def test_first_seen_survives_a_change(box, loot):

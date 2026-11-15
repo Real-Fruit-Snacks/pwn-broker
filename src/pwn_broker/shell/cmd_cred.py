@@ -126,6 +126,7 @@ def cred_edit(session: Session, args: list[str]) -> None:
             secret=a.secret,
             kind=a.kind,
             found_on=a.found_on,
+            works_on=a.works_on,
             note=a.note,
         )
         return refresh(session)

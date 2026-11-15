@@ -29,6 +29,8 @@ def status_line(kind: str, text: str) -> str:
 
 
 def _answer_to_bool(answer: str, default: bool) -> bool:
+    # anything that is not clearly yes is no, so a slip of the keyboard never confirms
+    answer = answer.strip().lower()
     if answer == "":
         return default
     return answer in ("y", "yes")

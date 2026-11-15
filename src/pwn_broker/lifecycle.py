@@ -27,6 +27,7 @@ UNDO_HOOKS: list[Callable[[Session], None]] = []
 RESTORE_HOOKS: list[Callable[[Session], None]] = []
 
 _FAILURES = (ArchiveError, StoreError, OSError)
+_SHOWN = 10
 
 
 def reopen_box(box: Box) -> None:
@@ -35,14 +36,20 @@ def reopen_box(box: Box) -> None:
     save_box(box)
 
 
-def _pack(session: Session, kind: str) -> Path:
+def _pack(session: Session, kind: str) -> tuple[Path, list[str]]:
     box = session.box
     refresh(session)
     records = rescan(session, hash_all=True)
     write_manifest(box, records, kind=kind, now=session.clock())
     dest = archive_path(session.paths, box, kind)
-    pack(box, dest)
-    return dest
+    return dest, pack(box, dest)
+
+
+def _report_left_out(console: Console, left_out: list[str]) -> None:
+    for rel in left_out[:_SHOWN]:
+        console.warn(f"{rel}   not archived: a link or special file")
+    if len(left_out) > _SHOWN:
+        console.warn(f"and {len(left_out) - _SHOWN} more")
 
 
 def _copy(session: Session, dest: Path) -> Path | None:
@@ -60,19 +67,27 @@ def _rollback(box: Box) -> None:
         pass
 
 
-def export_box(session: Session, *, fix: Callable[[Path], int] = fix_ownership) -> Path | None:
+def export_box(
+    session: Session, *, fix: Callable[[Path], int] = fix_ownership, strict_copy: bool = False
+) -> Path | None:
+    # strict_copy makes a failed copy a failed export: copy_to is how the work outlives the VM
     try:
         # ownership first: as a normal user a root-owned file cannot be hashed or packed
         fix(session.box.path)
-        dest = _pack(session, "exported")
+        dest, left_out = _pack(session, "exported")
     except _FAILURES as exc:
         session.console.fail(f"export failed: {exc}")
         return None
     session.console.ok(f"archive {dest}")
+    _report_left_out(session.console, left_out)
     try:
         copy = _copy(session, dest)
     except _FAILURES as exc:
-        session.console.warn(f"the export was written to {dest}, but the copy to {session.settings.copy_to} failed: {exc}")
+        message = f"the export was written to {dest}, but the copy to {session.settings.copy_to} failed: {exc}"
+        if strict_copy:
+            session.console.fail(message)
+            return None
+        session.console.warn(message)
         return dest
     if copy is not None:
         session.console.ok(f"copy {copy}")
@@ -131,7 +146,7 @@ def finish_box(
         box.status = "finished"
         box.finished = session.clock()
         save_box(box)
-        packed = _pack(session, "finished")
+        packed, left_out = _pack(session, "finished")
         copy = _copy(session, packed)
     except _FAILURES as exc:
         _rollback(box)
@@ -151,12 +166,21 @@ def finish_box(
     console.ok(f"archive {dest}")
     if copy is not None:
         console.ok(f"copy {copy}")
+    _report_left_out(console, left_out)
+    undo_failed = False
     for hook in UNDO_HOOKS:
         try:
             hook(session)
         except Exception as exc:
+            undo_failed = True
             console.fail(f"{getattr(hook, '__name__', repr(hook))} failed: {exc}")
 
+    if undo_failed:
+        console.warn(f"the working folder {box.path} was kept because an undo step failed")
+        return dest
+    if left_out:
+        count = "1 item is" if len(left_out) == 1 else f"{len(left_out)} items are"
+        console.warn(f"{count} not in the archive and will be deleted with the folder")
     try:
         remove = console.confirm("remove working folder?")
     except Cancelled:

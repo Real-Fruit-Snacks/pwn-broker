@@ -22,6 +22,7 @@ def quit_shell(session: Session, args: list[str]) -> None:
     box = session.box
     console = session.console
     if box.status == "active" and console.confirm(f"export {box.name} before you go?", default=True):
-        if lifecycle.export_box(session) is None and not console.confirm("the export failed. quit anyway?"):
+        exported = lifecycle.export_box(session, strict_copy=True)
+        if exported is None and not console.confirm("the export failed. quit anyway?"):
             return
     raise Quit

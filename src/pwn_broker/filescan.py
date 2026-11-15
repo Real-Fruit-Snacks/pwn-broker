@@ -68,8 +68,7 @@ def scan(
         unreadable.append(rel)
         skip(rel, exc)
 
-    for root, dirs, files in os.walk(box.path, followlinks=False, onerror=dir_failed):
-        dirs[:] = [d for d in dirs if not d.startswith(".")]
+    for root, _dirs, files in os.walk(box.path, followlinks=False, onerror=dir_failed):
         for name in files:
             full = Path(root) / name
             rel = full.relative_to(box.path).as_posix()

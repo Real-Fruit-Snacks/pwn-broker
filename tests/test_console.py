@@ -61,6 +61,55 @@ def test_fake_confirm_yes_and_default_true():
     assert c.confirm("a") is True and c.confirm("b", default=True) is True
 
 
+YES_NO = [
+    ("y", False, True), ("Y", False, True), ("yes", False, True), ("Yes", False, True), ("YES", False, True),
+    (" y ", False, True), ("n", True, False), ("N", True, False), ("No", True, False), ("NO", True, False),
+    ("", True, True), ("", False, False), ("   ", True, True), ("maybe", True, False), ("yep", False, False),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("answer,default,expected", YES_NO)
+def test_fake_confirm_ignores_case_and_edge_spaces(answer, default, expected):
+    assert FakeConsole([answer]).confirm("go?", default=default) is expected
+
+
+def scripted(monkeypatch, *answers):
+    queue = list(answers)
+    seen = []
+
+    def fake_prompt(message, **kwargs):
+        seen.append(message)
+        answer = queue.pop(0)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    monkeypatch.setattr("prompt_toolkit.prompt", fake_prompt)
+    return TermConsole({"NO_COLOR": "1"}, out=io.StringIO()), seen
+
+
+@pytest.mark.parametrize("answer,default,expected", YES_NO)
+def test_term_confirm_ignores_case_and_edge_spaces(monkeypatch, answer, default, expected):
+    console, _ = scripted(monkeypatch, answer)
+    assert console.confirm("go?", default=default) is expected
+
+
+def test_term_ask_returns_the_raw_answer_or_the_default(monkeypatch):
+    console, _ = scripted(monkeypatch, "  spaced  ", "", "")
+    assert console.ask("user") == "  spaced  "
+    assert console.ask("platform", default="htb") == "htb"
+    assert console.ask("note") == ""
+
+
+@pytest.mark.parametrize("exc", [KeyboardInterrupt(), EOFError()])
+def test_term_ask_and_confirm_cancel_on_interrupt_and_eof(monkeypatch, exc):
+    console, _ = scripted(monkeypatch, exc, exc)
+    with pytest.raises(Cancelled):
+        console.ask("user")
+    with pytest.raises(Cancelled):
+        console.confirm("go?")
+
+
 def test_fake_records_lines_and_tables():
     c = FakeConsole()
     c.ok("a")

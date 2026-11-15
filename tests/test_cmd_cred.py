@@ -191,7 +191,7 @@ def test_failed_save_restores_edit_remove_and_works(session, monkeypatch):
 
     monkeypatch.setattr(session_module, "save_creds", broken)
     for line, answers in (
-        ("cred edit 1", ["", "", "new", "", "", ""]),
+        ("cred edit 1", ["", "", "new", "", "", "", ""]),
         ("cred works 1", []),
         ("cred remove 1", ["y"]),
     ):
@@ -219,16 +219,16 @@ def test_cred_import_skips_a_byte_order_mark(session, tmp_path):
 
 def test_edit_found_on_blank_when_stored_target_is_gone(session):
     _seed(session, found_on="gone")
-    session.console = FakeConsole(["", "", "", "", "", ""])
+    session.console = FakeConsole(["", "", "", "", "", "", ""])
     dispatch(session, "cred edit 1")
     assert load_creds(session.box)[0].found_on == ""
-    assert session.console.asked[-2] == "found on"
+    assert session.console.asked[-3] == "found on"
     assert _lines(session, "fail") == []
 
 
 def test_edit_found_on_nonblank_is_still_resolved(session):
     _seed(session, found_on="")
-    session.console = FakeConsole(["", "", "", "", "nope", "dc", ""])
+    session.console = FakeConsole(["", "", "", "", "nope", "dc", "", ""])
     dispatch(session, "cred edit 1")
     assert len(_lines(session, "fail")) == 1
     assert load_creds(session.box)[0].found_on == "dc01"
@@ -298,9 +298,11 @@ def test_cred_show_unknown_and_bad_number(session):
 
 def test_cred_edit_defaults_are_current_values(session):
     _seed(session, secret=" pw ", domain="CORP", note="n1", kind="hash")
-    session.console = FakeConsole(["", "", "", "", "", "", "", "", ""])
+    session.console = FakeConsole(["", "", "", "", "", "", "", ""])
     dispatch(session, "cred edit 1")
-    assert session.console.asked[:3] == ["username", "domain", "secret"]
+    assert session.console.asked == [
+        "username", "domain", "secret", "keep or trim", "kind", "found on", "works on", "note",
+    ]  # fmt: skip
     [c] = load_creds(session.box)
     assert (c.username, c.domain, c.secret, c.kind, c.found_on, c.note) == (
         "administrator", "CORP", " pw ", "hash", "dc01", "n1",
@@ -310,10 +312,69 @@ def test_cred_edit_defaults_are_current_values(session):
 
 def test_cred_edit_changes_a_field_and_refreshes_lists(session):
     _seed(session, secret="old")
-    session.console = FakeConsole(["", "", "new", "", "", ""])
+    session.console = FakeConsole(["", "", "new", "", "", "", ""])
     dispatch(session, "cred edit 1")
     assert load_creds(session.box)[0].secret == "new"
     assert "new" in (session.box.path / "lists" / "passwords.txt").read_text(encoding="utf-8")
+
+
+def _two_targets(session):
+    add_target(
+        session.box, session.targets, ips=["10.0.0.2"], hostnames=[], scope="external",
+        name="web", now=NOW,
+    )  # fmt: skip
+    _seed(session, works_on=["dc01", "web"])
+    dispatch(session, "cred works 1 dc01")
+    lists = session.box.path / "lists"
+    assert (lists / "works-web-userpass.txt").exists()
+    return lists
+
+
+def _edit_works_on(session, answers):
+    # username, domain, secret, kind, found on, works on..., note
+    session.console = FakeConsole(["", "", "", "", "", *answers, ""])
+    dispatch(session, "cred edit 1")
+    assert session.console.asked[5] == "works on" and session.console.asked[-1] == "note"
+    return load_creds(session.box)[0].works_on
+
+
+def test_cred_edit_takes_a_target_off_works_on(session):
+    lists = _two_targets(session)
+    assert _edit_works_on(session, ["dc01"]) == ["dc01"]
+    assert session.creds[0].works_on == ["dc01"]
+    assert not (lists / "works-web-userpass.txt").exists()
+    assert (lists / "works-dc01-userpass.txt").exists()
+
+
+def test_cred_edit_clears_works_on_with_a_dash(session):
+    lists = _two_targets(session)
+    assert _edit_works_on(session, ["-"]) == []
+    assert list(lists.glob("works-*")) == []
+
+
+def test_cred_edit_keeps_works_on_with_enter(session):
+    _two_targets(session)
+    assert _edit_works_on(session, [""]) == ["dc01", "web"]
+
+
+def test_cred_edit_works_on_resolves_prefixes_and_drops_duplicates(session):
+    _two_targets(session)
+    assert _edit_works_on(session, ["nope dc01", "we dc01 web"]) == ["web", "dc01"]
+    assert len(_lines(session, "fail")) == 1
+    assert session.console.asked[5:7] == ["works on", "works on"]
+
+
+def test_cred_edit_works_on_keeps_a_name_that_is_no_longer_a_target(session):
+    _seed(session, works_on=["gone", "dc01"])
+    assert _edit_works_on(session, [""]) == ["gone", "dc01"]
+    assert _lines(session, "fail") == []
+
+
+def test_cred_add_does_not_ask_works_on(session):
+    session.console = FakeConsole(["bob", "", "", "", ""])
+    dispatch(session, "cred add")
+    assert "works on" not in session.console.asked
+    assert load_creds(session.box)[0].works_on == []
 
 
 def test_cred_works_defaults_to_current_target(session):

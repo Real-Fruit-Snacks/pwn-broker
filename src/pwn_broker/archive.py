@@ -73,16 +73,21 @@ def _check_name(name: str) -> None:
         raise ArchiveError(f"{name!r} has a backslash in its name and could not be unpacked; rename it")
 
 
-def _entries(root: Path) -> list[tuple[str, Path]]:
+def _entries(root: Path) -> tuple[list[tuple[str, Path]], list[str]]:
+    # also returns the links and special files, which are never packed
     found = [("", root)]
+    special: list[str] = []
     for current, dirs, files in os.walk(root, followlinks=False, onerror=_raise):
         here = Path(current)
         keep = []
         for name in dirs:
+            rel = (here / name).relative_to(root).as_posix()
             if stat.S_ISDIR(os.lstat(here / name).st_mode):
                 _check_name(name)
                 keep.append(name)
-                found.append(((here / name).relative_to(root).as_posix(), here / name))
+                found.append((rel, here / name))
+            else:
+                special.append(rel)
         dirs[:] = keep
         for name in files:
             rel = (here / name).relative_to(root).as_posix()
@@ -91,7 +96,9 @@ def _entries(root: Path) -> list[tuple[str, Path]]:
             if stat.S_ISREG(os.lstat(here / name).st_mode):
                 _check_name(name)
                 found.append((rel, here / name))
-    return sorted(found, key=lambda e: e[0])
+            else:
+                special.append(rel)
+    return sorted(found, key=lambda e: e[0]), sorted(special)
 
 
 def _discard(path: Path) -> None:
@@ -101,12 +108,13 @@ def _discard(path: Path) -> None:
         pass
 
 
-def pack(box: Box, dest: Path) -> None:
+def pack(box: Box, dest: Path) -> list[str]:
+    # returns the links and special files that were left out, relative to the box
     part = dest.with_name(dest.name + ".part")
     top = box.path.name
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
-        entries = _entries(box.path)
+        entries, special = _entries(box.path)
         with tarfile.open(part, "w:gz") as tar:
             for rel, full in entries:
                 tar.add(full, arcname=f"{top}/{rel}" if rel else top, recursive=False)
@@ -117,6 +125,7 @@ def pack(box: Box, dest: Path) -> None:
         if isinstance(exc, ArchiveError) or not isinstance(exc, Exception):
             raise
         raise ArchiveError(f"cannot pack {top}: {exc}") from exc
+    return special
 
 
 def _top_folder(members: Iterable[tarfile.TarInfo]) -> str:

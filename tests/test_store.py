@@ -76,6 +76,34 @@ def test_files_round_trip(box):
     assert load_files(box) == records
 
 
+def test_creds_and_files_carry_the_box_id(box):
+    save_creds(box, [make_cred()])
+    save_files(box, [FileRecord("notes.md", "", NOW, 0, 0.0, "")])
+    for name in ("creds.toml", "files.toml"):
+        data = read_toml(box.path / name)
+        assert data["box_id"] == box.id and data["schema"] == 1
+
+
+def test_creds_and_files_without_a_box_id_still_load(box):
+    older = """schema = 1
+[[cred]]
+n = 1
+username = "u"
+domain = ""
+secret = "s"
+kind = "password"
+found_on = ""
+works_on = []
+note = ""
+added = 2026-11-14T12:00:00+02:00
+"""
+    (box.path / "creds.toml").write_text(older, encoding="utf-8")
+    (box.path / "files.toml").write_text("schema = 1\n", encoding="utf-8")
+    assert [c.username for c in load_creds(box)] == ["u"] and load_files(box) == []
+    (box.path / "files.toml").write_text('schema = 1\nbox_id = "another"\n', encoding="utf-8")
+    assert load_files(box) == []
+
+
 def test_missing_creds_and_files_load_empty(box):
     assert load_creds(box) == []
     assert load_files(box) == []

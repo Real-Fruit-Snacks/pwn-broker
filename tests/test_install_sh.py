@@ -84,6 +84,72 @@ def test_install_sh_missing_from_or_config_fails_before_installing(shell, tmp_pa
         assert result.stderr.strip() == f"fail  {gone} does not exist"
 
 
+def test_install_sh_removes_the_app_folder_only_when_it_is_ours():
+    lines = SCRIPT.read_text(encoding="utf-8").splitlines()
+    removals = [i for i, row in enumerate(lines) if 'rm -rf "$OPT/app"' in row]
+    assert removals
+    for i in removals:
+        # the nearest enclosing test decides whether the folder may go
+        guard = next(row for row in reversed(lines[: i + 1]) if re.search(r"\b(el)?if\b", row))
+        assert "pyvenv.cfg" in guard or "APP_CREATED" in guard, lines[i]
+
+
+FAKE_PYTHON = """#!/bin/sh
+# stands in for python3: every check passes, creating a venv leaves a partial folder and fails
+if [ "$1 $2" = "-m venv" ] && [ "$3" != "--help" ]; then
+    mkdir -p "$3/bin"
+    exit 1
+fi
+exit 0
+"""
+
+
+def run_with_fake_python(shell, tmp_path, opt):
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    (fake / "python3").write_bytes(FAKE_PYTHON.encode())
+    (fake / "python3").chmod(0o755)
+    env = {**os.environ, "PWN_BROKER_OPT": opt.as_posix(), "PATH": f"{fake}{os.pathsep}{os.environ['PATH']}"}
+    return subprocess.run(
+        [shell, str(SCRIPT), "--from", str(ROOT), "--no-path"], capture_output=True, text=True, env=env
+    )
+
+
+@shells
+def test_install_sh_refuses_an_app_folder_that_is_not_ours(shell, tmp_path):
+    opt = tmp_path / "opt"
+    (opt / "app").mkdir(parents=True)
+    (opt / "app" / "keep.txt").write_text("someone else's")
+    result = run_with_fake_python(shell, tmp_path, opt)
+    assert result.returncode == 1, result.stderr
+    assert result.stderr.strip().splitlines()[-1] == (
+        f"fail  {opt.as_posix()}/app exists and is not a pwn-broker environment. move it or choose another folder"
+    )
+    assert (opt / "app" / "keep.txt").read_text() == "someone else's"
+
+
+@shells
+def test_install_sh_replaces_a_broken_environment_of_its_own(shell, tmp_path):
+    opt = tmp_path / "opt"
+    (opt / "app").mkdir(parents=True)
+    (opt / "app" / "pyvenv.cfg").write_text("home = /usr/bin\n")
+    (opt / "app" / "old.txt").write_text("stale")
+    result = run_with_fake_python(shell, tmp_path, opt)
+    assert result.returncode == 1
+    assert "cannot create the virtual environment" in result.stderr
+    assert not (opt / "app").exists()
+
+
+@shells
+def test_install_sh_cleans_up_a_folder_it_created(shell, tmp_path):
+    opt = tmp_path / "opt"
+    opt.mkdir()
+    result = run_with_fake_python(shell, tmp_path, opt)
+    assert result.returncode == 1
+    assert "cannot create the virtual environment" in result.stderr
+    assert not (opt / "app").exists()
+
+
 def test_install_sh_runs_nothing_before_main():
     lines = SCRIPT.read_text(encoding="utf-8").splitlines()
     assert [row for row in lines if row.strip()][-1] == 'main "$@"'

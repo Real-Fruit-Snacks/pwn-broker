@@ -140,7 +140,7 @@ def test_manifest_records_finished_when_set(box):
 
 def test_pack_then_verify(filled, tmp_path):
     dest = tmp_path / "out" / "forest.tar.gz"
-    assert pack(filled, dest) is None
+    assert pack(filled, dest) == []
     assert dest.is_file() and not part_of(dest).exists()
     verify(dest)
     assert peek_folder(dest) == filled.path.name
@@ -202,10 +202,13 @@ def test_pack_leaves_out_links_and_special_files(filled, tmp_path):
     (filled.path / "link").symlink_to(outside / "secret")
     (filled.path / "dirlink").symlink_to(outside)
     os.mkfifo(filled.path / "pipe")
+    (filled.path / "targets/dc01/loot/deep").symlink_to(outside / "secret")
+    (filled.path / ".pwn-broker-x.tmp").symlink_to(outside / "secret")
     dest = tmp_path / "forest.tar.gz"
-    pack(filled, dest)
-    assert inside(dest).isdisjoint({"link", "dirlink", "dirlink/secret", "pipe"})
+    left_out = pack(filled, dest)
+    assert inside(dest).isdisjoint({"link", "dirlink", "dirlink/secret", "pipe", "targets/dc01/loot/deep"})
     verify(dest)
+    assert left_out == ["dirlink", "link", "pipe", "targets/dc01/loot/deep"]
 
 
 def test_pack_replaces_an_existing_archive(filled, tmp_path):

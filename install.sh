@@ -137,9 +137,18 @@ main() {
     if [ -x "$OPT/app/bin/python" ] && "$OPT/app/bin/python" -m pip --version >/dev/null 2>&1; then
         ok "virtual environment reused in $OPT/app"
     else
-        rm -rf "$OPT/app"
-        if ! python3 -m venv "$OPT/app"; then
+        # only a folder that is a virtual environment is ours to replace
+        if [ -f "$OPT/app/pyvenv.cfg" ]; then
             rm -rf "$OPT/app"
+        elif [ -e "$OPT/app" ] || [ -L "$OPT/app" ]; then
+            fail "$OPT/app exists and is not a pwn-broker environment. move it or choose another folder"
+        fi
+        APP_CREATED=0
+        if [ ! -e "$OPT/app" ]; then APP_CREATED=1; fi
+        if ! python3 -m venv "$OPT/app"; then
+            if [ "$APP_CREATED" -eq 1 ]; then
+                rm -rf "$OPT/app"
+            fi
             fail "cannot create the virtual environment in $OPT/app. try: apt install python3-venv"
         fi
         ok "virtual environment created in $OPT/app"

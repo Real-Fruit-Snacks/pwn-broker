@@ -1,5 +1,5 @@
 import ipaddress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
 from pwn_broker.boxes import SCOPES, BoxError, find_target, parse_values
@@ -93,6 +93,7 @@ class CredAnswers:
     kind: str
     found_on: str
     note: str
+    works_on: list[str] = field(default_factory=list)
 
 
 def ask_value(console: Console, label: str, default: str | None = None) -> str:
@@ -143,6 +144,22 @@ def ask_found_on(console: Console, session: Session, current: str | None = None)
             console.fail(str(exc))
 
 
+def ask_works_on(console: Console, session: Session, current: list[str]) -> list[str]:
+    while True:
+        answer = console.ask("works on", " ".join(current) or None)
+        if answer.strip() == "-":
+            return []
+        names = []
+        try:
+            for word in answer.split():
+                # a name already on the list is kept as it is, even if that target is gone
+                names.append(word if word in current else find_target(session.targets, word).name)
+        except BoxError as exc:
+            console.fail(str(exc))
+            continue
+        return list(dict.fromkeys(names))
+
+
 def ask_cred(console: Console, session: Session, defaults: Cred | None = None) -> CredAnswers:
     while True:
         username = ask_value(console, "username", defaults.username if defaults else None)
@@ -161,8 +178,9 @@ def ask_cred(console: Console, session: Session, defaults: Cred | None = None) -
             console.fail(f"kind must be one of: {', '.join(KINDS)}")
 
     found_on = ask_found_on(console, session, defaults.found_on if defaults else None)
+    works_on = ask_works_on(console, session, defaults.works_on) if defaults else []
     note = console.ask("note", (defaults.note if defaults else "") or None)
-    return CredAnswers(username, domain, secret, kind, found_on, note)
+    return CredAnswers(username, domain, secret, kind, found_on, note, works_on)
 
 
 @dataclass

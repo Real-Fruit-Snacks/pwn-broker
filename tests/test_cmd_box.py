@@ -3,6 +3,7 @@ import pytest
 from pwn_broker import lifecycle
 from pwn_broker.archive import ArchiveError
 from pwn_broker import shell  # noqa: F401  (fills the command registry)
+from pwn_broker.config import Settings
 from pwn_broker.console import FakeConsole
 from pwn_broker.shell.commands import Quit, dispatch
 
@@ -13,7 +14,7 @@ def _archive(session, kind):
 
 def test_export_command_calls_export(session, monkeypatch):
     calls = []
-    monkeypatch.setattr(lifecycle, "export_box", lambda s: calls.append(s))
+    monkeypatch.setattr(lifecycle, "export_box", lambda s, **kwargs: calls.append(s))
     dispatch(session, "export")
     assert calls == [session]
 
@@ -58,6 +59,42 @@ def test_quit_after_failed_export_quits_when_confirmed(session, monkeypatch):
     session.console = FakeConsole(["y", "y"])
     with pytest.raises(Quit):
         dispatch(session, "quit")
+
+
+def _failing_copy(session, monkeypatch, tmp_path):
+    out = tmp_path / "usb"
+    out.mkdir()
+    session.settings = Settings(copy_to=out)
+
+    def copy_out(archive, copy_to):
+        raise ArchiveError(f"cannot copy to {copy_to}: device gone")
+
+    monkeypatch.setattr(lifecycle, "copy_out", copy_out)
+    return out
+
+
+def test_quit_after_failed_copy_asks_and_stays_open_by_default(session, monkeypatch, tmp_path):
+    out = _failing_copy(session, monkeypatch, tmp_path)
+    session.console = FakeConsole(["y", ""])
+    dispatch(session, "quit")
+    assert session.console.asked == ["export forest before you go?", "the export failed. quit anyway?"]
+    [line] = [t for k, t in session.console.lines if k == "fail"]
+    archive = _archive(session, "exported")
+    assert archive.exists() and str(archive) in line and str(out) in line and "device gone" in line
+
+
+def test_quit_after_failed_copy_quits_when_confirmed(session, monkeypatch, tmp_path):
+    _failing_copy(session, monkeypatch, tmp_path)
+    session.console = FakeConsole(["y", "y"])
+    with pytest.raises(Quit):
+        dispatch(session, "quit")
+
+
+def test_export_command_after_failed_copy_is_still_a_warning(session, monkeypatch, tmp_path):
+    _failing_copy(session, monkeypatch, tmp_path)
+    dispatch(session, "export")
+    kinds = [k for k, _ in session.console.lines]
+    assert "fail" not in kinds and "warn" in kinds
 
 
 def test_quit_cancelled_at_the_question_stays_open(session, monkeypatch):

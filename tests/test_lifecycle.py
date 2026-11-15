@@ -444,6 +444,91 @@ def test_export_copy_failure_is_a_warning_and_keeps_the_export(session, tmp_path
     assert str(path) in kinds(session, "warn")[0] and str(out) in kinds(session, "warn")[0]
 
 
+def test_strict_export_copy_failure_is_a_fail_and_returns_none(session, tmp_path):
+    out = tmp_path / "missing"
+    session.settings = Settings(copy_to=out)
+    assert export_box(session, strict_copy=True, **NOFIX) is None
+    archive = archive_path(session.paths, session.box, "exported")
+    [line] = kinds(session, "fail")
+    assert archive.exists() and str(archive) in line and str(out) in line
+    assert kinds(session, "warn") == []
+
+
+def pack_leaving_out(monkeypatch, count):
+    real = lifecycle.pack
+    names = [f"loot/link{i:02}" for i in range(count)]
+
+    def fake(box, dest):
+        real(box, dest)
+        return list(names)
+
+    monkeypatch.setattr(lifecycle, "pack", fake)
+    return names
+
+
+def left_out_lines(session):
+    return [t for t in kinds(session, "warn") if "not archived" in t or t.startswith("and ")]
+
+
+def test_export_reports_what_was_not_archived(session, monkeypatch):
+    names = pack_leaving_out(monkeypatch, 3)
+    assert export_box(session, **NOFIX) is not None
+    assert left_out_lines(session) == [f"{n}   not archived: a link or special file" for n in names]
+
+
+def test_export_reports_at_most_ten_and_a_count(session, monkeypatch):
+    names = pack_leaving_out(monkeypatch, 13)
+    export_box(session, **NOFIX)
+    lines = left_out_lines(session)
+    assert lines[:10] == [f"{n}   not archived: a link or special file" for n in names[:10]]
+    assert lines[10:] == ["and 3 more"]
+
+
+def test_export_with_nothing_left_out_reports_nothing(session):
+    export_box(session, **NOFIX)
+    assert kinds(session, "warn") == []
+
+
+def test_finish_warns_before_the_remove_question_when_items_are_not_archived(session, monkeypatch):
+    pack_leaving_out(monkeypatch, 12)
+    console = answers(session, "y", "n").console
+    before_question = []
+    original = console.confirm
+
+    def confirm(question, default=False):
+        if question == "remove working folder?":
+            before_question.extend(console.lines)
+        return original(question, default)
+
+    console.confirm = confirm
+    assert finish_box(session, **SAVED) is not None
+    warns = [t for k, t in before_question if k == "warn"]
+    assert len(warns) == 12
+    assert warns[10] == "and 2 more"
+    assert before_question[-1] == ("warn", "12 items are not in the archive and will be deleted with the folder")
+
+
+def test_finish_one_item_not_archived_is_singular(session, monkeypatch):
+    pack_leaving_out(monkeypatch, 1)
+    answers(session, "y", "n")
+    finish_box(session, **SAVED)
+    assert kinds(session, "warn")[-1] == "1 item is not in the archive and will be deleted with the folder"
+
+
+def test_finish_with_nothing_left_out_does_not_warn(session):
+    answers(session, "y", "n")
+    finish_box(session, **SAVED)
+    assert kinds(session, "warn") == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_finish_reports_a_real_symlink(session, tmp_path):
+    (session.box.path / "targets" / "dc01" / "loot" / "shadow").symlink_to(tmp_path)
+    answers(session, "y", "n")
+    finish_box(session, **SAVED)
+    assert "targets/dc01/loot/shadow   not archived: a link or special file" in kinds(session, "warn")
+
+
 def test_failing_undo_hook_does_not_stop_the_rest(session, monkeypatch):
     seen = []
 
@@ -451,11 +536,15 @@ def test_failing_undo_hook_does_not_stop_the_rest(session, monkeypatch):
         raise RuntimeError("nope")
 
     monkeypatch.setattr(lifecycle, "UNDO_HOOKS", [broken, lambda s: seen.append("second")])
-    answers(session, "y", "n")
+    answers(session, "y", "y")
     path = finish_box(session, **SAVED)
-    assert path is not None and seen == ["second"]
+    assert path == archive_path(session.paths, session.box, "finished") and path.exists()
+    assert seen == ["second"]
     assert kinds(session, "fail") == ["broken failed: nope"]
-    assert session.console.asked[-1] == "remove working folder?"
+    assert "remove working folder?" not in session.console.asked
+    [warn] = kinds(session, "warn")
+    assert "kept" in warn and "undo step failed" in warn
+    assert session.box.path.exists()
 
 
 def test_interrupt_in_undo_hook_propagates(session, monkeypatch):
