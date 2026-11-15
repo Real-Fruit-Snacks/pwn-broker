@@ -142,15 +142,15 @@ class Terminal:
         return self.process.returncode
 
     def kill(self) -> None:
-        if self.process.poll() is None:
-            try:
-                os.killpg(self.process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                pass
+        # the whole group, even after record itself has ended: asciinema or the shell may be left
+        try:
+            os.killpg(self.process.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        try:
+            self.process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
 
     def close(self) -> None:
         self.kill()
@@ -195,21 +195,32 @@ def opened(installed, box, dc01):
     return box
 
 
+# The user's own startup files. zsh starts its new-user wizard without a .zshrc. Ubuntu's
+# /etc/zsh/zshrc runs compinit, which stops to ask about the runner's insecure folders, unless
+# .zshenv sets skip_global_compinit. The zsh prompt names a variable set in .zshenv, so seeing
+# `zprompt-yes> ` proves the user's .zshenv was loaded through the app's own one;
+# `zprompt-missing> ` means it was not.
+ZSH_FILES = {
+    ".zshenv": "skip_global_compinit=1\nzshenv_loaded=yes\n",
+    ".zshrc": 'PROMPT="zprompt-${zshenv_loaded:-missing}> "\n',
+}
+BASH_FILES = {".bashrc": "PS1='bprompt> '\n"}
+
 SHELLS = [
-    pytest.param("zsh", ".zshrc", "PROMPT='zprompt> '\n", "zprompt> ", id="zsh"),
-    pytest.param("bash", ".bashrc", "PS1='bprompt> '\n", "bprompt> ", id="bash"),
+    pytest.param("zsh", ZSH_FILES, "zprompt-yes> ", id="zsh"),
+    pytest.param("bash", BASH_FILES, "bprompt> ", id="bash"),
 ]
 
 
-@pytest.mark.parametrize(("shell_name", "startup", "startup_text", "prompt"), SHELLS)
-def test_a_real_session_is_recorded(tmp_path, installed, opened, shell_name, startup, startup_text, prompt):
+@pytest.mark.parametrize(("shell_name", "startup", "prompt"), SHELLS)
+def test_a_real_session_is_recorded(tmp_path, installed, opened, shell_name, startup, prompt):
     shell = shutil.which(shell_name)
     if shell is None:
         pytest.fail(f"{shell_name} is not installed; the recording job installs zsh and has bash", pytrace=False)
     user = tmp_path / "user"
     user.mkdir()
-    # zsh starts its new-user wizard without a .zshrc; this one only sets a prompt
-    (user / startup).write_text(startup_text, encoding="utf-8")
+    for name, content in startup.items():
+        (user / name).write_text(content, encoding="utf-8")
     folders = [str(Path(shell).parent), "/usr/local/bin", "/usr/bin", "/bin"]
     env = {
         "HOME": str(user),
@@ -223,7 +234,7 @@ def test_a_real_session_is_recorded(tmp_path, installed, opened, shell_name, sta
     box = opened
     terminal = Terminal([sys.executable, "-m", "pwn_broker.record", "dc01"], env, user)
     try:
-        terminal.wait_for(prompt, f"{shell_name}'s prompt from {startup}")
+        terminal.wait_for(prompt, f"{shell_name}'s prompt from {', '.join(startup)}")
         terminal.type(f"{COMMAND}\r")
         terminal.wait_for(MARKER, f"the output of {COMMAND}")
 
@@ -240,6 +251,18 @@ def test_a_real_session_is_recorded(tmp_path, installed, opened, shell_name, sta
                     f"({cast.stat().st_size} bytes) still lacks it after {CAST_WAIT:.0f} s"
                 )
             time.sleep(0.1)
+
+        # while recording, record's marker names its own process and the cast being written
+        folder = installed.run_recordings
+        markers = sorted(folder.iterdir()) if folder.is_dir() else []
+        if [m.name for m in markers] != [str(terminal.process.pid)]:
+            terminal.fail(
+                f"while recording, {folder} should hold one marker named {terminal.process.pid}, "
+                f"record's process ID; it holds {[m.name for m in markers]}"
+            )
+        held = markers[0].read_text(encoding="utf-8").split("\n")
+        if len(held) != 4 or held[1:] != ["dc01", str(cast), ""]:
+            terminal.fail(f"the marker {markers[0]} should name dc01 and {cast}; it holds {held!r}")
 
         terminal.type("exit\r")
         status = terminal.wait_exit("record to end after exit")
