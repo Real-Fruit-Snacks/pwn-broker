@@ -1,0 +1,201 @@
+import pytest
+
+from pwn_broker import toolstate
+from pwn_broker.boxes import acquire_open, release_open
+from pwn_broker.model import Box
+from pwn_broker.store import save_box
+from pwn_broker.toolpkg import ToolError
+from pwn_broker.toolstate import (
+    Installed,
+    clear_open_box,
+    load_installed,
+    mark_path,
+    open_box,
+    orphans,
+    running,
+    save_installed,
+    unfinished_boxes,
+    write_open_box,
+)
+
+
+def yes(pid):
+    return True
+
+
+def no(pid):
+    return False
+
+
+def item(name="nmap-x", users=None, home=None):
+    return Installed(
+        name=name,
+        version="1.2",
+        build=3,
+        sha256="ab" * 32,
+        folder=f"tools/{name}/1.2-3",
+        commands=["a", "b"],
+        uploads=["u.bin"],
+        needs_root=True,
+        users=users if users is not None else ["id-1"],
+        home=home if home is not None else {".cache/x": False, ".config/y": True},
+    )
+
+
+def test_installed_round_trip(paths):
+    data = {"one": item("one"), "two": item("two", users=[], home={})}
+    save_installed(paths, data)
+    assert load_installed(paths) == data
+
+
+def test_installed_missing_file_is_empty(paths):
+    assert load_installed(paths) == {}
+
+
+def test_installed_unreadable_names_file(paths):
+    paths.tools_state.parent.mkdir(parents=True)
+    paths.tools_state.write_text("not [valid", encoding="utf-8")
+    with pytest.raises(ToolError, match="installed.toml"):
+        load_installed(paths)
+
+
+def test_installed_bad_schema_duplicate_and_types(paths):
+    paths.tools_state.parent.mkdir(parents=True)
+    paths.tools_state.write_text("schema = 2\n", encoding="utf-8")
+    with pytest.raises(ToolError, match="installed.toml"):
+        load_installed(paths)
+    save_installed(paths, {"a": item("a")})
+    text = paths.tools_state.read_text(encoding="utf-8")
+    body = text.split("[[tool]]", 1)[1]
+    paths.tools_state.write_text(text + "[[tool]]" + body, encoding="utf-8")
+    with pytest.raises(ToolError, match="installed.toml"):
+        load_installed(paths)
+    paths.tools_state.write_text(text.replace("build = 3", 'build = "3"'), encoding="utf-8")
+    with pytest.raises(ToolError, match="installed.toml"):
+        load_installed(paths)
+    paths.tools_state.write_text(text.replace("build = 3", "build = true"), encoding="utf-8")
+    with pytest.raises(ToolError, match="installed.toml"):
+        load_installed(paths)
+
+
+def test_orphans():
+    data = {
+        "a": item("a", users=["x"]),
+        "b": item("b", users=[]),
+        "c": item("c", users=["y", "z"]),
+    }
+    assert sorted(t.name for t in orphans(data, {"x"})) == ["b", "c"]
+    assert sorted(t.name for t in orphans(data, set())) == ["a", "b", "c"]
+    assert [t.name for t in orphans(data, {"x", "z"})] == ["b"]
+
+
+def test_open_box_round_trip_and_format(paths, tmp_path):
+    folder = tmp_path / "box folder"
+    write_open_box(paths, folder, 42)
+    raw = paths.run_box.read_bytes()
+    lines = raw.decode().split("\n")
+    assert raw.endswith(b"\n") and b"\r" not in raw
+    assert lines[0] == folder.resolve().as_posix()
+    assert lines[1] == "42"
+    assert open_box(paths, alive=yes) == folder.resolve()
+
+
+def test_open_box_dead_missing_malformed(paths, tmp_path):
+    assert open_box(paths, alive=yes) is None
+    write_open_box(paths, tmp_path, 42)
+    assert open_box(paths, alive=no) is None
+    for text in ("", "only-one-line\n", "/x\nabc\n", "/x\n0\n", "/x\n-3\n", "\n5\n"):
+        paths.run_box.write_text(text, encoding="utf-8")
+        assert open_box(paths, alive=yes) is None
+
+
+def test_clear_open_box(paths, tmp_path):
+    clear_open_box(paths, 1)
+    write_open_box(paths, tmp_path, 42)
+    clear_open_box(paths, 7)
+    assert paths.run_box.exists()
+    clear_open_box(paths, 42)
+    assert not paths.run_box.exists()
+    paths.run_box.write_text("garbage", encoding="utf-8")
+    clear_open_box(paths, 42)
+    assert paths.run_box.exists()
+
+
+def test_acquire_and_release_write_and_clear(paths, box):
+    acquire_open(paths, box, pid=100, alive=yes)
+    assert open_box(paths, alive=yes) == box.path.resolve()
+    release_open(paths, pid=100)
+    assert not paths.run_box.exists()
+
+
+def test_failed_acquire_leaves_run_box(paths, box, other):
+    from pwn_broker.boxes import BoxError
+
+    acquire_open(paths, box, pid=100, alive=yes)
+    with pytest.raises(BoxError):
+        acquire_open(paths, other, pid=200, alive=yes)
+    assert open_box(paths, alive=yes) == box.path.resolve()
+
+
+def test_release_by_other_pid_keeps_both_files(paths, box):
+    acquire_open(paths, box, pid=100, alive=yes)
+    release_open(paths, pid=200)
+    assert paths.run_box.exists()
+    assert (paths.run / "open.toml").exists()
+
+
+def test_run_box_write_failure_does_not_block_open(paths, box, monkeypatch):
+    def boom(*args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(toolstate, "write_open_box", boom)
+    acquire_open(paths, box, pid=100, alive=yes)
+    assert (paths.run / "open.toml").exists()
+    release_open(paths, pid=100)
+    assert not (paths.run / "open.toml").exists()
+
+
+def test_running_markers(paths):
+    folder = paths.run_tools
+    assert running(paths, alive=yes) == []
+    folder.mkdir(parents=True)
+    (folder / "tool-a.20").write_text("", encoding="utf-8")
+    (folder / "tool-a.3").write_text("", encoding="utf-8")
+    (folder / "tool.b.v2.9").write_text("", encoding="utf-8")
+    (folder / "dead.55").write_text("", encoding="utf-8")
+    (folder / "junk.abc").write_text("", encoding="utf-8")
+    (folder / "zero.0").write_text("", encoding="utf-8")
+    (folder / "nodot").write_text("", encoding="utf-8")
+
+    def alive(pid):
+        return pid != 55
+
+    assert running(paths, alive=alive) == [("tool-a", 3), ("tool-a", 20), ("tool.b.v2", 9)]
+    assert not (folder / "dead.55").exists()
+    assert not (folder / "junk.abc").exists()
+    assert not (folder / "zero.0").exists()
+    assert not (folder / "nodot").exists()
+    assert running(paths, ["tool-a"], alive=alive) == [("tool-a", 3), ("tool-a", 20)]
+    assert mark_path(paths, "tool-a", 3) == folder / "tool-a.3"
+
+
+def test_running_ignores_undeletable_marker(paths, monkeypatch):
+    paths.run_tools.mkdir(parents=True)
+    (paths.run_tools / "dead.55").write_text("", encoding="utf-8")
+    from pathlib import Path
+
+    def boom(self, missing_ok=False):
+        raise OSError("busy")
+
+    monkeypatch.setattr(Path, "unlink", boom)
+    assert running(paths, alive=no) == []
+
+
+def test_unfinished_boxes(paths, box, other):
+    other.status = "finished"
+    save_box(other)
+    broken = paths.active / "broken"
+    broken.mkdir()
+    (broken / "box.toml").write_text("nope [", encoding="utf-8")
+    assert unfinished_boxes(paths) == {box.id: box.name}
+    assert isinstance(box, Box)

@@ -285,12 +285,21 @@ def acquire_open(
         if not mine:
             raise BoxError(f"{Path(held['folder']).name} is already open (pid {held['pid']})")
     write_toml(_lock_file(paths), {"schema": SCHEMA, "box_id": box.id, "folder": str(box.path), "pid": pid})
+    from pwn_broker import toolstate
+
+    try:
+        toolstate.write_open_box(paths, box.path, pid)
+    except OSError:
+        pass  # launchers fall back to no open box; that must not stop a box opening
 
 
 def release_open(paths: AppPaths, *, pid: int) -> None:
     held = _read_lock(paths)
     if held is not None and held["pid"] == pid:
         _lock_file(paths).unlink(missing_ok=True)
+    from pwn_broker import toolstate
+
+    toolstate.clear_open_box(paths, pid)
 
 
 def open_box_folder(paths: AppPaths, *, alive: Callable[[int], bool] = pid_alive) -> Path | None:
