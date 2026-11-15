@@ -1,5 +1,9 @@
 import base64
+import gzip
 import hashlib
+import io
+import sys
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -152,6 +156,73 @@ def make_entry(folder: Path, manifest_overrides: dict | None = None, files: dict
         size=size,
         sha256=sha,
         requires=list(manifest.get("requires", [])),
+    )
+    return zip_path, entry
+
+
+def stand_in_python() -> bytes:
+    # a POSIX shell script that runs this machine's own Python, so an environment can be made
+    quoted = "'" + sys.executable.replace("'", "'\\''") + "'"
+    return f'#!/bin/sh\nexec {quoted} "$@"\n'.encode()
+
+
+def runtime_archive(members: dict[str, bytes]) -> bytes:
+    # a gzip tar of executable files and the folders they sit in
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        folders = {n.rsplit("/", 1)[0] for n in members if "/" in n}
+        for top in list(folders):
+            while "/" in top:
+                top = top.rsplit("/", 1)[0]
+                folders.add(top)
+        for name in sorted(folders):
+            info = tarfile.TarInfo(name)
+            info.type = tarfile.DIRTYPE
+            info.mode = 0o755
+            tar.addfile(info)
+        for name, data in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = 0o755
+            tar.addfile(info, io.BytesIO(data))
+    return gzip.compress(buf.getvalue(), mtime=0)
+
+
+def make_runtime(
+    folder: Path,
+    name: str = "python-3.13",
+    version: str = "3.13.18",
+    series: str = "3.13",
+    *,
+    build: int = 1,
+    archive: bytes | None = None,
+):
+    """A runtime package and its index entry; its archive holds python/bin/python<series>."""
+    from pwn_broker.toolindex import BuildEntry
+    from pwn_broker.toolpkg import machine_arch
+
+    interpreter = f"python/bin/python{series}"
+    manifest = sample_manifest(kind="runtime", name=name, version=version, build=build)
+    manifest["arch"] = machine_arch()
+    manifest["runtime"] = {
+        "archive": "files/python.tar.gz",
+        "python": interpreter,
+        "series": series,
+    }
+    if archive is None:
+        archive = runtime_archive({interpreter: stand_in_python()})
+    zip_path, size, sha = make_package(folder, manifest, {"files/python.tar.gz": archive})
+    entry = BuildEntry(
+        name=name,
+        version=version,
+        build=build,
+        kind="runtime",
+        needs_root=False,
+        commands=[],
+        file=zip_path.name,
+        url="",
+        size=size,
+        sha256=sha,
     )
     return zip_path, entry
 

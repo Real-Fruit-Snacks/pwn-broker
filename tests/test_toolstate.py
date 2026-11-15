@@ -110,6 +110,78 @@ def test_installed_with_another_schema_says_to_upgrade(paths):
         load_installed(paths)
 
 
+def runtime(name="python-3.13"):
+    return Installed(
+        name=name,
+        version="3.13.18",
+        build=1,
+        sha256="cd" * 32,
+        folder=f"/opt/pwn-broker/tools/{name}/3.13.18-1",
+        commands=[],
+        uploads=[],
+        needs_root=False,
+        users=[],
+        home={},
+        kind="runtime",
+        python=f"/opt/pwn-broker/tools/{name}/3.13.18-1/root/python/bin/python3.13",
+    )
+
+
+def test_installed_round_trip_with_a_runtime_and_a_tool_that_requires_it(paths):
+    tool = item("certipy")
+    tool.requires = ["python-3.13"]
+    data = {"python-3.13": runtime(), "certipy": tool}
+    save_installed(paths, data)
+    assert load_installed(paths) == data
+    rows = tomllib.loads(paths.tools_state.read_text(encoding="utf-8"))["tool"]
+    assert (rows[0]["kind"], rows[0]["python"]) == ("runtime", data["python-3.13"].python)
+    assert rows[1]["requires"] == ["python-3.13"]
+
+
+def test_an_installed_list_without_runtimes_is_written_as_before(paths):
+    save_installed(paths, {"one": item("one")})
+    [row] = tomllib.loads(paths.tools_state.read_text(encoding="utf-8"))["tool"]
+    assert sorted(row) == sorted(
+        "name version build sha256 folder commands uploads needs_root users home root_home".split()
+    )
+
+
+def test_rows_written_before_runtimes_load_as_tools(paths):
+    save_installed(paths, {"one": item("one")})
+    one = load_installed(paths)["one"]
+    assert (one.kind, one.requires, one.python) == ("tool", [], "")
+
+
+@pytest.mark.parametrize(
+    "key, value",
+    [("kind", "library"), ("kind", 1), ("requires", "python-3.13"), ("requires", [1]),
+     ("python", 3)],
+)  # fmt: skip
+def test_bad_runtime_fields_are_refused(paths, key, value):
+    save_installed(paths, {"one": item("one")})
+    data = tomllib.loads(paths.tools_state.read_text(encoding="utf-8"))
+    data["tool"][0][key] = value
+    paths.tools_state.write_text(tomli_w.dumps(data), encoding="utf-8")
+    with pytest.raises(ToolError, match=f"invalid content .*{key}"):
+        load_installed(paths)
+
+
+def test_needed_and_idle_runtimes():
+    a, b = item("a"), item("b")
+    a.requires = ["python-3.13"]
+    data = {"a": a, "b": b, "python-3.13": runtime(), "python-3.14": runtime("python-3.14")}
+    assert toolstate.needed_runtimes(data) == {"python-3.13"}
+    assert [t.name for t in toolstate.idle_runtimes(data)] == ["python-3.14"]
+    del data["a"]
+    assert toolstate.needed_runtimes(data) == set()
+    assert [t.name for t in toolstate.idle_runtimes(data)] == ["python-3.13", "python-3.14"]
+
+
+def test_a_runtime_is_never_an_orphan():
+    data = {"a": item("a", users=[]), "python-3.13": runtime()}
+    assert [t.name for t in orphans(data, set())] == ["a"]
+
+
 def test_orphans():
     data = {
         "a": item("a", users=["x"]),

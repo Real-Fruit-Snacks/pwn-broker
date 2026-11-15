@@ -394,6 +394,17 @@ def test_leftovers_do_nothing_without_installed_tools(paths):
     assert console.asked == [] and console.lines == []
 
 
+def test_leftovers_never_take_a_runtime_for_an_unused_tool_or_a_stray(paths, tmp_path):
+    zip_path, entry = toolkit.make_runtime(tmp_path / "rtzips")
+    installed = {}
+    toolinstall.install_runtime(paths, entry, zip_path, installed=installed, console=FakeConsole())
+    console = FakeConsole(["y", "y"])
+    toolhooks.leftovers(paths, console)
+    assert console.asked == [] and console.lines == []
+    assert list(load_installed(paths)) == ["python-3.13"]
+    assert (paths.tools / "python-3.13" / "3.13.18-1").is_dir()
+
+
 def test_leftovers_survive_a_cancelled_question_and_a_bad_state_file(tooled):
     finish_without_undo(tooled)
     toolhooks.leftovers(tooled.paths, FakeConsole())

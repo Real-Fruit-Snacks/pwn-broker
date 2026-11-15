@@ -2,6 +2,8 @@ import os
 import shutil
 import subprocess
 import sys
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -10,16 +12,22 @@ import toolkit
 from helpers import NOW
 from pwn_broker import toolstate
 from pwn_broker.console import FakeConsole
+from pwn_broker.model import RuntimeRecord
 from pwn_broker.store import load_box
 from pwn_broker.toolindex import BuildEntry
 from pwn_broker.toolinstall import (
+    forget_runtime,
     install,
+    install_runtime,
     launcher_text,
+    megabytes,
     python_version,
     release,
     remove_files,
+    remove_runtime,
     remove_stray,
     sh_quote,
+    stray_files,
 )
 from pwn_broker.toolpkg import Command, ToolError, machine_arch, unpack
 from pwn_broker.toolstate import Installed, load_installed
@@ -48,6 +56,7 @@ def build(tmp_path, files=None, wheels=(), lock=None, **overrides):
         url="https://example.invalid/" + zip_path.name,
         size=size,
         sha256=sha,
+        requires=list(manifest.get("requires", [])),
     )
     return zip_path, entry
 
@@ -1073,3 +1082,418 @@ def test_remove_stray_refuses_anything_outside_the_apps_folders(paths, tmp_path)
         with pytest.raises(ToolError):
             remove_stray(paths, path)
     assert victim.is_dir()
+
+
+# ---- runtimes
+
+
+def rt_install(paths, tmp_path, zip_path=None, entry=None, *, installed=None, console=None):
+    if zip_path is None:
+        zip_path, entry = toolkit.make_runtime(tmp_path / "rtzips")
+    installed = {} if installed is None else installed
+    console = console or FakeConsole()
+    item = install_runtime(paths, entry, zip_path, installed=installed, console=console)
+    return item, console, installed
+
+
+def rt_folder(paths, build=1):
+    return paths.tools / "python-3.13" / f"3.13.18-{build}"
+
+
+def test_install_runtime_unpacks_and_records_it(paths, tmp_path):
+    item, console, installed = rt_install(paths, tmp_path)
+    folder = rt_folder(paths)
+    python = folder / "root" / "python" / "bin" / "python3.13"
+    assert python.read_bytes() == toolkit.stand_in_python()
+    assert (folder / "manifest.toml").is_file() and (folder / "LICENSE").is_file()
+    # the archive is unpacked, so the copy in the package is not kept
+    assert not (folder / "files" / "python.tar.gz").exists()
+    assert item.kind == "runtime"
+    assert item.python == python.resolve().as_posix()
+    assert item.folder == folder.resolve().as_posix()
+    assert (item.commands, item.uploads, item.users, item.home) == ([], [], [], {})
+    assert installed == {"python-3.13": item}
+    assert load_installed(paths) == installed
+    assert console.lines == [("ok", "python-3.13 3.13.18 installed (runtime, 1 MB)")]
+    assert not (paths.bin.exists() and list(paths.bin.iterdir()))
+
+
+def test_runtime_size_is_shown_in_whole_megabytes():
+    assert [megabytes(n) for n in (1, 524_288, 37_748_736, 38_797_312)] == [1, 1, 36, 37]
+
+
+@posix_only
+def test_an_installed_runtime_is_executable(paths, tmp_path):
+    item, _c, _i = rt_install(paths, tmp_path)
+    assert os.stat(item.python).st_mode & 0o777 == 0o755
+
+
+@pytest.mark.parametrize("build", [1, 2])
+def test_an_installed_runtime_is_used_as_it_is(paths, tmp_path, build):
+    first, _c, installed = rt_install(paths, tmp_path)
+    before = paths.tools_state.read_bytes()
+    zip_path, entry = toolkit.make_runtime(tmp_path / "newer", build=build)
+    zip_path.unlink()  # nothing is read from the package
+    item, console, _i = rt_install(paths, tmp_path, zip_path, entry, installed=installed)
+    assert item is first
+    assert console.lines == []
+    assert paths.tools_state.read_bytes() == before
+    assert not rt_folder(paths, 2).exists()
+
+
+@pytest.mark.parametrize("missing", ["folder", "interpreter"])
+def test_a_runtime_whose_files_are_gone_is_installed_afresh(paths, tmp_path, missing):
+    _first, _c, installed = rt_install(paths, tmp_path)
+    old = rt_folder(paths)
+    if missing == "folder":
+        shutil.rmtree(old)
+    else:
+        (old / "root" / "python" / "bin" / "python3.13").unlink()
+    (paths.tools / "python-3.13" / "leftover").mkdir()
+    zip_path, entry = toolkit.make_runtime(tmp_path / "newer", build=2)
+    item, console, _i = rt_install(paths, tmp_path, zip_path, entry, installed=installed)
+    assert item.build == 2 and installed == {"python-3.13": item}
+    assert load_installed(paths) == installed
+    assert sorted(p.name for p in (paths.tools / "python-3.13").iterdir()) == ["3.13.18-2"]
+    assert console.lines == [("ok", "python-3.13 3.13.18 installed (runtime, 1 MB)")]
+
+
+def test_install_runtime_refuses_a_package_that_is_not_a_runtime(paths, tmp_path):
+    zip_path, entry = build(tmp_path)
+    installed = {}
+    with pytest.raises(ToolError, match="kerbrute is not a runtime"):
+        rt_install(paths, tmp_path, zip_path, entry, installed=installed)
+    assert snapshot(paths) == [] and installed == {}
+
+
+def test_install_runtime_refuses_a_tool_package_listed_as_a_runtime(paths, tmp_path):
+    zip_path, entry = build(tmp_path)
+    entry.kind = "runtime"
+    with pytest.raises(ToolError, match="not a runtime"):
+        rt_install(paths, tmp_path, zip_path, entry)
+    assert snapshot(paths) == []
+
+
+def test_install_runtime_refuses_the_name_of_an_installed_tool(paths, box, tmp_path):
+    zip_path, entry = build(tmp_path, name="python-3.13")
+    _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path)
+    before = snapshot(paths)
+    rt_zip, rt_entry = toolkit.make_runtime(tmp_path / "rtzips")
+    with pytest.raises(ToolError, match="python-3.13 is installed as a tool"):
+        rt_install(paths, tmp_path, rt_zip, rt_entry, installed=installed)
+    assert snapshot(paths) == before
+
+
+RT_FAULTS = {
+    "not a gzip tar": (b"not an archive", "incomplete or damaged"),
+    "a name that leaves": (
+        toolkit.runtime_archive({"python/bin/python3.13": b"x", "../evil": b"x"}),
+        "would write outside",
+    ),
+    "no interpreter": (
+        toolkit.runtime_archive({"python/bin/python3": b"x"}),
+        "python/bin/python3.13 is missing",
+    ),
+    "a folder for an interpreter": (
+        toolkit.runtime_archive({"python/bin/python3.13/inside": b"x"}),
+        "python/bin/python3.13 is not a regular file",
+    ),
+}
+
+
+@pytest.mark.parametrize("archive, words", RT_FAULTS.values(), ids=RT_FAULTS.keys())
+def test_a_bad_runtime_archive_leaves_nothing(paths, tmp_path, archive, words):
+    zip_path, entry = toolkit.make_runtime(tmp_path / "rtzips", archive=archive)
+    installed = {}
+    console = FakeConsole()
+    with pytest.raises(ToolError, match=words):
+        rt_install(paths, tmp_path, zip_path, entry, installed=installed, console=console)
+    assert snapshot(paths) == [] and installed == {} and console.lines == []
+    assert not (paths.tools / "python-3.13").exists()
+
+
+def test_a_runtime_with_a_bad_hash_leaves_nothing(paths, tmp_path):
+    zip_path, entry = toolkit.make_runtime(tmp_path / "rtzips")
+    entry.sha256 = "0" * 64
+    with pytest.raises(ToolError, match="SHA-256"):
+        rt_install(paths, tmp_path, zip_path, entry)
+    assert snapshot(paths) == []
+
+
+def test_a_runtime_unlike_its_entry_leaves_nothing(paths, tmp_path):
+    zip_path, entry = toolkit.make_runtime(tmp_path / "rtzips")
+    entry.version = "3.13.99"
+    with pytest.raises(ToolError, match="not python-3.13 3.13.99-1"):
+        rt_install(paths, tmp_path, zip_path, entry)
+    assert snapshot(paths) == []
+
+
+@posix_only
+def test_an_interpreter_that_leads_outside_the_runtime_is_refused(paths, tmp_path, monkeypatch):
+    from pwn_broker import toolinstall
+
+    real = toolinstall.runtimearchive.unpack
+
+    def linked_out(archive, dest):
+        real(archive, dest)
+        python = dest / "python" / "bin" / "python3.13"
+        python.unlink()
+        python.symlink_to(sys.executable)
+
+    monkeypatch.setattr(toolinstall.runtimearchive, "unpack", linked_out)
+    with pytest.raises(ToolError, match="outside the runtime's folder"):
+        rt_install(paths, tmp_path)
+    assert snapshot(paths) == []
+
+
+@pytest.mark.parametrize("where", ["unpack", "save"])
+def test_an_interrupted_runtime_install_leaves_nothing(paths, tmp_path, monkeypatch, where):
+    from pwn_broker import toolinstall
+
+    real = toolinstall.save_installed
+
+    def interrupt(*_a, **_k):
+        raise KeyboardInterrupt
+
+    def save_then_interrupt(paths_, installed_):
+        real(paths_, installed_)
+        if installed_:
+            raise KeyboardInterrupt
+
+    if where == "unpack":
+        monkeypatch.setattr(toolinstall.runtimearchive, "unpack", interrupt)
+    else:
+        monkeypatch.setattr(toolinstall, "save_installed", save_then_interrupt)
+    installed = {}
+    with pytest.raises(KeyboardInterrupt):
+        rt_install(paths, tmp_path, installed=installed)
+    assert installed == {}
+    assert [p for p in snapshot(paths) if p != "tools/installed.toml"] == []
+    assert load_installed(paths) == {}
+
+
+def test_remove_runtime_removes_its_folder(paths, tmp_path):
+    item, _c, _i = rt_install(paths, tmp_path)
+    remove_runtime(paths, item)
+    assert not (paths.tools / "python-3.13").exists()
+
+
+def test_remove_runtime_refuses_what_is_not_a_runtime_folder(paths, tmp_path):
+    item, _c, _i = rt_install(paths, tmp_path)
+    outside = tmp_path / "precious"
+    outside.mkdir()
+    for folder in (
+        outside,
+        paths.tools,
+        paths.tools / "python-3.13",
+        paths.tools / "other" / "3.13.18-1",
+        paths.tools / "python-3.13" / ".." / ".." / ".." / "precious",
+    ):
+        with pytest.raises(ToolError, match="refusing"):
+            remove_runtime(paths, replace(item, folder=folder.as_posix()))
+    with pytest.raises(ToolError, match="kerbrute is not a runtime"):
+        remove_runtime(paths, item_for(paths))
+    with pytest.raises(ToolError):
+        remove_runtime(paths, replace(item, name="../x"))
+    assert outside.is_dir() and Path(item.python).is_file()
+
+
+def test_forget_runtime_removes_it_and_its_row(paths, tmp_path):
+    _item, _c, installed = rt_install(paths, tmp_path)
+    forget_runtime(paths, installed, "python-3.13")
+    assert installed == {} and load_installed(paths) == {}
+    assert not (paths.tools / "python-3.13").exists()
+
+
+def test_a_runtime_that_cannot_be_removed_keeps_its_row(paths, tmp_path, monkeypatch):
+    from pwn_broker import toolinstall
+
+    _item, _c, installed = rt_install(paths, tmp_path)
+
+    def busy(path):
+        raise OSError("busy")
+
+    monkeypatch.setattr(toolinstall, "_delete_tree", busy)
+    with pytest.raises(ToolError, match="busy"):
+        forget_runtime(paths, installed, "python-3.13")
+    assert list(installed) == list(load_installed(paths)) == ["python-3.13"]
+
+
+def test_stray_files_counts_a_recorded_runtime_as_recorded(paths, tmp_path):
+    _item, _c, installed = rt_install(paths, tmp_path)
+    assert stray_files(paths, installed) == []
+    assert stray_files(paths, {}) == [paths.tools / "python-3.13"]
+    # an upload folder under a runtime's name belongs to no tool
+    (paths.upload / "python-3.13").mkdir(parents=True)
+    assert stray_files(paths, installed) == [paths.upload / "python-3.13"]
+
+
+# ---- a tool built on a runtime
+
+
+def runtime_tool(tmp_path, **overrides):
+    wheel = toolkit.make_wheel(tmp_path / "w", "kerbrute-py", "1.0", module="kmod", entry="kerbrute")
+    return build(tmp_path, wheels=[wheel], files={}, requires=["python-3.13"], **overrides)
+
+
+def test_a_tool_on_a_runtime_makes_its_environment_with_the_runtimes_python(paths, box, tmp_path):
+    rt, _c, installed = rt_install(paths, tmp_path)
+    zip_path, entry = runtime_tool(tmp_path)
+    fake = FakeRun()
+    item, console, _i = do_install(
+        paths, box, entry, zip_path, tmp_path, installed=installed, run=fake, runtime=rt
+    )
+    folder = paths.tools / "kerbrute" / "1.0.3-1"
+    venv = folder / "venv"
+    # no version check: the wheels are built for the runtime's series
+    assert fake.calls == [
+        [rt.python, "-m", "venv", str(venv)],
+        [
+            str(venv / "bin" / "python"), "-m", "pip", "install", "--no-index",
+            "--find-links", str(folder / "wheels"),
+            "--only-binary", ":all:", "--require-hashes",
+            "--disable-pip-version-check", "--no-input",
+            "-r", str(folder / "wheels.lock"),
+        ],
+    ]  # fmt: skip
+    assert item.requires == ["python-3.13"]
+    assert load_installed(paths)["kerbrute"].requires == ["python-3.13"]
+    note = RuntimeRecord("python-3.13", "3.13.18", 1, rt.sha256)
+    assert [t.runtime for t in box.tools] == [note]
+    assert [t.runtime for t in load_box(box.path).tools] == [note]
+    assert console.lines[0] == ("ok", "kerbrute 1.0.3 installed")
+
+
+def test_a_second_box_joining_a_tool_on_a_runtime_records_the_runtime(paths, box, other, tmp_path):
+    rt, _c, installed = rt_install(paths, tmp_path)
+    zip_path, entry = runtime_tool(tmp_path)
+    unfinished = {box.id: box.name, other.id: other.name}
+    kw = dict(installed=installed, unfinished=unfinished, runtime=rt)
+    do_install(paths, box, entry, zip_path, tmp_path, **kw)
+    do_install(paths, other, entry, zip_path, tmp_path, **kw)
+    assert installed["kerbrute"].users == [box.id, other.id]
+    assert [t.runtime.name for t in load_box(other.path).tools] == ["python-3.13"]
+
+
+@pytest.mark.parametrize("given", ["none", "another runtime", "a tool"])
+def test_a_tool_on_a_runtime_needs_the_one_it_requires(paths, box, tmp_path, given):
+    rt, _c, installed = rt_install(paths, tmp_path)
+    runtime = {
+        "none": None,
+        "another runtime": replace(rt, name="python-3.14"),
+        "a tool": replace(rt, kind="tool"),
+    }[given]
+    zip_path, entry = runtime_tool(tmp_path)
+    before = snapshot(paths)
+    fake = FakeRun()
+    with pytest.raises(ToolError, match="kerbrute requires the runtime python-3.13"):
+        do_install(
+            paths, box, entry, zip_path, tmp_path, installed=installed, run=fake, runtime=runtime
+        )
+    assert fake.calls == [] and snapshot(paths) == before and box.tools == []
+
+
+def test_a_tool_that_requires_nothing_refuses_a_runtime(paths, box, tmp_path):
+    rt, _c, installed = rt_install(paths, tmp_path)
+    zip_path, entry = python_zip(tmp_path)
+    fake = FakeRun()
+    with pytest.raises(ToolError, match="kerbrute requires no runtime"):
+        do_install(paths, box, entry, zip_path, tmp_path, installed=installed, run=fake, runtime=rt)
+    assert fake.calls == [] and box.tools == [] and "kerbrute" not in installed
+
+
+def test_the_index_and_package_must_agree_on_what_is_required(paths, box, tmp_path):
+    rt, _c, installed = rt_install(paths, tmp_path)
+    zip_path, entry = runtime_tool(tmp_path)
+    entry.requires = []
+    fake = FakeRun()
+    with pytest.raises(ToolError, match="requires python-3.13; the index lists nothing"):
+        do_install(paths, box, entry, zip_path, tmp_path, installed=installed, run=fake, runtime=rt)
+    assert fake.calls == [] and box.tools == []
+
+
+def test_a_schema_1_python_tool_still_uses_kalis_python(paths, box, tmp_path):
+    zip_path, entry = python_zip(tmp_path)
+    fake = FakeRun()
+    item, _c, _i = do_install(paths, box, entry, zip_path, tmp_path, run=fake)
+    assert [call[:2] for call in fake.calls[:2]] == [["python3", "-c"], ["python3", "-m"]]
+    assert item.requires == [] and box.tools[0].runtime is None
+    assert "requires" not in paths.tools_state.read_text(encoding="utf-8")
+
+
+def test_install_refuses_a_runtime(paths, box, tmp_path):
+    zip_path, entry = toolkit.make_runtime(tmp_path / "rtzips")
+    with pytest.raises(ToolError, match="python-3.13 is a runtime; it is installed with the tools"):
+        do_install(paths, box, entry, zip_path, tmp_path)
+    assert snapshot(paths) == [] and box.tools == []
+
+
+TOOL_FAULTS = ["the environment", "pip", "a command name"]
+
+
+def failing_tool_install(paths, box, other, tmp_path, fault, installed, rt):
+    zip_path, entry = runtime_tool(tmp_path)
+    run = FakeRun()
+    if fault == "the environment":
+        run = FakeRun(fail_at=0)
+    elif fault == "pip":
+        run = FakeRun(fail_at=1)
+    else:
+        taker_zip, taker = build(
+            tmp_path / "taker", name="taker",
+            command=[{"name": "kerbrute", "type": "binary", "path": "files/kerbrute"}],
+        )  # fmt: skip
+        do_install(paths, other, taker, taker_zip, tmp_path, installed=installed)
+    with pytest.raises(ToolError):
+        do_install(paths, box, entry, zip_path, tmp_path, installed=installed, run=run, runtime=rt)
+
+
+@pytest.mark.parametrize("fault", TOOL_FAULTS)
+def test_a_failed_tool_and_the_runtime_it_brought_leave_nothing(paths, box, other, tmp_path, fault):
+    # the caller installed the runtime for this tool, so it takes the runtime off again
+    installed = {}
+    rt, _c, _i = rt_install(paths, tmp_path, installed=installed)
+    failing_tool_install(paths, box, other, tmp_path, fault, installed, rt)
+    forget_runtime(paths, installed, rt.name)
+    assert not (paths.tools / "kerbrute").exists()
+    assert not (paths.tools / "python-3.13").exists()
+    assert "kerbrute" not in installed and "python-3.13" not in installed
+    assert not {"kerbrute", "python-3.13"} & set(load_installed(paths))
+    assert box.tools == [] and load_box(box.path).tools == []
+
+
+@pytest.mark.parametrize("fault", TOOL_FAULTS)
+def test_a_failed_tool_leaves_a_runtime_that_was_already_there(paths, box, other, tmp_path, fault):
+    installed = {}
+    rt_install(paths, tmp_path, installed=installed)
+    before = installed["python-3.13"]
+    zip_path, entry = toolkit.make_runtime(tmp_path / "again")
+    rt, _c, _i = rt_install(paths, tmp_path, zip_path, entry, installed=installed)
+    assert rt is before  # so the caller can tell this command did not bring it
+    failing_tool_install(paths, box, other, tmp_path, fault, installed, rt)
+    assert not (paths.tools / "kerbrute").exists()
+    assert Path(rt.python).is_file()
+    assert load_installed(paths)["python-3.13"] == rt
+    assert "kerbrute" not in load_installed(paths)
+    assert box.tools == []
+
+
+@posix_only
+def test_real_install_of_a_tool_on_the_stand_in_runtime(paths, box, tmp_path):
+    (paths.run / "tools").mkdir(parents=True)
+    rt, _c, installed = rt_install(paths, tmp_path)
+    ran = subprocess.run([rt.python, "-c", "print('ok')"], capture_output=True, text=True)
+    assert ran.stdout == "ok\n", f"the stand-in runtime did not run: {ran.returncode} {ran.stderr}"
+    zip_path, entry = runtime_tool(tmp_path)
+    do_install(
+        paths, box, entry, zip_path, tmp_path,
+        installed=installed, runtime=rt, run=subprocess.run,
+    )  # fmt: skip
+    venv = paths.tools / "kerbrute" / "1.0.3-1" / "venv"
+    assert (venv / "pyvenv.cfg").is_file(), f"no environment was made at {venv}"
+    launcher = paths.bin / "kerbrute"
+    result = read_launcher_output(launcher)
+    assert result.returncode == 0, (
+        f"{launcher} exited {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert result.stdout.strip() == "kerbrute-py 1.0", f"the tool printed {result.stdout!r}"

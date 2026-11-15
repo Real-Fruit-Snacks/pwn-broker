@@ -6,9 +6,9 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from pwn_broker import tooldata
+from pwn_broker import runtimearchive, tooldata
 from pwn_broker.console import Console
-from pwn_broker.model import Box, ToolRecord
+from pwn_broker.model import Box, RuntimeRecord, ToolRecord
 from pwn_broker.paths import AppPaths
 from pwn_broker.store import save_box, write_text
 from pwn_broker.toolindex import BuildEntry
@@ -204,6 +204,24 @@ def _record(box: Box, record: ToolRecord) -> None:
     box.tools = [t for t in box.tools if t.name != record.name] + [record]
 
 
+def _runtime_note(
+    name: str, requires: list[str], runtime: Installed | None
+) -> RuntimeRecord | None:
+    # a tool requires at most one runtime, and must be given that one
+    if not requires:
+        if runtime is not None:
+            raise ToolError(f"{name} requires no runtime, but was given {runtime.name}")
+        return None
+    wanted = f"{name} requires the runtime {requires[0]}"
+    if runtime is None:
+        raise ToolError(f"{wanted}, and none was given")
+    if runtime.kind != "runtime":
+        raise ToolError(f"{wanted}; {runtime.name} is not a runtime")
+    if runtime.name != requires[0]:
+        raise ToolError(f"{wanted}, not {runtime.name}")
+    return RuntimeRecord(runtime.name, runtime.version, runtime.build, runtime.sha256)
+
+
 # ---- install
 
 
@@ -231,14 +249,18 @@ def install(
     python: str = "python3",
     run=subprocess.run,
     on_path: Callable[[str], str | None] = shutil.which,
+    runtime: Installed | None = None,
 ) -> Installed:
+    """Installs a tool for the box. A tool that requires a runtime is given it, installed."""
     name = entry.name
     if not valid_tool_name(name):
         raise ToolError(f"{name!r} is not a valid tool name")
+    current = installed.get(name)
+    if entry.kind == "runtime" or (current is not None and current.kind == "runtime"):
+        raise ToolError(f"{name} is a runtime; it is installed with the tools that need it")
     wanted = build_id(entry.version, entry.build)
     check_recorded(box, entry)
 
-    current = installed.get(name)
     if current is not None:
         users = [u for u in current.users if u in unfinished]
         others = [u for u in users if u != box.id]
@@ -253,7 +275,8 @@ def install(
                 f"finish or remove it there before installing {entry.version}"
             )
         if same and (others or Path(current.folder).is_dir()):
-            joined = _join(paths, box, current, users, installed, console, now)
+            note = _runtime_note(name, current.requires, runtime)
+            joined = _join(paths, box, current, users, installed, console, now, note)
             _sudo_lines(paths, console, joined, on_path)
             return joined
         if not others:
@@ -273,13 +296,21 @@ def install(
     old_tools = list(box.tools)
     try:
         verify_zip(zip_path, size=entry.size, sha256=entry.sha256)
-        named = {c.name for c in package_manifest(zip_path).commands}
+        package = package_manifest(zip_path)
+        named = {c.name for c in package.commands}
         if named != set(entry.commands):
             # tool list shows what the index says, so the two must agree
             raise ToolError(
                 f"the package's commands ({', '.join(sorted(named)) or 'none'}) are not the "
                 f"commands the index lists ({', '.join(sorted(entry.commands)) or 'none'})"
             )
+        if package.requires != list(entry.requires):
+            # the caller installed the runtimes the index named, so the two must agree
+            raise ToolError(
+                f"the package requires {', '.join(package.requires) or 'nothing'}; "
+                f"the index lists {', '.join(entry.requires) or 'nothing'}"
+            )
+        note = _runtime_note(name, package.requires, runtime)
         if os.path.lexists(folder):
             _delete_tree(folder)
         manifest = unpack(zip_path, folder)
@@ -293,7 +324,7 @@ def install(
         if manifest.arch != machine_arch():
             raise ToolError(f"{name} is built for {manifest.arch}, this machine is {machine_arch()}")
         if manifest.python is not None:
-            _build_venv(manifest, folder, python, run)
+            _build_venv(manifest, folder, python, run, runtime)
         _write_launchers(paths, manifest, folder, installed, console, on_path, made_launchers)
         if manifest.uploads:
             made_uploads = True
@@ -312,8 +343,9 @@ def install(
             home=_existing(home, manifest.home),
             # root's home is only asked about when it is a different folder that can be read
             root_home=_existing(found[1], manifest.home) if len(found) > 1 else {},
+            requires=list(manifest.requires),
         )
-        _record(box, ToolRecord(name, entry.version, entry.build, entry.sha256, now))
+        _record(box, ToolRecord(name, entry.version, entry.build, entry.sha256, now, note))
         installed[name] = item
         saved_installed = True  # set first: an interrupt inside the save must still be undone
         save_installed(paths, installed)
@@ -358,10 +390,12 @@ def _join(
     installed: dict[str, Installed],
     console: Console,
     now: datetime,
+    note: RuntimeRecord | None = None,
 ) -> Installed:
     old_users, old_tools = current.users, list(box.tools)
     current.users = users if box.id in users else users + [box.id]
-    _record(box, ToolRecord(current.name, current.version, current.build, current.sha256, now))
+    record = ToolRecord(current.name, current.version, current.build, current.sha256, now, note)
+    _record(box, record)
     saved = False
     try:
         saved = True
@@ -376,13 +410,20 @@ def _join(
     return current
 
 
-def _build_venv(manifest: Manifest, folder: Path, python: str, run) -> None:
+def _build_venv(
+    manifest: Manifest, folder: Path, python: str, run, runtime: Installed | None
+) -> None:
     spec = manifest.python
-    found = python_version(python, run)
-    if found not in spec.versions:
-        raise ToolError(
-            f"{manifest.name} supports Python {', '.join(spec.versions)}; this machine has {found}"
-        )
+    if runtime is not None:
+        # the wheels are built for the runtime's series, so there is no version to check
+        python = runtime.python
+    else:
+        found = python_version(python, run)
+        if found not in spec.versions:
+            raise ToolError(
+                f"{manifest.name} supports Python {', '.join(spec.versions)}; "
+                f"this machine has {found}"
+            )
     venv = folder / "venv"
     _run_checked(run, [python, "-m", "venv", str(venv)], "creating the virtual environment")
     lock = folder / Path(*spec.lock.split("/"))
@@ -441,6 +482,161 @@ def _copy_uploads(manifest: Manifest, folder: Path, target: Path) -> None:
     target.mkdir(parents=True)
     for upload in manifest.uploads:
         shutil.copy(folder / Path(*upload.path.split("/")), target / upload.as_name)
+
+
+# ---- runtimes
+
+# the folder inside a runtime's own that its archive is unpacked into
+_RUNTIME_ROOT = "root"
+
+
+def megabytes(size: int) -> int:
+    return max(1, round(size / (1024 * 1024)))
+
+
+def _check_interpreter(python: Path, folder: Path, shown: str) -> None:
+    # links inside the runtime are followed; where they end must still be inside it
+    try:
+        real = python.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ToolError(f"the runtime's interpreter {shown} is missing") from exc
+    if not _inside(real, folder):
+        raise ToolError(f"the runtime's interpreter {shown} leads outside the runtime's folder")
+    if not real.is_file():
+        raise ToolError(f"the runtime's interpreter {shown} is not a regular file")
+
+
+def _intact(item: Installed) -> bool:
+    if not item.python or not Path(item.folder).is_dir():
+        return False
+    try:
+        _check_interpreter(Path(item.python), Path(item.folder), item.python)
+    except ToolError:
+        return False
+    return True
+
+
+def install_runtime(
+    paths: AppPaths,
+    entry: BuildEntry,
+    zip_path: Path,
+    *,
+    installed: dict[str, Installed],
+    console: Console,
+) -> Installed:
+    """Installs a runtime, or returns the one already there, at any build, unchanged.
+
+    The row returned is the very object already in `installed` when the runtime was there, so a
+    caller can tell whether this call brought it, and undo it with forget_runtime if so.
+    """
+    name = entry.name
+    if not valid_tool_name(name):
+        raise ToolError(f"{name!r} is not a valid package name")
+    if entry.kind != "runtime":
+        raise ToolError(f"{name} is not a runtime")
+    current = installed.get(name)
+    if current is not None:
+        if current.kind != "runtime":
+            raise ToolError(f"{name} is installed as a tool, not a runtime")
+        if _intact(current):
+            return current
+        # its files are gone or damaged: whatever is left under its name goes with the row
+        leftover = paths.tools / name
+        _check_inside(leftover, paths.tools, "the runtime folder")
+        try:
+            if os.path.lexists(leftover):
+                _delete_tree(leftover)
+        except OSError as exc:
+            raise ToolError(f"cannot remove {leftover}: {exc}") from exc
+        del installed[name]
+        save_installed(paths, installed)
+
+    folder = paths.tools / name / build_id(entry.version, entry.build)
+    _check_inside(folder, paths.tools, "the runtime folder")
+    saved_installed = False
+    try:
+        verify_zip(zip_path, size=entry.size, sha256=entry.sha256)
+        if os.path.lexists(folder):
+            _delete_tree(folder)
+        manifest = unpack(zip_path, folder)
+        if (manifest.name, manifest.version, manifest.build) != (
+            entry.name, entry.version, entry.build,
+        ):  # fmt: skip
+            raise ToolError(
+                f"the package is {manifest.name} {manifest.version}-{manifest.build}, "
+                f"not {name} {build_id(entry.version, entry.build)}"
+            )
+        if manifest.runtime is None:
+            raise ToolError(f"the package {name} is not a runtime")
+        if manifest.arch != machine_arch():
+            raise ToolError(f"{name} is built for {manifest.arch}, this machine is {machine_arch()}")
+        archive = folder / Path(*manifest.runtime.archive.split("/"))
+        root = folder / _RUNTIME_ROOT
+        runtimearchive.unpack(archive, root)
+        here = folder.resolve()
+        python = here / _RUNTIME_ROOT / Path(*manifest.runtime.python.split("/"))
+        _check_interpreter(python, here, manifest.runtime.python)
+        # unpacked, the archive is only a second copy; the zip stays in the download cache
+        archive.unlink()
+        item = Installed(
+            name=name,
+            version=entry.version,
+            build=entry.build,
+            sha256=entry.sha256,
+            folder=here.as_posix(),
+            commands=[],
+            uploads=[],
+            needs_root=False,
+            users=[],
+            home={},
+            kind="runtime",
+            python=python.as_posix(),
+        )
+        installed[name] = item
+        saved_installed = True  # set first: an interrupt inside the save must still be undone
+        save_installed(paths, installed)
+    except BaseException as exc:
+        installed.pop(name, None)
+        shutil.rmtree(folder, ignore_errors=True)
+        try:
+            folder.parent.rmdir()
+        except OSError:
+            pass
+        if saved_installed:
+            _restore_list(paths, installed, exc)
+        raise
+    console.ok(f"{name} {entry.version} installed (runtime, {megabytes(entry.size)} MB)")
+    return item
+
+
+def remove_runtime(paths: AppPaths, item: Installed) -> None:
+    name = item.name
+    if not valid_tool_name(name):
+        raise ToolError(f"{name!r} is not a valid package name")
+    if item.kind != "runtime":
+        raise ToolError(f"{name} is not a runtime")
+    raw = Path(item.folder)
+    # the root is resolved, the runtime's own folder name is not followed
+    _check_inside(raw, paths.tools.resolve() / name, "the runtime folder", resolve_root=False)
+    try:
+        if os.path.lexists(raw):
+            _delete_tree(raw)
+    except OSError as exc:
+        raise ToolError(f"cannot remove {raw}: {exc}") from exc
+    try:
+        (paths.tools / name).rmdir()
+    except OSError:
+        pass
+
+
+def forget_runtime(paths: AppPaths, installed: dict[str, Installed], name: str) -> None:
+    """Removes a runtime and its row. If its files cannot be removed the row stays."""
+    item = installed.get(name)
+    if item is None:
+        return
+    remove_runtime(paths, item)
+    del installed[name]
+    save_installed(paths, installed)
 
 
 # ---- remove
@@ -568,12 +764,14 @@ def stray_files(paths: AppPaths, installed: dict[str, Installed]) -> list[Path]:
             for e in _entries(Path(entry.path))
             if _real_folder(e) and e.name not in builds
         ]
+    # a runtime has a folder of its own under tools/, and no uploads or launchers
+    tools = {name for name, item in installed.items() if item.kind != "runtime"}
     found += [
-        Path(e.path) for e in _entries(paths.upload) if _real_folder(e) and e.name not in installed
+        Path(e.path) for e in _entries(paths.upload) if _real_folder(e) and e.name not in tools
     ]
     for entry in _entries(paths.bin):
         owner = _owner(Path(entry.path))
-        if owner is not None and owner not in installed:
+        if owner is not None and owner not in tools:
             found.append(Path(entry.path))
     return sorted(found)
 

@@ -26,8 +26,15 @@ class Installed:
     # whether each home entry existed in root's home before install; only recorded when that
     # is a different folder from the user's and could be read
     root_home: dict[str, bool] = field(default_factory=dict)
+    # "tool" or "runtime"; a runtime has no commands, uploads, users or home entries
+    kind: str = "tool"
+    # the runtimes a tool requires, by name
+    requires: list[str] = field(default_factory=list)
+    # a runtime's interpreter, as an absolute path
+    python: str = ""
 
 
+KINDS = ("tool", "runtime")
 _STRINGS = ("name", "version", "sha256", "folder")
 _LISTS = ("commands", "uploads", "users")
 
@@ -55,6 +62,15 @@ def _installed(row: object) -> Installed:
     root_home = row.get("root_home", {})
     if not isinstance(root_home, dict) or not all(isinstance(v, bool) for v in root_home.values()):
         raise TypeError("root_home must map paths to true or false")
+    kind = row.get("kind", "tool")
+    if kind not in KINDS:
+        raise TypeError(f"kind must be one of {', '.join(KINDS)}")
+    requires = row.get("requires", [])
+    if not isinstance(requires, list) or not all(isinstance(v, str) for v in requires):
+        raise TypeError("requires must be a list of strings")
+    python = row.get("python", "")
+    if not isinstance(python, str):
+        raise TypeError("python must be a string")
     return Installed(
         name=row["name"],
         version=row["version"],
@@ -67,6 +83,9 @@ def _installed(row: object) -> Installed:
         users=list(row["users"]),
         home=dict(home),
         root_home=dict(root_home),
+        kind=kind,
+        requires=list(requires),
+        python=python,
     )
 
 
@@ -98,23 +117,32 @@ def load_installed(paths: AppPaths) -> dict[str, Installed]:
     return result
 
 
+def _row(t: Installed) -> dict:
+    row = {
+        "name": t.name,
+        "version": t.version,
+        "build": t.build,
+        "sha256": t.sha256,
+        "folder": t.folder,
+        "commands": list(t.commands),
+        "uploads": list(t.uploads),
+        "needs_root": t.needs_root,
+        "users": list(t.users),
+        "home": dict(t.home),
+        "root_home": dict(t.root_home),
+    }
+    # only what a runtime brings is added, so a list without runtimes is written as before
+    if t.kind != "tool":
+        row["kind"] = t.kind
+    if t.requires:
+        row["requires"] = list(t.requires)
+    if t.python:
+        row["python"] = t.python
+    return row
+
+
 def save_installed(paths: AppPaths, installed: dict[str, Installed]) -> None:
-    rows = [
-        {
-            "name": t.name,
-            "version": t.version,
-            "build": t.build,
-            "sha256": t.sha256,
-            "folder": t.folder,
-            "commands": list(t.commands),
-            "uploads": list(t.uploads),
-            "needs_root": t.needs_root,
-            "users": list(t.users),
-            "home": dict(t.home),
-            "root_home": dict(t.root_home),
-        }
-        for t in installed.values()
-    ]
+    rows = [_row(t) for t in installed.values()]
     write_toml(paths.tools_state, {"schema": SCHEMA, "tool": rows})
 
 
@@ -140,7 +168,23 @@ def present_count(paths: AppPaths, box: Box) -> int:
 
 
 def orphans(installed: dict[str, Installed], unfinished_ids: set[str]) -> list[Installed]:
-    return [t for t in installed.values() if not unfinished_ids.intersection(t.users)]
+    # a runtime has no users; whether it is needed is the tools' question (idle_runtimes)
+    return [
+        t
+        for t in installed.values()
+        if t.kind != "runtime" and not unfinished_ids.intersection(t.users)
+    ]
+
+
+def needed_runtimes(installed: dict[str, Installed]) -> set[str]:
+    """The runtimes any installed tool requires."""
+    return {r for t in installed.values() if t.kind != "runtime" for r in t.requires}
+
+
+def idle_runtimes(installed: dict[str, Installed]) -> list[Installed]:
+    """The installed runtimes no installed tool requires."""
+    needed = needed_runtimes(installed)
+    return [t for t in installed.values() if t.kind == "runtime" and t.name not in needed]
 
 
 def unfinished_boxes(paths: AppPaths) -> dict[str, str]:
