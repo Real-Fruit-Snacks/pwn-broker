@@ -95,9 +95,10 @@ def expect_error(data, field):
     assert field in str(info.value)
 
 
-def test_schema_must_be_1():
+@pytest.mark.parametrize("schema", [3, 0, "1", True, None])
+def test_an_unknown_schema_says_to_upgrade(schema):
     with pytest.raises(ToolError, match="upgrade pwn-broker"):
-        parse_manifest(sample_manifest(schema=2))
+        parse_manifest(sample_manifest(schema=schema))
 
 
 def test_a_manifest_without_a_schema_cannot_be_read():
@@ -108,7 +109,10 @@ def test_a_manifest_without_a_schema_cannot_be_read():
     assert "cannot be read" in str(err.value) and "upgrade" not in str(err.value)
 
 
-@pytest.mark.parametrize("name", ["", "Upper", "-lead", "a b", "a/b", "a_b", 5])
+@pytest.mark.parametrize(
+    "name",
+    ["", "Upper", "-lead", "a b", "a/b", "a_b", 5, ".a", "a.", "a..b", "..", ".", "a\\b", "a/.b"],
+)
 def test_bad_name(name):
     expect_error(sample_manifest(name=name), "name")
 
@@ -423,7 +427,7 @@ def test_missing_or_bad_manifest(tmp_path):
     with pytest.raises(ToolError):
         unpack(path, tmp_path / "d2")
     with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr("manifest.toml", tomli_w.dumps(sample_manifest(schema=2)))
+        zf.writestr("manifest.toml", tomli_w.dumps(sample_manifest(schema=3)))
     with pytest.raises(ToolError, match="upgrade"):
         unpack(path, tmp_path / "d3")
     assert not (tmp_path / "d1").exists() and not (tmp_path / "d2").exists()
@@ -710,3 +714,242 @@ def test_home_entries_inside_shared_places_are_allowed(entry):
     data = both_manifest()
     data["data"] = {"home": [entry]}
     assert parse_manifest(data).home == [entry]
+
+
+# ---- names with dots
+
+
+@pytest.mark.parametrize("name", ["python-3.13", "a", "0", "a.b.c", "a-.b", "kerbrute", "x-1.2-3"])
+def test_valid_tool_names(name):
+    assert toolpkg.valid_tool_name(name)
+    assert parse_manifest(sample_manifest(name=name)).name == name
+
+
+@pytest.mark.parametrize(
+    "name", ["", ".a", "a.", "a..b", ".", "..", "-a", "A", "a_b", "a/b", "a\\b", "a b", "a.\n", "a\n"]
+)
+def test_invalid_tool_names(name):
+    assert not toolpkg.valid_tool_name(name)
+
+
+def test_a_bad_name_message_gives_the_rule():
+    with pytest.raises(ToolError) as info:
+        parse_manifest(sample_manifest(name="a..b"))
+    assert "name: 'a..b' must be lower-case letters, digits, hyphens and dots" in str(info.value)
+
+
+def test_zip_name_with_a_dot():
+    assert toolpkg.zip_name("python-3.13", "3.13.18", 1) == "python-3.13-3.13.18-1.zip"
+
+
+def test_kinds_and_schemas():
+    assert toolpkg.KINDS == ("kali", "upload", "both", "runtime")
+    assert toolpkg.SCHEMAS == (1, 2)
+
+
+# ---- schema 1 as before
+
+
+def test_schema_1_manifests_parse_as_before():
+    m = parse_manifest(python_manifest())
+    assert (m.schema, m.requires, m.runtime) == (1, [], None)
+    assert m.python.versions == ["3.12", "3.13"]
+    assert parse_manifest(sample_manifest()).schema == 1
+
+
+def test_schema_1_refuses_requires():
+    with pytest.raises(ToolError, match="requires: a schema 1 package cannot require anything"):
+        parse_manifest(python_manifest() | {"requires": ["python-3.13"]})
+    with pytest.raises(ToolError, match="requires: a schema 1"):
+        parse_manifest(sample_manifest() | {"requires": []})
+
+
+def test_schema_1_refuses_kind_runtime():
+    with pytest.raises(ToolError, match="kind: a runtime needs schema 2"):
+        parse_manifest(sample_manifest(kind="runtime", schema=1))
+
+
+def test_manifest_fields_have_defaults_for_positional_callers():
+    m = parse_manifest(sample_manifest())
+    rebuilt = toolpkg.Manifest(
+        m.name, m.version, m.build, m.kind, m.description, m.tags, m.upstream, m.licence,
+        m.arch, m.needs_root, m.examples, m.commands, m.uploads, m.python, m.home,
+    )  # fmt: skip
+    assert rebuilt == m
+
+
+# ---- schema 2: a runtime
+
+
+def test_runtime_manifest_parses():
+    m = parse_manifest(sample_manifest(kind="runtime"))
+    assert (m.schema, m.name, m.version, m.kind) == (2, "python-3.13", "3.13.18", "runtime")
+    assert m.runtime == toolpkg.RuntimeSpec(
+        archive="files/python.tar.gz", python="python/bin/python3.13", series="3.13"
+    )
+    assert m.commands == [] and m.uploads == [] and m.python is None and m.home == []
+    assert m.requires == []
+
+
+@pytest.mark.parametrize(
+    "key, value, message",
+    [
+        ("command", [{"name": "py", "type": "binary", "path": "files/py"}], "command: a runtime has no [[command]]"),
+        ("command", [], "command: a runtime has no [[command]]"),
+        ("upload", [{"path": "files/a", "as": "a"}], "upload: a runtime has no [[upload]]"),
+        ("data", {"home": [".py"]}, "data: a runtime has no [data]"),
+        ("python", {"lock": "wheels.lock", "wheels": "wheels"}, "python: a runtime has no [python]"),
+    ],
+)
+def test_a_runtime_refuses_tool_tables(key, value, message):
+    with pytest.raises(ToolError) as info:
+        parse_manifest(sample_manifest(kind="runtime", **{key: value}))
+    assert message in str(info.value)
+
+
+def test_a_runtime_requires_nothing():
+    with pytest.raises(ToolError, match="requires: a runtime requires nothing"):
+        parse_manifest(sample_manifest(kind="runtime", requires=["python-3.12"]))
+    assert parse_manifest(sample_manifest(kind="runtime", requires=[])).requires == []
+
+
+def test_a_runtime_needs_its_table():
+    data = sample_manifest(kind="runtime")
+    del data["runtime"]
+    with pytest.raises(ToolError) as info:
+        parse_manifest(data)
+    assert "runtime: a runtime package needs a [runtime] table" in str(info.value)
+    with pytest.raises(ToolError, match="runtime: must be a table"):
+        parse_manifest(sample_manifest(kind="runtime", runtime="files/python.tar.gz"))
+
+
+@pytest.mark.parametrize(
+    "change, field",
+    [
+        ({"archive": ""}, "runtime.archive"),
+        ({"archive": "python.tar.gz"}, "runtime.archive"),
+        ({"archive": "wheels/python.tar.gz"}, "runtime.archive"),
+        ({"archive": "files/../python.tar.gz"}, "runtime.archive"),
+        ({"archive": "/files/python.tar.gz"}, "runtime.archive"),
+        ({"archive": "files\\python.tar.gz"}, "runtime.archive"),
+        ({"archive": 5}, "runtime.archive"),
+        ({"python": ""}, "runtime.python"),
+        ({"python": "python/../../bin/python3"}, "runtime.python"),
+        ({"python": "../python3"}, "runtime.python"),
+        ({"python": "/usr/bin/python3"}, "runtime.python"),
+        ({"python": "python\\bin\\python3"}, "runtime.python"),
+        ({"python": "C:/python"}, "runtime.python"),
+        ({"series": ""}, "runtime.series"),
+        ({"series": "3"}, "runtime.series"),
+        ({"series": "3.13.1"}, "runtime.series"),
+        ({"series": "py3.13"}, "runtime.series"),
+        ({"series": "3.13\n"}, "runtime.series"),
+        ({"series": 3.13}, "runtime.series"),
+    ],
+)
+def test_runtime_table_rules(change, field):
+    data = sample_manifest(kind="runtime")
+    data["runtime"] = {**data["runtime"], **change}
+    expect_error(data, field)
+
+
+def test_runtime_series_accepts_two_numbers():
+    data = sample_manifest(kind="runtime")
+    data["runtime"] = {**data["runtime"], "series": "3.10"}
+    assert parse_manifest(data).runtime.series == "3.10"
+
+
+# ---- schema 2: a tool that requires a runtime
+
+
+def test_schema_2_python_tool_parses():
+    m = parse_manifest(sample_manifest(requires=["python-3.13"]))
+    assert (m.schema, m.requires, m.runtime) == (2, ["python-3.13"], None)
+    assert m.python == toolpkg.PythonSpec([], "wheels.lock", "wheels")
+
+
+def test_schema_2_python_tool_refuses_versions():
+    data = sample_manifest(requires=["python-3.13"])
+    data["python"]["versions"] = ["3.13"]
+    with pytest.raises(ToolError, match="python.versions: schema 2 has no versions"):
+        parse_manifest(data)
+
+
+@pytest.mark.parametrize(
+    "requires, message",
+    [
+        (["python-3.13", "python-3.13"], "requires: 'python-3.13' appears more than once"),
+        (["kerbrute"], "requires: kerbrute cannot require itself"),
+        (["Python-3.13"], "requires: 'Python-3.13' is not a valid package name"),
+        (["python..3"], "requires: 'python..3' is not a valid package name"),
+        (["../x"], "requires: '../x' is not a valid package name"),
+        ([], "requires: a Python tool requires exactly one runtime; this one names 0"),
+        (["python-3.13", "python-3.12"], "requires: a Python tool requires exactly one runtime; this one names 2"),
+        ("python-3.13", "requires: must be a list of strings"),
+        ([3], "requires: must be a list of strings"),
+    ],
+)
+def test_requires_rules(requires, message):
+    with pytest.raises(ToolError) as info:
+        parse_manifest(sample_manifest(requires=requires))
+    assert message in str(info.value)
+
+
+def test_a_tool_that_is_not_python_requires_nothing():
+    data = sample_manifest(requires=["python-3.13"])
+    data["command"] = [{"name": "kerbrute", "type": "binary", "path": "files/kerbrute"}]
+    del data["python"]
+    with pytest.raises(ToolError, match="requires: a tool that is not Python requires nothing"):
+        parse_manifest(data)
+
+
+@pytest.mark.parametrize("requires", [None, []])
+def test_a_tool_that_requires_nothing_must_be_schema_1(requires):
+    data = sample_manifest(schema=2)
+    if requires is not None:
+        data["requires"] = requires
+    with pytest.raises(
+        ToolError,
+        match="schema: a package that is not a runtime and requires nothing must be schema 1",
+    ):
+        parse_manifest(data)
+
+
+def test_a_schema_2_python_tool_without_requires_is_refused():
+    data = sample_manifest(requires=["python-3.13"])
+    del data["requires"]
+    with pytest.raises(ToolError, match="requires: a Python tool requires exactly one runtime"):
+        parse_manifest(data)
+
+
+# ---- schema 2 packages
+
+
+def test_runtime_package_unpacks(tmp_path):
+    path, _, _ = make_package(tmp_path / "pkg", sample_manifest(kind="runtime"), {})
+    assert path.name == "python-3.13-3.13.18-1.zip"
+    m = unpack(path, tmp_path / "out")
+    assert m.runtime.archive == "files/python.tar.gz"
+    assert (tmp_path / "out" / "files" / "python.tar.gz").is_file()
+    assert toolpkg.package_manifest(path).kind == "runtime"
+
+
+def test_runtime_archive_must_be_in_the_package(tmp_path):
+    path = raw_zip(tmp_path, [("files/other.tar.gz", b"x", None)], sample_manifest(kind="runtime"))
+    err = assert_clean_failure(tmp_path, path)
+    assert "files/python.tar.gz: the runtime's archive is missing from the package" in str(err)
+
+
+def test_runtime_archive_must_be_a_file(tmp_path):
+    members = [("files/python.tar.gz/", b"", None), ("files/python.tar.gz/x", b"x", None)]
+    path = raw_zip(tmp_path, members, sample_manifest(kind="runtime"))
+    err = assert_clean_failure(tmp_path, path)
+    assert "the runtime's archive is missing" in str(err)
+
+
+def test_schema_2_python_package_unpacks(tmp_path):
+    wheel = make_wheel(tmp_path / "w", "kerbrute-py", "1.0", module="kmod", entry="kerbrute")
+    data = sample_manifest(requires=["python-3.13"])
+    path, _, _ = make_package(tmp_path / "pkg", data, {}, wheels=[wheel])
+    m = unpack(path, tmp_path / "out")
+    assert m.requires == ["python-3.13"] and m.python.versions == []

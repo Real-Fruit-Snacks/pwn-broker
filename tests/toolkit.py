@@ -43,8 +43,47 @@ def make_wheel(
     return path
 
 
+RUNTIME_ARCHIVE = b"runtime archive stand-in\n"
+
+
+def _runtime_defaults() -> dict:
+    return {
+        "schema": 2,
+        "name": "python-3.13",
+        "version": "3.13.18",
+        "build": 1,
+        "kind": "runtime",
+        "description": "CPython 3.13, for the tools that require it",
+        "upstream": "https://github.com/astral-sh/python-build-standalone",
+        "licence": "PSF-2.0",
+        "arch": "x86_64",
+        "runtime": {
+            "archive": "files/python.tar.gz",
+            "python": "python/bin/python3.13",
+            "series": "3.13",
+        },
+    }
+
+
 def sample_manifest(**overrides) -> dict:
-    data = {
+    # kind="runtime" gives a runtime package; requires=[...] gives a schema 2 Python tool
+    if overrides.get("kind") == "runtime":
+        data = _runtime_defaults()
+    elif "requires" in overrides:
+        data = _tool_defaults()
+        data.update(
+            schema=2,
+            command=[{"name": "kerbrute", "type": "python-entry", "entry": "kerbrute"}],
+            python={"lock": "wheels.lock", "wheels": "wheels"},
+        )
+    else:
+        data = _tool_defaults()
+    data.update(overrides)
+    return data
+
+
+def _tool_defaults() -> dict:
+    return {
         "schema": 1,
         "name": "kerbrute",
         "version": "1.0.3",
@@ -59,8 +98,6 @@ def sample_manifest(**overrides) -> dict:
         "examples": ["kerbrute userenum -d {domain} users.txt"],
         "command": [{"name": "kerbrute", "type": "binary", "path": "files/kerbrute"}],
     }
-    data.update(overrides)
-    return data
 
 
 def make_package(
@@ -75,6 +112,10 @@ def make_package(
     path = folder / f"{manifest['name']}-{manifest['version']}-{manifest['build']}.zip"
     entries = {"manifest.toml": tomli_w.dumps(manifest).encode(), "LICENSE": b"licence text\n"}
     entries.update(files)
+    runtime = manifest.get("runtime")
+    if isinstance(runtime, dict) and isinstance(runtime.get("archive"), str):
+        # the package checks only ask that the archive is there, so any bytes stand in for it
+        entries.setdefault(runtime["archive"], RUNTIME_ARCHIVE)
     pins = []
     for wheel in wheels:
         dist, version = wheel.name.split("-")[:2]
@@ -97,7 +138,7 @@ def make_entry(folder: Path, manifest_overrides: dict | None = None, files: dict
 
     manifest = sample_manifest(arch=machine_arch(), **(manifest_overrides or {}))
     if files is None:
-        files = {"files/kerbrute": b"#!/bin/sh\necho hi\n"}
+        files = {} if manifest["kind"] == "runtime" else {"files/kerbrute": b"#!/bin/sh\necho hi\n"}
     zip_path, size, sha = make_package(folder, manifest, files)
     entry = BuildEntry(
         name=manifest["name"],
@@ -105,11 +146,12 @@ def make_entry(folder: Path, manifest_overrides: dict | None = None, files: dict
         build=manifest["build"],
         kind=manifest["kind"],
         needs_root=manifest.get("needs_root", False),
-        commands=[c["name"] for c in manifest["command"]],
+        commands=[c["name"] for c in manifest.get("command", [])],
         file=zip_path.name,
         url="",
         size=size,
         sha256=sha,
+        requires=list(manifest.get("requires", [])),
     )
     return zip_path, entry
 
@@ -129,22 +171,28 @@ def write_index(folder: Path, entries: list) -> Path:
                 "licence": "MIT",
                 "upstream": "https://example.invalid/" + name,
                 "latest": f"{builds[-1].version}-{builds[-1].build}",
-                "build": [
-                    {
-                        "version": b.version,
-                        "build": b.build,
-                        "kind": b.kind,
-                        "needs_root": b.needs_root,
-                        "commands": b.commands,
-                        "file": b.file,
-                        "size": b.size,
-                        "sha256": b.sha256,
-                    }
-                    for b in builds
-                ],
+                "build": [_build_row(b) for b in builds],
             }
         )
+    # schema 2 only when an entry needs it, so an index of schema 1 packages stays schema 1
+    schema = 2 if any(e.kind == "runtime" or e.requires for e in entries) else 1
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "index.toml"
-    path.write_text(tomli_w.dumps({"schema": 1, "tool": rows}), encoding="utf-8")
+    path.write_text(tomli_w.dumps({"schema": schema, "tool": rows}), encoding="utf-8")
     return path
+
+
+def _build_row(b) -> dict:
+    row = {
+        "version": b.version,
+        "build": b.build,
+        "kind": b.kind,
+        "needs_root": b.needs_root,
+        "commands": b.commands,
+        "file": b.file,
+        "size": b.size,
+        "sha256": b.sha256,
+    }
+    if b.requires:
+        row["requires"] = list(b.requires)
+    return row

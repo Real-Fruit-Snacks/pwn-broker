@@ -10,7 +10,8 @@ from pathlib import Path
 
 from pwn_broker.filescan import sha256_file
 
-KINDS = ("kali", "upload", "both")
+KINDS = ("kali", "upload", "both", "runtime")
+SCHEMAS = (1, 2)
 COMMAND_TYPES = ("binary", "python-entry", "python-script")
 MANIFEST = "manifest.toml"
 
@@ -18,7 +19,9 @@ _CHUNK = 1024 * 1024
 _MANIFEST_LIMIT = 1024 * 1024
 MAX_MEMBERS = 10_000
 MAX_UNPACKED_BYTES = 1024**3
-_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+# a dot only between other characters, so a name is never ".", "..", hidden or ends with a dot
+_NAME = re.compile(r"[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*")
+_SERIES = re.compile(r"[0-9]+\.[0-9]+")
 _COMMAND_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _TOP_FILES = (MANIFEST, "LICENSE", "wheels.lock")
 # a launcher by one of these names, first on PATH, would stand in for something the user,
@@ -59,9 +62,16 @@ class Upload:
 
 @dataclass
 class PythonSpec:
-    versions: list[str]
+    versions: list[str]  # empty in schema 2, where the runtime's series decides
     lock: str
     wheels: str
+
+
+@dataclass
+class RuntimeSpec:
+    archive: str
+    python: str
+    series: str
 
 
 @dataclass
@@ -81,10 +91,13 @@ class Manifest:
     uploads: list[Upload]
     python: PythonSpec | None
     home: list[str]
+    schema: int = 1
+    requires: list[str] = field(default_factory=list)
+    runtime: RuntimeSpec | None = None
 
 
 def valid_tool_name(name: str) -> bool:
-    return _NAME.fullmatch(name) is not None
+    return isinstance(name, str) and _NAME.fullmatch(name) is not None
 
 
 def valid_command_name(name: str) -> bool:
@@ -201,7 +214,7 @@ def _upload(row: dict, index: int) -> Upload:
     return Upload(path, as_name, note)
 
 
-def _python(data: dict, needed: bool) -> PythonSpec | None:
+def _python(data: dict, needed: bool, schema: int) -> PythonSpec | None:
     table = data.get("python")
     if table is None:
         if needed:
@@ -211,9 +224,16 @@ def _python(data: dict, needed: bool) -> PythonSpec | None:
         raise ToolError("python: a [python] table is only for packages with a Python command")
     if not isinstance(table, dict):
         raise ToolError("python: must be a table")
-    versions = _strings(table, "versions", "python.versions")
-    if not versions or not all(versions):
-        raise ToolError("python.versions: needs at least one version")
+    if schema == 1:
+        versions = _strings(table, "versions", "python.versions")
+        if not versions or not all(versions):
+            raise ToolError("python.versions: needs at least one version")
+    elif "versions" in table:
+        raise ToolError(
+            "python.versions: schema 2 has no versions; the wheels are for the required runtime"
+        )
+    else:
+        versions = []
     spec = PythonSpec(versions, "", "")
     for key in ("lock", "wheels"):
         value = _relative(_text(table, key, f"python.{key}"), f"python.{key}")
@@ -223,15 +243,62 @@ def _python(data: dict, needed: bool) -> PythonSpec | None:
     return spec
 
 
+def _requires(data: dict, name: str, schema: int) -> list[str]:
+    if "requires" not in data:
+        return []
+    if schema == 1:
+        raise ToolError("requires: a schema 1 package cannot require anything; it needs schema 2")
+    requires = _strings(data, "requires", "requires")
+    seen = set()
+    for wanted in requires:
+        if not valid_tool_name(wanted):
+            raise ToolError(f"requires: {wanted!r} is not a valid package name")
+        if wanted == name:
+            raise ToolError(f"requires: {name} cannot require itself")
+        if wanted in seen:
+            raise ToolError(f"requires: {wanted!r} appears more than once")
+        seen.add(wanted)
+    return requires
+
+
+def _runtime(data: dict) -> RuntimeSpec:
+    # a runtime is nothing but its archive: no commands, uploads, home data or wheels
+    for key, table in (
+        ("command", "[[command]]"),
+        ("upload", "[[upload]]"),
+        ("data", "[data]"),
+        ("python", "[python]"),
+    ):
+        if key in data:
+            raise ToolError(f"{key}: a runtime has no {table}")
+    table = data.get("runtime")
+    if table is None:
+        raise ToolError("runtime: a runtime package needs a [runtime] table")
+    if not isinstance(table, dict):
+        raise ToolError("runtime: must be a table")
+    archive = _relative(
+        _text(table, "archive", "runtime.archive"), "runtime.archive", under="files"
+    )
+    python = _relative(_text(table, "python", "runtime.python"), "runtime.python")
+    series = _text(table, "series", "runtime.series")
+    if not _SERIES.fullmatch(series):
+        raise ToolError(f"runtime.series: {series!r} must be a Python series such as 3.13")
+    return RuntimeSpec(archive, python, series)
+
+
 def parse_manifest(data: dict) -> Manifest:
     if "schema" not in data:
         # an empty or cut-short file, not one from a newer version
         raise ToolError("the manifest cannot be read (it has no schema)")
-    if data.get("schema") != 1 or isinstance(data.get("schema"), bool):
+    schema = data.get("schema")
+    if isinstance(schema, bool) or schema not in SCHEMAS:
         raise ToolError("schema: this package needs a newer pwn-broker; upgrade pwn-broker")
     name = _text(data, "name", "name")
-    if not _NAME.fullmatch(name):
-        raise ToolError(f"name: {name!r} must be lower-case letters, digits and hyphens")
+    if not valid_tool_name(name):
+        raise ToolError(
+            f"name: {name!r} must be lower-case letters, digits, hyphens and dots, "
+            "starting with a letter or digit, with no two dots together and none at the end"
+        )
     version = _text(data, "version", "version")
     if re.search(r"[/\\\s]", version):
         raise ToolError(f"version: {version!r} must not contain a slash, backslash or space")
@@ -244,6 +311,14 @@ def parse_manifest(data: dict) -> Manifest:
     needs_root = data.get("needs_root", False)
     if not isinstance(needs_root, bool):
         raise ToolError("needs_root: must be true or false")
+    if kind == "runtime" and schema == 1:
+        raise ToolError("kind: a runtime needs schema 2")
+    requires = _requires(data, name, schema)
+    runtime = None
+    if kind == "runtime":
+        if requires:
+            raise ToolError("requires: a runtime requires nothing")
+        runtime = _runtime(data)
 
     commands = [_command(r, i) for i, r in enumerate(_table_list(data, "command"))]
     uploads = [_upload(r, i) for i, r in enumerate(_table_list(data, "upload"))]
@@ -261,7 +336,19 @@ def parse_manifest(data: dict) -> Manifest:
     if kind == "kali" and uploads:
         raise ToolError("upload: a kali package has no uploads")
 
-    python = _python(data, any(c.type != "binary" for c in commands))
+    python = _python(data, any(c.type != "binary" for c in commands), schema)
+    if schema == 2 and kind != "runtime":
+        # schema 2 is only for what schema 1 cannot say, so published builds stay as they are
+        if python is not None and len(requires) != 1:
+            raise ToolError(
+                f"requires: a Python tool requires exactly one runtime; this one names {len(requires)}"
+            )
+        if python is None and requires:
+            raise ToolError("requires: a tool that is not Python requires nothing")
+        if not requires:
+            raise ToolError(
+                "schema: a package that is not a runtime and requires nothing must be schema 1"
+            )
 
     home_table = data.get("data", {})
     if not isinstance(home_table, dict):
@@ -290,6 +377,9 @@ def parse_manifest(data: dict) -> Manifest:
         uploads=uploads,
         python=python,
         home=home,
+        schema=schema,
+        requires=requires,
+        runtime=runtime,
     )
 
 
@@ -410,6 +500,10 @@ def _check_named_files(manifest: Manifest, seen: dict[str, zipfile.ZipInfo]) -> 
     for name in named:
         if not _is_file(seen, name):
             raise ToolError(f"{name}: named in the manifest but missing from the package")
+    if manifest.runtime is not None and not _is_file(seen, manifest.runtime.archive):
+        raise ToolError(
+            f"{manifest.runtime.archive}: the runtime's archive is missing from the package"
+        )
     if manifest.python is not None:
         if not _is_file(seen, manifest.python.lock):
             raise ToolError(f"{manifest.python.lock}: the lock file is missing from the package")

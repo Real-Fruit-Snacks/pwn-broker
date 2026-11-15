@@ -10,12 +10,22 @@ class Flag:
 
 
 @dataclass
+class RuntimeRecord:
+    # a note of the runtime a tool ran on, not a pin: any build of its series serves the tool
+    name: str
+    version: str
+    build: int
+    sha256: str
+
+
+@dataclass
 class ToolRecord:
     name: str
     version: str
     build: int
     sha256: str
     installed: datetime
+    runtime: RuntimeRecord | None = None
 
 
 @dataclass

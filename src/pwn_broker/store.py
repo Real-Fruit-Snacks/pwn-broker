@@ -9,7 +9,16 @@ from pathlib import Path
 import tomli_w
 
 from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
-from pwn_broker.model import Box, Cred, FileRecord, Flag, Target, ToolRecord, VpnRecord
+from pwn_broker.model import (
+    Box,
+    Cred,
+    FileRecord,
+    Flag,
+    RuntimeRecord,
+    Target,
+    ToolRecord,
+    VpnRecord,
+)
 
 SCHEMA = 1
 
@@ -88,7 +97,8 @@ def save_box(box: Box) -> None:
         "flags": {k: {"value": f.value, "at": f.at} for k, f in box.flags.items()},
     }
     if box.tools:
-        data["tools"] = [asdict(t) for t in box.tools]
+        # a tool with no runtime is written as before this record existed
+        data["tools"] = [_without_none(asdict(t)) for t in box.tools]
     if box.hosts:
         data["hosts"] = list(box.hosts)
     if box.vpn:
@@ -98,13 +108,28 @@ def save_box(box: Box) -> None:
     write_toml(box.path / "box.toml", data)
 
 
-def _tool(row: dict) -> ToolRecord:
+def _checked(row: dict, kinds: dict, label: str) -> dict:
     # tomllib gives bool for true/false and int for numbers; a bool is not a build number
-    kinds = {"name": str, "version": str, "build": int, "sha256": str, "installed": datetime}
     for key, kind in kinds.items():
         if not isinstance(row[key], kind) or (kind is int and isinstance(row[key], bool)):
-            raise TypeError(f"tools.{key} has the wrong type")
-    return ToolRecord(**{key: row[key] for key in kinds})
+            raise TypeError(f"{label}.{key} has the wrong type")
+    return {key: row[key] for key in kinds}
+
+
+def _runtime(value) -> RuntimeRecord:
+    if not isinstance(value, dict):
+        raise TypeError("tools.runtime must be a table")
+    kinds = {"name": str, "version": str, "build": int, "sha256": str}
+    return RuntimeRecord(**_checked(value, kinds, "tools.runtime"))
+
+
+def _tool(row: dict) -> ToolRecord:
+    kinds = {"name": str, "version": str, "build": int, "sha256": str, "installed": datetime}
+    record = ToolRecord(**_checked(row, kinds, "tools"))
+    if "runtime" in row:
+        # absent in boxes written before runtimes existed
+        record.runtime = _runtime(row["runtime"])
+    return record
 
 
 def _vpn(row: dict) -> VpnRecord:

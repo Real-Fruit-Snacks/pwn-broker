@@ -5,6 +5,7 @@ import io
 import os
 import threading
 import time
+import tomllib
 import urllib.request
 import urllib.response
 from dataclasses import replace
@@ -17,6 +18,7 @@ from helpers import NOW
 from pwn_broker import toolindex
 from pwn_broker.config import DEFAULT_TOOLS_INDEX, Settings
 from pwn_broker.toolpkg import ToolError
+from toolkit import make_entry, write_index
 
 HASH = "a" * 64
 
@@ -130,8 +132,8 @@ def test_parse_defaults_for_tags_commands_url():
     assert parsed.builds[0].url == ""
 
 
-@pytest.mark.parametrize("schema", [2, 0, "1", True, None])
-def test_parse_schema_must_be_one(schema):
+@pytest.mark.parametrize("schema", [3, 0, "1", True, None])
+def test_parse_unknown_schema_says_to_upgrade(schema):
     data = index_data()
     data["schema"] = schema
     with pytest.raises(ToolError, match="upgrade pwn-broker"):
@@ -338,7 +340,7 @@ def test_bad_download_never_replaces_good_cache(paths):
 
 
 def test_bad_download_wrong_schema_is_refused_without_cache(paths):
-    bad = tomli_w.dumps({"schema": 2, "tool": []}).encode()
+    bad = tomli_w.dumps({"schema": 3, "tool": []}).encode()
     with pytest.raises(ToolError, match="upgrade pwn-broker"):
         toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(bad))
     assert not (paths.cache / "index.toml").exists()
@@ -971,16 +973,192 @@ def test_an_http_error_without_a_cache_says_where(paths):
     assert_says_where(err, URL)
 
 
-@pytest.mark.parametrize("body", [b"garbage = [", b"tool = []\n", b"schema = 2\n"])
+@pytest.mark.parametrize("body", [b"garbage = [", b"tool = []\n", b"schema = 3\n"])
 def test_a_download_that_does_not_parse_says_where(paths, body):
     with pytest.raises(ToolError) as err:
         toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(body))
     assert_says_where(err, URL)
 
 
-@pytest.mark.parametrize("body", ["garbage = [", "tool = []\n", "schema = 2\n"])
+@pytest.mark.parametrize("body", ["garbage = [", "tool = []\n", "schema = 3\n"])
 def test_a_folder_index_that_does_not_parse_says_where(paths, tmp_path, body):
     (tmp_path / "index.toml").write_text(body, encoding="utf-8")
     with pytest.raises(ToolError) as err:
         toolindex.load_index(paths, Settings(tools_index=str(tmp_path)), now=NOW)
     assert_says_where(err, str(tmp_path / "index.toml"))
+
+
+# ---- schema 2: runtimes and requires
+
+
+def runtime_build(version="3.13.18", build=1, **over):
+    row = build_row(
+        version,
+        build,
+        kind="runtime",
+        commands=[],
+        file=f"python-3.13-{version}-{build}.zip",
+        url=f"https://example.invalid/python-3.13-{version}-{build}.zip",
+    )
+    row.update(over)
+    return row
+
+
+def runtime_tool(builds=None, **over):
+    row = tool_row(
+        builds=builds if builds is not None else [runtime_build()],
+        name="python-3.13",
+        description="CPython 3.13, for the tools that require it",
+        tags=["python"],
+        licence="PSF-2.0",
+        latest="3.13.18-1",
+    )
+    row.update(over)
+    return row
+
+
+def python_tool(**over):
+    row = tool_row(
+        builds=[build_row("5.1.0", 3, requires=["python-3.13"], file="certipy-5.1.0-3.zip")],
+        name="certipy",
+        description="Active Directory certificate abuse",
+        tags=["ad"],
+        latest="5.1.0-3",
+    )
+    row.update(over)
+    return row
+
+
+def schema2(*tools):
+    return {"schema": 2, "tool": list(tools)}
+
+
+def test_schema_1_index_parses_as_before():
+    tool = toolindex.parse_index(index_data()).tools[0]
+    assert tool.builds[0].requires == []
+    assert not toolindex.is_runtime(tool)
+
+
+def test_schema_1_index_refuses_requires():
+    data = index_data(tool_row(builds=[build_row(requires=["python-3.13"])]))
+    with pytest.raises(ToolError) as err:
+        toolindex.parse_index(data)
+    assert "tool kerbrute.build[0].requires: a schema 1 index has no requires" in str(err.value)
+
+
+def test_schema_1_index_refuses_kind_runtime():
+    with pytest.raises(ToolError) as err:
+        toolindex.parse_index(index_data(runtime_tool()))
+    assert "tool python-3.13.build[0].kind: runtime needs a schema 2 index" in str(err.value)
+
+
+def test_schema_2_index_parses_runtimes_and_requires():
+    index = toolindex.parse_index(schema2(runtime_tool(), python_tool(), tool_row()))
+    runtime, certipy, kerbrute = index.tools
+    assert runtime.name == "python-3.13" and runtime.builds[0].kind == "runtime"
+    assert runtime.builds[0].file == "python-3.13-3.13.18-1.zip"
+    assert certipy.builds[0].requires == ["python-3.13"]
+    assert kerbrute.builds[0].requires == []
+    assert toolindex.is_runtime(runtime)
+    assert not toolindex.is_runtime(certipy) and not toolindex.is_runtime(kerbrute)
+
+
+def test_is_runtime_reads_the_latest_build():
+    tool = toolindex.parse_index(
+        schema2(runtime_tool(builds=[runtime_build("3.13.17"), runtime_build("3.13.18")]))
+    ).tools[0]
+    assert toolindex.is_runtime(tool)
+
+
+def test_an_entry_may_not_mix_runtime_with_other_kinds():
+    mixed = runtime_tool(builds=[runtime_build(), build_row("3.13.19", 1)])
+    with pytest.raises(ToolError) as err:
+        toolindex.parse_index(schema2(mixed))
+    assert "tool python-3.13: its builds mix kind runtime with other kinds" in str(err.value)
+
+
+@pytest.mark.parametrize(
+    "requires, message",
+    [
+        ("python-3.13", "requires: must be a list of strings"),
+        ([1], "requires: must be a list of strings"),
+        (["Python"], "requires: 'Python' is not a valid package name"),
+        (["../x"], "requires: '../x' is not a valid package name"),
+        (["a..b"], "requires: 'a..b' is not a valid package name"),
+        (["python-3.13", "python-3.13"], "requires: 'python-3.13' appears more than once"),
+        (["certipy"], "requires: certipy cannot require itself"),
+    ],
+)
+def test_index_requires_rules(requires, message):
+    tool = python_tool(build=[build_row("5.1.0", 3, requires=requires)])
+    with pytest.raises(ToolError) as err:
+        toolindex.parse_index(schema2(tool))
+    assert message in str(err.value)
+
+
+def test_index_runtime_requires_nothing():
+    tool = runtime_tool(builds=[runtime_build(requires=["python-3.12"])])
+    with pytest.raises(ToolError) as err:
+        toolindex.parse_index(schema2(tool))
+    assert "requires: a runtime requires nothing" in str(err.value)
+
+
+@pytest.mark.parametrize("name", [".a", "a.", "a..b", "..", "Py-3.13"])
+def test_index_tool_names_follow_the_package_rule(name):
+    with pytest.raises(ToolError, match="name"):
+        toolindex.parse_index(schema2(tool_row(name=name)))
+
+
+def test_build_entry_requires_defaults_to_empty_for_positional_callers():
+    entry = toolindex.BuildEntry("k", "1", 1, "kali", False, [], "k-1-1.zip", "", 1, HASH)
+    assert entry.requires == []
+
+
+def runtimes_index():
+    return toolindex.parse_index(schema2(runtime_tool(), python_tool(), tool_row()))
+
+
+def test_find_runtime():
+    index = runtimes_index()
+    assert toolindex.find_runtime(index, "python-3.13").name == "python-3.13"
+    with pytest.raises(ToolError) as err:
+        toolindex.find_runtime(index, "python-3.12")
+    assert "python-3.12" in str(err.value) and "no runtime named" in str(err.value)
+    with pytest.raises(ToolError) as err:
+        toolindex.find_runtime(index, "certipy")
+    assert "certipy is not a runtime" in str(err.value)
+
+
+def test_search_leaves_runtimes_out():
+    index = runtimes_index()
+    names = lambda words: [t.name for t in toolindex.search(index, words)]  # noqa: E731
+    assert names([]) == ["certipy", "kerbrute"]
+    assert names(["python"]) == []
+    assert names(["cpython"]) == []
+
+
+def test_known_names_leave_runtimes_out(paths, tmp_path):
+    folder = tmp_path / "shop3"
+    folder.mkdir()
+    (folder / "index.toml").write_text(
+        tomli_w.dumps(schema2(runtime_tool(), python_tool(), tool_row())), encoding="utf-8"
+    )
+    settings = Settings(tools_index=str(folder))
+    assert toolindex.known_names(paths, settings) == ["certipy", "kerbrute"]
+
+
+def test_folder_index_written_by_the_toolkit_is_schema_2_only_when_needed(paths, tmp_path):
+    _, kerbrute = make_entry(tmp_path / "zips")
+    _, runtime = make_entry(tmp_path / "zips", {"kind": "runtime"})
+    _, certipy = make_entry(
+        tmp_path / "zips", {"name": "certipy", "requires": ["python-3.13"]}, files={}
+    )
+    plain = write_index(tmp_path / "one", [kerbrute])
+    assert tomllib.loads(plain.read_text(encoding="utf-8"))["schema"] == 1
+    both = write_index(tmp_path / "two", [kerbrute, runtime, certipy])
+    data = tomllib.loads(both.read_text(encoding="utf-8"))
+    assert data["schema"] == 2
+    index = toolindex.load_index(paths, Settings(tools_index=str(tmp_path / "two")), now=NOW)
+    assert [t.name for t in index.tools] == ["kerbrute", "python-3.13", "certipy"]
+    assert toolindex.find_runtime(index, "python-3.13").builds[0].file == runtime.file
+    assert toolindex.find_tool(index, "certipy").builds[0].requires == ["python-3.13"]

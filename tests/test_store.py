@@ -6,7 +6,7 @@ import pytest
 from helpers import NASTY, NOW, make_cred
 
 from pwn_broker import store
-from pwn_broker.model import FileRecord, Flag, Target, ToolRecord, VpnRecord
+from pwn_broker.model import FileRecord, Flag, RuntimeRecord, Target, ToolRecord, VpnRecord
 from pwn_broker.store import (
     StoreError,
     load_box,
@@ -242,6 +242,77 @@ def test_tool_entry_wrong_type(box, key, value):
     path = box.path / "box.toml"
     data = read_toml(path)
     data["tools"][0][key] = value
+    write_toml(path, data)
+    with pytest.raises(StoreError, match="box.toml"):
+        load_box(box.path)
+
+
+def _runtime(build=1):
+    return RuntimeRecord("python-3.13", "3.13.18", build, "cd" * 32)
+
+
+def test_tool_record_runtime_round_trip(box):
+    box.tools = [
+        ToolRecord("certipy", "5.1.0", 3, "ab" * 32, NOW, runtime=_runtime()),
+        _tool(),
+    ]
+    save_box(box)
+    data = read_toml(box.path / "box.toml")
+    # written inside the tool's own row, not as a list of its own
+    rows = data["tools"]
+    assert rows[0]["runtime"] == {
+        "name": "python-3.13", "version": "3.13.18", "build": 1, "sha256": "cd" * 32
+    }  # fmt: skip
+    assert "runtime" not in rows[1]
+    assert set(data) == {"schema", "id", "name", "platform", "os", "difficulty", "status",
+                         "started", "flags", "tools"}  # fmt: skip
+    got = load_box(box.path)
+    assert got.tools == box.tools
+    assert got.tools[0].runtime == _runtime() and got.tools[1].runtime is None
+    assert "tools" not in got.extra
+
+
+def test_tool_record_runtime_defaults_to_none():
+    assert _tool().runtime is None
+
+
+def test_a_box_written_before_runtimes_loads_unchanged(tmp_path):
+    folder = tmp_path / "old-box"
+    folder.mkdir()
+    old = (
+        'schema = 1\nid = "forest-1"\nname = "forest"\nplatform = "htb"\nos = "windows"\n'
+        'difficulty = "easy"\nstatus = "active"\nstarted = 2026-11-01T10:00:00\n\n[flags]\n\n'
+        '[[tools]]\nname = "certipy"\nversion = "5.1.0"\nbuild = 2\n'
+        f'sha256 = "{"ef" * 32}"\ninstalled = 2026-11-01T10:05:00\n'
+    )
+    (folder / "box.toml").write_text(old, encoding="utf-8")
+    box = load_box(folder)
+    assert box.tools == [ToolRecord("certipy", "5.1.0", 2, "ef" * 32, box.tools[0].installed)]
+    assert box.tools[0].runtime is None and box.extra == {}
+    save_box(box)
+    again = read_toml(folder / "box.toml")
+    assert "runtime" not in again["tools"][0]
+    assert load_box(folder) == box
+
+
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        "python-3.13",
+        {"name": "python-3.13", "version": "3.13.18", "build": "1", "sha256": "cd" * 32},
+        {"name": "python-3.13", "version": "3.13.18", "build": True, "sha256": "cd" * 32},
+        {"name": 3, "version": "3.13.18", "build": 1, "sha256": "cd" * 32},
+        {"name": "python-3.13", "version": 3.13, "build": 1, "sha256": "cd" * 32},
+        {"name": "python-3.13", "version": "3.13.18", "build": 1, "sha256": 5},
+        {"name": "python-3.13", "version": "3.13.18", "build": 1},
+    ],
+)
+def test_tool_record_runtime_wrong_type(box, runtime):
+    box.tools = [_tool()]
+    save_box(box)
+    path = box.path / "box.toml"
+    data = read_toml(path)
+    data["tools"][0]["runtime"] = runtime
     write_toml(path, data)
     with pytest.raises(StoreError, match="box.toml"):
         load_box(box.path)

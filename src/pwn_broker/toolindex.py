@@ -10,7 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -18,7 +18,14 @@ from pwn_broker import config
 from pwn_broker.config import Settings
 from pwn_broker.paths import AppPaths
 from pwn_broker.store import write_text
-from pwn_broker.toolpkg import KINDS, ToolError, build_id, verify_zip
+from pwn_broker.toolpkg import (
+    KINDS,
+    SCHEMAS,
+    ToolError,
+    build_id,
+    valid_tool_name,
+    verify_zip,
+)
 
 INDEX_FILE = "index.toml"
 STAMP_FILE = "index.fetched"
@@ -29,7 +36,6 @@ ZIP_TIMEOUT = 300.0
 MAX_INDEX_BYTES = 5 * 1024 * 1024
 _CHUNK = 64 * 1024
 
-_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 _SHA256 = re.compile(r"[0-9a-fA-F]{64}")
 
 
@@ -45,6 +51,7 @@ class BuildEntry:
     url: str
     size: int
     sha256: str
+    requires: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -99,7 +106,28 @@ def _plain_zip_name(name: object, label: str) -> str:
     return name
 
 
-def _build(tool: str, row: object, label: str) -> BuildEntry:
+def _requires(tool: str, row: dict, kind: str, schema: int, label: str) -> list[str]:
+    # the same rules as a manifest's requires; each name later becomes a folder name
+    if "requires" not in row:
+        return []
+    if schema == 1:
+        raise ToolError(f"{label}.requires: a schema 1 index has no requires")
+    requires = _strings(row, "requires", f"{label}.requires")
+    if requires and kind == "runtime":
+        raise ToolError(f"{label}.requires: a runtime requires nothing")
+    seen = set()
+    for wanted in requires:
+        if not valid_tool_name(wanted):
+            raise ToolError(f"{label}.requires: {wanted!r} is not a valid package name")
+        if wanted == tool:
+            raise ToolError(f"{label}.requires: {tool} cannot require itself")
+        if wanted in seen:
+            raise ToolError(f"{label}.requires: {wanted!r} appears more than once")
+        seen.add(wanted)
+    return requires
+
+
+def _build(tool: str, row: object, label: str, schema: int) -> BuildEntry:
     if not isinstance(row, dict):
         raise ToolError(f"{label}: must be a table")
     version = _text(row, "version", f"{label}.version")
@@ -111,6 +139,9 @@ def _build(tool: str, row: object, label: str) -> BuildEntry:
     kind = row.get("kind")
     if kind not in KINDS:
         raise ToolError(f"{label}.kind: must be one of {', '.join(KINDS)}")
+    if kind == "runtime" and schema == 1:
+        raise ToolError(f"{label}.kind: runtime needs a schema 2 index")
+    requires = _requires(tool, row, kind, schema, label)
     needs_root = row.get("needs_root", False)
     if not isinstance(needs_root, bool):
         raise ToolError(f"{label}.needs_root: must be true or false")
@@ -131,23 +162,29 @@ def _build(tool: str, row: object, label: str) -> BuildEntry:
         url=_optional_text(row, "url", f"{label}.url"),
         size=size,
         sha256=sha256.lower(),
+        requires=requires,
     )
 
 
-def _tool(row: object, index: int) -> ToolEntry:
+def _tool(row: object, index: int, schema: int) -> ToolEntry:
     label = f"tool[{index}]"
     if not isinstance(row, dict):
         raise ToolError(f"{label}: must be a table")
     name = _text(row, "name", f"{label}.name")
-    if not _NAME.fullmatch(name):
-        raise ToolError(f"{label}.name: {name!r} must be lower-case letters, digits and hyphens")
+    if not valid_tool_name(name):
+        raise ToolError(
+            f"{label}.name: {name!r} must be lower-case letters, digits, hyphens and dots, "
+            "starting with a letter or digit, with no two dots together and none at the end"
+        )
     label = f"tool {name}"
     rows = row.get("build", [])
     if not isinstance(rows, list):
         raise ToolError(f"{label}.build: must be a list of tables")
     if not rows:
         raise ToolError(f"{label}: has no builds")
-    builds = [_build(name, r, f"{label}.build[{i}]") for i, r in enumerate(rows)]
+    builds = [_build(name, r, f"{label}.build[{i}]", schema) for i, r in enumerate(rows)]
+    if len({b.kind == "runtime" for b in builds}) > 1:
+        raise ToolError(f"{label}: its builds mix kind runtime with other kinds")
     seen = set()
     for b in builds:
         bid = build_id(b.version, b.build)
@@ -173,12 +210,12 @@ def parse_index(data: dict) -> Index:
         # an empty or cut-short file, not one from a newer version
         raise ToolError("the index cannot be read (it has no schema)")
     schema = data.get("schema")
-    if schema != 1 or isinstance(schema, bool):
+    if isinstance(schema, bool) or schema not in SCHEMAS:
         raise ToolError("schema: this index needs a newer pwn-broker; upgrade pwn-broker")
     rows = data.get("tool", [])
     if not isinstance(rows, list):
         raise ToolError("tool: must be a list of tables")
-    tools = [_tool(r, i) for i, r in enumerate(rows)]
+    tools = [_tool(r, i, schema) for i, r in enumerate(rows)]
     names = set()
     for tool in tools:
         if tool.name in names:
@@ -410,7 +447,8 @@ def known_names(paths: AppPaths, settings: Settings) -> list[str]:
         if hit is not None and hit[0] == signature:
             return list(hit[1])
         try:
-            names = sorted(t.name for t in _parse_bytes(_read_capped(file)).tools)
+            index = _parse_bytes(_read_capped(file))
+            names = sorted(t.name for t in index.tools if not is_runtime(t))
         except (OSError, ToolError):
             names = []
         _NAMES[str(file)] = (signature, names)
@@ -447,10 +485,26 @@ def pick_build(tool: ToolEntry, wanted: str | None) -> BuildEntry:
     raise ToolError(f"{tool.name} has no version {wanted!r}; versions: {versions}")
 
 
+def is_runtime(tool: ToolEntry) -> bool:
+    return pick_build(tool, None).kind == "runtime"
+
+
+def find_runtime(index: Index, name: str) -> ToolEntry:
+    for tool in index.tools:
+        if tool.name == name:
+            if not is_runtime(tool):
+                raise ToolError(f"{name} is not a runtime")
+            return tool
+    raise ToolError(f"no runtime named {name!r} in the index")
+
+
 def search(index: Index, words: list[str]) -> list[ToolEntry]:
+    # runtimes come with the tools that need them, so they are never offered on their own
     wanted = [w.lower() for w in words]
     found = []
     for tool in index.tools:
+        if is_runtime(tool):
+            continue
         haystack = " ".join([tool.name, tool.description, *tool.tags]).lower()
         if all(w in haystack for w in wanted):
             found.append(tool)
