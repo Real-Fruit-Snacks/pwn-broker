@@ -2,6 +2,13 @@
 
 Keeps a box's targets, notes, creds and tools in order
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/panel-dark.svg">
+  <img alt="A pwn-broker session beside the box's folder. pwn-broker new creates target dc01 and box forest, and the folder 2026-11-14_htb_forest appears with box.toml, notes.md, creds.toml, lists/ and targets/dc01/; cred add at the forest/dc01 prompt saves a credential and svc-alfresco and s3rvice appear in the lists; finish writes 2026-11-14_htb_forest.finished.tar.gz to wrapped/" src="docs/assets/panel-light.svg" width="100%">
+</picture>
+
+<sub>A real session, without the questions each command asks. On the right, the box's folder as each step leaves it, with only the lists the credential fills; finish keeps the folder unless told to remove it.</sub>
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Real-Fruit-Snacks/pwn-broker/main/install.sh | sh
 ```
