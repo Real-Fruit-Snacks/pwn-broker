@@ -671,6 +671,17 @@ def test_a_gzip_stream_with_a_bad_crc_is_refused(tmp_path, monkeypatch):
     assert leftovers(tmp_path) == ["rt.tar.gz"]
 
 
+def test_a_header_tarfile_cannot_parse_is_refused(tmp_path, monkeypatch):
+    # tarfile raises a plain ValueError for a sparse map that is not numbers
+    bad = file("python/a", 1)
+    bad.pax_headers = {"GNU.sparse.map": "x,y"}
+    archive = make_tar(tmp_path / "rt.tar.gz", [bad])
+    forbid_writing(monkeypatch)
+    with pytest.raises(ToolError, match="incomplete or damaged"):
+        unpack(archive, tmp_path / "rt")
+    assert leftovers(tmp_path) == ["rt.tar.gz"]
+
+
 def test_a_whole_ustar_archive_unpacks(tmp_path):
     archive = write_gz(tmp_path / "rt.tar.gz", three_files())
     unpack(archive, tmp_path / "rt")

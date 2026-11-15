@@ -33,6 +33,8 @@ _HEADER_ALLOWANCE = 16 * 1024
 _CHUNK = 1024 * 1024
 _BLOCK = tarfile.BLOCKSIZE
 _READ_ERRORS = (tarfile.TarError, OSError, EOFError, zlib.error)
+# what tarfile raises, beyond its own errors, for a header it cannot parse
+_HEADER_ERRORS = (*_READ_ERRORS, ValueError, UnicodeError, OverflowError)
 
 
 def _shown(text: str) -> str:
@@ -338,12 +340,12 @@ def unpack(archive: Path, dest: Path) -> None:
             damaged = f"cannot unpack {archive.name}: the archive is incomplete or damaged"
             try:
                 tar = tarfile.open(fileobj=reader, mode="r:")
-            except _READ_ERRORS as exc:
+            except _HEADER_ERRORS as exc:
                 raise ToolError(f"{damaged} ({exc})") from exc
             with tar:
                 try:
                     seen = _read_all(tar, reader)
-                except _READ_ERRORS as exc:
+                except _HEADER_ERRORS as exc:
                     raise ToolError(f"{damaged} ({exc})") from exc
                 try:
                     tmp = Path(
