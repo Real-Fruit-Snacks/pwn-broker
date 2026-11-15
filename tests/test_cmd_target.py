@@ -1,13 +1,14 @@
 import pytest
 
-from helpers import NOW
+from helpers import NOW, make_cred
 from pwn_broker import note
 from pwn_broker import shell  # noqa: F401  (fills the command registry)
 from pwn_broker.boxes import add_target
 from pwn_broker.console import FakeConsole
 from pwn_broker.questions import TargetAnswers, ask_target
+from pwn_broker.session import refresh
 from pwn_broker.shell.commands import dispatch
-from pwn_broker.store import load_box, load_targets
+from pwn_broker.store import load_box, load_creds, load_targets
 
 
 def _fails(console):
@@ -160,6 +161,40 @@ def test_target_rename_changes_note_heading(session):
     assert (session.box.path / "targets" / "dc").is_dir()
     assert session.console.asked == ["new name"]
     assert ("ok", "target dc01 is now dc") in session.console.lines
+
+
+def _working_cred(session):
+    session.creds.append(make_cred(username="svc", secret="pw", found_on="dc01", works_on=["dc01"]))
+    refresh(session)
+    return session.box.path / "lists"
+
+
+def test_target_rename_carries_creds_and_works_lists(session):
+    lists = _working_cred(session)
+    ips = (lists / "ips.txt").read_bytes()
+    assert (lists / "works-dc01-userpass.txt").read_text(encoding="utf-8") == "svc:pw\n"
+    session.console = FakeConsole(["dc"])
+    dispatch(session, "target rename dc01")
+    assert ("ok", "target dc01 is now dc") in session.console.lines
+    [saved] = load_creds(session.box)
+    assert (saved.found_on, saved.works_on) == ("dc", ["dc"])
+    assert (session.creds[0].found_on, session.creds[0].works_on) == ("dc", ["dc"])
+    assert (lists / "works-dc-userpass.txt").read_text(encoding="utf-8") == "svc:pw\n"
+    assert not (lists / "works-dc01-userpass.txt").exists()
+    assert (lists / "ips.txt").read_bytes() == ips
+
+
+def test_target_rename_stops_before_moving_on_a_corrupt_files_toml(session):
+    _working_cred(session)
+    (session.box.path / "files.toml").write_text("= broken", encoding="utf-8")
+    session.console = FakeConsole(["dc"])
+    dispatch(session, "target rename dc01")
+    assert len(_fails(session.console)) == 1 and "files.toml" in _fails(session.console)[0]
+    assert (session.box.path / "targets" / "dc01").is_dir()
+    assert not (session.box.path / "targets" / "dc").exists()
+    assert [t.name for t in session.targets] == ["dc01"] and session.creds[0].found_on == "dc01"
+    assert load_targets(session.box)[0].name == "dc01"
+    assert load_creds(session.box)[0].found_on == "dc01"
 
 
 def test_target_remove_asks_and_refuses_non_empty(session):

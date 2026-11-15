@@ -118,7 +118,7 @@ def target_rename(session: Session, args: list[str]) -> None:
         unchanged = False
     if unchanged:
         raise ValueError(f"{old} is already its name")
-    boxes.rename_target(session.box, session.targets, old, new)
+    boxes.rename_target(session.box, session.targets, old, new, creds=session.creds)
     if session.current is target:
         set_current(session, target)
     _update_note(session, lambda text: note.rename_heading(text, old, target.name))

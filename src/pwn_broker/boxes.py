@@ -7,7 +7,7 @@ from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
-from pwn_broker.model import Box, Target
+from pwn_broker.model import Box, Cred, Target
 from pwn_broker.paths import AppPaths, box_folder_name, safe_name
 from pwn_broker.store import (
     SCHEMA,
@@ -158,7 +158,11 @@ def edit_target(
     return target
 
 
-def rename_target(box: Box, targets: list[Target], old: str, new: str) -> Target:
+def rename_target(
+    box: Box, targets: list[Target], old: str, new: str, *, creds: list[Cred] | None = None
+) -> Target:
+    # `creds`, when given, is the caller's in-memory list: it is updated in place and saved, so a
+    # later save of that list cannot put the old name back
     target = find_target(targets, old)
     new = _safe_target_name(new)
     if new == target.name:
@@ -167,6 +171,12 @@ def rename_target(box: Box, targets: list[Target], old: str, new: str) -> Target
         raise BoxError(f"a target named {new} already exists")
     old = target.name
     base = box.path / "targets"
+    if os.path.lexists(base / new):
+        raise BoxError(f"{base / new} already exists and is not a target; move it or choose another name")
+    # read everything that can fail to load before anything is moved
+    if creds is None:
+        creds = load_creds(box)
+    records = load_files(box)
     (base / old).rename(base / new)
     target.name = new
     save_target(box, target)
@@ -175,7 +185,6 @@ def rename_target(box: Box, targets: list[Target], old: str, new: str) -> Target
         box.last_target = new
         save_box(box)
 
-    creds = load_creds(box)
     changed = False
     for cred in creds:
         if cred.found_on == old:
@@ -188,7 +197,6 @@ def rename_target(box: Box, targets: list[Target], old: str, new: str) -> Target
         save_creds(box, creds)
 
     prefix = f"targets/{old}/"
-    records = load_files(box)
     changed = False
     for record in records:
         if record.target == old:

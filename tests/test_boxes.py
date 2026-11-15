@@ -23,6 +23,7 @@ from pwn_broker.boxes import (
 )
 from pwn_broker.model import FileRecord
 from pwn_broker.store import (
+    StoreError,
     load_box,
     load_creds,
     load_files,
@@ -176,6 +177,30 @@ def test_rename_target_refuses_existing_name(box, dc01):
     with pytest.raises(BoxError):
         rename_target(box, [dc01, web], "dc01", "web")
     assert (box.path / "targets/dc01").is_dir()
+
+
+def test_rename_target_updates_the_given_creds_list(box, dc01):
+    save_creds(box, [make_cred(found_on="other", works_on=[])])
+    creds = [make_cred(found_on="dc01", works_on=["web", "dc01"])]
+    rename_target(box, [dc01], "dc01", "dc", creds=creds)
+    assert (creds[0].found_on, creds[0].works_on) == ("dc", ["web", "dc"])
+    assert load_creds(box) == creds
+
+
+def test_rename_target_refuses_a_folder_already_on_disk(box, dc01):
+    (box.path / "targets/dc").mkdir()
+    with pytest.raises(BoxError, match="dc"):
+        rename_target(box, [dc01], "dc01", "dc")
+    assert (box.path / "targets/dc01").is_dir() and dc01.name == "dc01"
+
+
+@pytest.mark.parametrize("broken", ["creds.toml", "files.toml"])
+def test_rename_target_stops_before_moving_on_corrupt_metadata(box, dc01, broken):
+    (box.path / broken).write_text("= broken", encoding="utf-8")
+    with pytest.raises(StoreError, match=broken):
+        rename_target(box, [dc01], "dc01", "dc")
+    assert (box.path / "targets/dc01").is_dir() and not (box.path / "targets/dc").exists()
+    assert dc01.name == "dc01" and load_targets(box)[0].name == "dc01"
 
 
 def test_remove_empty_target(box, dc01):
