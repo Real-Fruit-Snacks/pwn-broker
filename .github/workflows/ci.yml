@@ -122,6 +122,34 @@ jobs:
           sh install.sh --from . --no-asciinema
           test "$(grep -c '# pwn-broker' "$HOME/.zshrc")" = 1
 
+  kali:
+    # One whole box in the official Kali image, as root, with the real programs: the installer,
+    # /etc/hosts, a ping, the pinned asciinema under Kali's zsh settings, OpenVPN bringing up
+    # tun0, and the note window under a virtual display; the unit suite runs there too. Not a
+    # container job, because the tunnel module is loaded on the host first. --init gives the
+    # container a PID 1 that reaps orphaned processes, as a real system's does, so a stopped
+    # daemon does not linger as a zombie. The evidence folder is uploaded whatever the result.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tunnel module
+        run: |
+          sudo modprobe tun || echo "modprobe tun failed"
+          if [ -e /dev/net/tun ]; then echo "/dev/net/tun exists"; else echo "/dev/net/tun is missing"; fi
+      - name: The cycle in Kali
+        run: |
+          mkdir -p "$RUNNER_TEMP/kali-evidence"
+          docker run --rm --init --hostname kali --cap-add NET_ADMIN --device /dev/net/tun \
+            -v "$PWD:/src:ro" -v "$RUNNER_TEMP/kali-evidence:/evidence" \
+            kalilinux/kali-rolling sh /src/.github/scripts/kali-cycle.sh
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kali-evidence
+          path: ${{ runner.temp }}/kali-evidence
+
   art:
     # The README panel is generated; fail if docs/assets/panel-*.svg no longer match docs/art/make-panel.py.
     name: README panel
