@@ -68,14 +68,17 @@ These would make it a failure even if it works.
 | Prompt and notes sharing the screen | tmux split · second terminal window · prompt inside vim | Second window | I do not work in tmux |
 | Metadata store | Plain TOML files · SQLite | TOML | Readable and greppable without the app, and it survives inside a tar |
 | App and tools | One repo · two repos | Two | Tool releases would bury the app's own releases, and the app should not share the tools repo's fate |
-| Tool releases | One release holding every tool · one release per tool version | Per tool version, plus an index file | A tool can be updated alone and an old version can be pinned. GitHub allows 1,000 files per release and states no limit on the number of releases |
+| Tool releases | One release holding every tool · one release per tool version | Per tool version, plus an index | A tool can be updated alone and an old version can be pinned. GitHub allows 1,000 files per release and states no limit on the number of releases |
+| Where the index lives | A file committed to the repo · a file published by CI · a location set in settings | Published by CI, with the location settable | CI builds the packages, so only CI knows their checksums, and nothing but me commits to the repo. A settable location lets a folder on disk stand in for the published index, with no network |
+| How packages are made | Zips built by hand · recipes built by CI | Recipes | No binary is committed, every file traces to its upstream release, and an update is a change to a recipe |
 | Tool isolation | Own folder per tool with links in a shared `bin` · containers · install into the system | Own folder | Containers complicate the VPN, raw sockets and file access. Installing into the system is what this exists to avoid |
-| Python tools | Hand-written virtual environments · drive `uv` or `pipx` | Drive `uv` or `pipx` | Those already solve environment creation, launchers and clean removal |
+| Python tools | `uv` or `pipx` · Python's own `venv` and `pip` with the dependencies bundled | `venv` and `pip`, dependencies bundled | `uv tool install` does not check dependency hashes; `pip` does. `venv` and `pip` are already required by the installer, and bundled wheels install with no network |
+| `sudo <tool>` | A `sudo` settings file adding the app's folder to its search path · print the full path | Print the full path | Such a file replaces the whole search path, and a wrong value could break `sudo`. The full path always works |
 | Tool data in my home folder | Clean up at `finish` · redirect into the box from the first run | Redirect, with cleanup as the fallback | Nothing to delete afterwards, and two boxes cannot mix results |
 | Boxes open at once | One · several | One | `record` and tools run from any terminal and must know their box. Two boxes can share an IP |
 | Recorder | `script` · `asciinema` | `asciinema` | Better playback. The cost is one more thing to install on a fresh VM, which the installer covers |
 | Install location | `/opt/pwn-broker` · under my home folder | `/opt/pwn-broker` | The customary place for add-on software on Kali, and the same path for root and a normal user |
-| Build order | Organiser, recording, tools · tools earlier · all at once | Organiser, recording, tools | Usable on a real box after phase 1. Tools is the largest and riskiest part |
+| Build order | Organiser, recording, tools · tools earlier · all at once | Organiser, tools, recording | Usable on a real box after phase 1. Tools moved ahead of recording once the organiser was built, so tool installs could be tested while both repos are private |
 
 ## 5. Overall shape
 
@@ -87,7 +90,7 @@ Three phases. Each is usable when it is done.
 | 2. Recording and Kali changes | `record`, `replay`, `/etc/hosts` management, VPN check, ping on target add |
 | 3. Tools | The `pwn-shop` repo and its release workflow, the first six packages, the `tool` commands |
 
-Phase 1 is specified in full below. Phases 2 and 3 are specified to the level decided so far. Each gets its own detailed design before it is built.
+Phase 1 is built and specified in full below. Phase 3 is built next and is specified in full in section 8. Phase 2 is specified to the level decided so far and gets its own detailed design before it is built.
 
 ### On disk
 
@@ -187,7 +190,7 @@ ok    5 checks passed
 warn  display   no desktop session; open the note with: vim -u /opt/pwn-broker/vim/vimrc notes.md
 ```
 
-- Dependencies present: vim, a terminal emulator, tar. Later phases add `asciinema`, and `uv` or `pipx`.
+- Dependencies present: vim, a terminal emulator, tar. The tools phase adds a working `python3 -m venv`; the recording phase adds `asciinema`.
 - A desktop session exists.
 - The PATH line is present.
 - The home folders exist.
@@ -527,72 +530,269 @@ ok  recording this window for dc01 (forest)
 
 ## 8. Phase 3: tools
 
-Decided so far. A detailed design comes before it is built.
+Built before phase 2. It spans two repositories: `pwn-shop` holds the packages, and `pwn-broker` gains the `tool` commands that install them.
 
-### The repo
+The aim: `tool install <name>` puts a tool on the machine without touching Kali's own copy of anything, records that this box used it, and `finish` takes it off again.
 
-`pwn-shop` holds one release per tool version, tagged `<tool>-v<version>`, each with one zip. An index file in the repo lists every tool: its versions, download URLs, SHA-256, kind, description and tags. This is an exception to the SemVer-only release rule in `BRAND.md`, limited to this repo.
+### 8.1 What a package is
 
-Each zip holds the tool's files, the upstream licence, and a manifest: name, version, kind, what to link into `bin`, what it needs, the data it writes while running, and a few example commands. Packages are a manifest, not an install script. A script is allowed only for a tool that needs a build step, it is reviewed, and it writes only inside the tool's folder.
+One zip per build of a tool version, named `<name>-<version>-<build>.zip`, stored without compression:
 
-Any tool can be packaged, including ones Kali already ships, for when Kali's version is wrong or a specific version is needed.
+```
+manifest.toml         what the tool is and how to install it
+LICENSE               the upstream licence text
+files/                the tool's own files, exactly as upstream published them
+wheels/               Python tools only: every dependency, as wheels
+wheels.lock           Python tools only: each bundled wheel pinned with its SHA-256
+```
 
-### Commands
+A package holds no install script. Nothing in it is executed while it is installed, apart from `pip` installing the bundled wheels, and wheels run no code on install.
+
+`version` is upstream's. `build` is mine: it starts at 1 and goes up each time I repackage the same upstream version, for example to re-pin a dependency. A published build is never changed or replaced.
+
+`manifest.toml`:
+
+```toml
+schema = 1
+name = "ligolo-ng"
+version = "0.9.2"
+build = 1
+kind = "both"                      # kali, upload or both
+description = "Tunnelling and pivoting into internal networks"
+tags = ["pivoting", "tunnel", "linux", "windows"]
+upstream = "https://github.com/nicocha30/ligolo-ng"
+licence = "GPL-3.0"
+arch = "x86_64"
+needs_root = true
+examples = ["ligolo-proxy -selfcert", "agent -connect {lhost}:11601 -ignore-cert"]
+
+[[command]]                        # a command on PATH; kinds kali and both
+name = "ligolo-proxy"
+type = "binary"                    # binary, python-entry or python-script
+path = "files/proxy"
+
+[[upload]]                         # a file meant for the target; kinds upload and both
+path = "files/agent"
+as = "agent"
+note = "Linux x86_64"
+
+[[upload]]
+path = "files/agent.exe"
+as = "agent.exe"
+note = "Windows x86_64"
+
+[data]                             # where the tool keeps state of its own
+home = [".ligolo-proxy"]           # paths under the home folder it writes to
+```
+
+Every command in `/opt/pwn-broker/bin` is a small launcher script, never a bare link. What it runs depends on the type:
+
+| Type | The launcher runs |
+|---|---|
+| `binary` | The file named by `path` |
+| `python-entry` | The console script named by `entry`, inside the tool's own virtual environment |
+| `python-script` | The file named by `script`, with the environment's Python |
+
+A Python tool also carries:
+
+```toml
+[python]
+versions = ["3.12", "3.13"]        # the Python versions the bundled wheels cover
+lock = "wheels.lock"
+wheels = "wheels"
+```
+
+A command may carry `env` (a table of environment variables) and `args` (arguments put before the user's own). In both, `{data}` stands for the open box's `tooldata/<tool>/` folder.
+
+In `examples`, `{ip}`, `{hostname}` and `{domain}` are filled from the current target and `{lhost}` from the VPN address when one is known. A placeholder with no value is shown as `<ip>`, `<hostname>` and so on.
+
+The app refuses a manifest or an index whose `schema` it does not know, and says to upgrade pwn-broker. A change to either format ships in the app first and in packages afterwards.
+
+### 8.2 The pwn-shop repository
+
+```
+recipes/<tool>/recipe.toml         version, build, and where upstream publishes each file, with size and SHA-256
+recipes/<tool>/manifest.toml       the manifest that goes into the package
+recipes/<tool>/requirements.in     Python tools: the tool and its direct dependencies
+recipes/<tool>/requirements.lock   Python tools: every dependency pinned, with the SHA-256 of each upstream file
+build.py                           builds packages and an index from the recipes
+fetch.sh                           downloads the published index and zips into a folder
+dist/                              build output, not committed
+```
+
+No tool binary is ever committed. A recipe names the exact upstream file:
+
+```toml
+version = "1.0.3"
+build = 1
+
+[[source]]
+url = "https://github.com/ropnop/kerbrute/releases/download/v1.0.3/kerbrute_linux_amd64"
+size = 8286607
+sha256 = "..."
+to = "files/kerbrute_linux_amd64"
+```
+
+- A source may be a bare file, or one member taken out of a `tar.gz` or `zip` (`member = "proxy"`).
+- A tool with no releases is pinned to a full commit hash, and its files are fetched from that commit.
+- `build.py` downloads each source, refuses it if the size or SHA-256 differs, lays the files out, and writes the zip.
+
+**Python dependencies are pinned in the repository, not resolved by CI.** `requirements.lock` lists every dependency at one version with the SHA-256 of each upstream file, wheels and source archives alike, for Python 3.12 and 3.13 on x86_64 Linux. I produce it with `build.py lock <tool>` and commit it. A build only downloads what the lock names and checks each hash. Where upstream publishes only a source archive, the build makes a wheel from that pinned archive. The package's own `wheels.lock` is then written from the wheels that went into it.
+
+`build.py` also writes `dist/index.toml` describing everything it built. That folder is what `tools_index` points at when testing without a network.
+
+**Releases.** One release per build, tagged `<tool>-v<version>-<build>`, holding three files: the zip, a `SHA256SUMS.txt`, and a card (`<name>-<version>-<build>.toml`) that repeats the manifest's descriptive fields with the zip's size and SHA-256. This is the exception to the SemVer-only release rule in `BRAND.md`, limited to this repository.
+
+**The index** is published as the single file of a standing release tagged `index`. CI rebuilds it from the cards of every published release and replaces it. Nothing is committed by CI. The repository must not have GitHub's immutable releases turned on, or that file could not be replaced.
+
+**CI**, on Ubuntu:
+
+1. For each recipe whose build is already published: download the published zip. For each that is not: build it.
+2. Check each package: the manifest's schema, every listed file present, the zip's layout.
+3. Install each one with `pwn-broker`'s own code into a temporary folder, and run each command once to show it starts. A published build is tested from the published bytes, so CI and a user never see different files under one tag.
+4. On `main` only: publish a release for each build that has none, then rebuild the index and replace the published one.
+
+A recipe that changes without its `build` going up fails CI, because the published build cannot be replaced.
+
+CI tests against `pwn-broker`'s `main`. While both repositories are private, it reads `pwn-broker` through a read-only deploy key.
+
+**Withdrawing a build** is deleting its release. The next index leaves it out.
+
+### 8.3 The index
+
+```toml
+schema = 1
+
+[[tool]]
+name = "kerbrute"
+description = "Kerberos user enumeration and password spraying"
+tags = ["ad", "kerberos"]
+licence = "Apache-2.0"
+upstream = "https://github.com/ropnop/kerbrute"
+latest = "1.0.3-1"
+
+[[tool.build]]
+version = "1.0.3"
+build = 1
+kind = "kali"
+needs_root = false
+commands = ["kerbrute"]
+file = "kerbrute-1.0.3-1.zip"
+url = "https://github.com/Real-Fruit-Snacks/pwn-shop/releases/download/kerbrute-v1.0.3-1/kerbrute-1.0.3-1.zip"
+size = 8301234
+sha256 = "..."
+```
+
+- The tool-level fields come from its most recently published build, and `latest` names that build.
+- A new setting, `tools_index`, says where the index is: a URL, or a folder on disk. The default is the published index file.
+- In a folder, the index is `index.toml` and each zip is looked for by its `file` name in the same folder. The `url` is not used.
+- The app keeps a copy in `/opt/pwn-broker/cache/`. It refreshes the copy when it is more than a day old and the source answers within two seconds; otherwise it uses what it has. `tool refresh` fetches it now.
+- With no index and no cached copy, every `tool` command prints one `fail` line that says where it looked and how to set `tools_index`. It never shows an empty list as if there were no tools.
+
+**While `pwn-shop` is private**, its release files cannot be downloaded without signing in, so the folder form is the only route. A folder is filled in one of two ways: `python build.py` in a clone, which builds `dist/`; or `sh fetch.sh <folder>`, which uses a signed-in `gh` to download the published index and zips.
+
+### 8.4 Commands
 
 | Command | Does |
 |---|---|
-| `tool list` | Everything available, with installed tools and tools Kali already has marked. `--installed` narrows it |
-| `tool search <words>` | Matches name, description and tags. Several words must all match |
-| `tool info <name>` | What it does, how to run it, where it lives, available versions, and examples filled in with the current target |
-| `tool install <name>[@version]` | Downloads, checks the hash, installs, prints how to run it |
+| `tool list` | Every tool in the index: name, latest version, kind, whether it is installed for this box, whether Kali already has a command of that name. `--installed` shows only this box's |
+| `tool search <words>` | Tools whose name, description or tags match every word |
+| `tool info <name>` | What it does, its versions, licence and upstream, how to run it, where its files are, and its examples filled in |
+| `tool install <name>[@version]` | Fetches, checks and installs it, then prints how to run it. With `@version` it takes that version's highest build |
 | `tool remove <name>` | Asks first |
-| `tool cache clear` | Empties the download cache |
+| `tool refresh` | Fetches the index now |
+| `tool cache clear` | Empties the download cache, after asking |
 
-The index is cached, so `list`, `search` and `info` work offline.
+```
+forest/dc01 > tool install kerbrute
+ok    kerbrute 1.0.3 installed
+run   kerbrute              from any terminal
 
-### Install and isolation
+forest/dc01 > tool install ligolo-ng
+ok    ligolo-ng 0.9.2 installed
+run   ligolo-proxy          from any terminal
+      sudo /opt/pwn-broker/bin/ligolo-proxy
+files /opt/pwn-broker/upload/ligolo-ng/   agent  agent.exe
+```
 
-- Each tool installs into `/opt/pwn-broker/tools/<name>/<version>/`. Its command is linked into `/opt/pwn-broker/bin`, which is on PATH, so it runs from any terminal with no environment to enter.
-- Kinds: `kali` (runs on Kali), `upload` (files for the target, placed under `/opt/pwn-broker/upload/<name>/`), and `both`.
-- Python tools go through `uv` or `pipx` pointed at the tool's folder: a private environment that cannot see Kali's Python packages, with pinned and hash-checked dependencies.
-- Ruby tools keep their gems inside the tool's folder. Java tools get a launcher. Binaries are shipped prebuilt; nothing is compiled on Kali.
-- Nothing is ever installed into the system Python.
-- System packages from `apt` are asked about first and left in place afterwards.
-- If a command already exists on Kali, install says so. The installed version wins, and the message gives the path to Kali's copy. Kali's copy is never changed.
-- `sudo <tool>` must also find the installed version. One `sudo` settings file adds `/opt/pwn-broker/bin` to its path. It is validated before it goes live and removed on uninstall.
-- Every download is checked against the index's SHA-256.
-- Deletes are guarded: the app refuses to remove anything outside its own folders, whatever a manifest says.
-- Uninstall is deleting the tool's folder and its link.
+`list`, `search` and `info` work without a network, from the cached index.
 
-### Tools belong to the box
+### 8.5 Installing
 
-- `box.toml` records every tool and version installed during the box.
-- `finish` lists them on the confirmation screen and removes them, unless another active box also installed them.
-- `import` reinstalls the same versions, after asking.
-- Downloaded zips stay in the cache, so reinstalling needs no network.
+1. Find the tool and build in the index.
+2. If another unfinished box already has this tool: at the same build, this box is added to the tool's users and nothing is installed again; at a different build, stop and name that box.
+3. Get the zip: from the cache when its SHA-256 matches the index, otherwise from the index's location. A zip whose size or SHA-256 does not match is deleted and the install stops.
+4. Unpack it into `/opt/pwn-broker/tools/<name>/<version>-<build>/`, refusing any entry that would land outside it and any link. Check the manifest: its schema, that its name, version and build are the ones asked for, and that its `arch` is this machine's.
+5. For a Python tool: check the system Python is one of the listed versions; create a virtual environment in the tool's folder with `python3 -m venv`; install the bundled wheels with `pip`, using no index, wheels only, and hash checking on. No network is used. The environment is made in its final place, because a virtual environment cannot be moved.
+6. Write each command's launcher into `/opt/pwn-broker/bin`. If another installed tool already owns that command name, stop. If the name exists elsewhere on PATH, print a `warn` line that gives the other one's path and says this one wins.
+7. Copy each upload file to `/opt/pwn-broker/upload/<tool>/`.
+8. Record the tool in the box's `box.toml` (name, version, build, the zip's SHA-256, when) and in the app's own list of installed tools and the boxes that use each.
+9. Print how to run it. For a tool that needs root, print the full path to use with `sudo`.
 
-### Tool data
+If any step fails, everything that step and the ones before it created is removed and nothing is recorded.
 
-Some tools write their own data into the home folder as they run. Where a tool lets its data location be chosen, its launcher points it at the box's `tooldata/<tool>/` folder from the first run, so the data is in the box all along. For tools that cannot be redirected, `finish` copies the data into the box and then deletes it, checking both root's home and the user's. If that home folder existed before the tool was installed, it is left alone and a warning is printed.
+`sudo` is never reconfigured. `sudo` searches its own list of folders, not PATH, so `sudo <tool>` would not find an installed tool; the full path always works, and the app prints it.
 
-### First packages
+No package in the first batch needs a system package, so the manifest has no field for one yet.
 
-One for each way a tool can install:
+### 8.6 Removing, finishing, importing
 
-| Tool | Kind | Tests |
-|---|---|---|
-| kerbrute | kali | One binary |
-| Certipy | kali | Python package in a private environment |
-| targetedKerberoast | kali | Python script from git, with dependencies |
-| ligolo-ng | both | Two halves: proxy on Kali, agent on the target |
-| pspy | upload | Binaries for a Linux target |
-| PEASS-ng | upload | Multi-file kit that updates often |
+**One build of a tool is installed on the machine at a time.** Several unfinished boxes may use it. Only one box is open at a time, so "two boxes use a tool" means one of them was left unfinished and the other was opened later. The tool stays installed, and on PATH, until the last of those boxes finishes or removes it.
 
-Rubeus, Seatbelt and SharpHound wait: their authors publish source only.
+- `tool remove` takes this box off the tool's users. When no box is left, it deletes the tool's launchers, its upload folder and its folder under `tools/`. It refuses to delete anything outside `/opt/pwn-broker`, whatever a manifest says.
+- A launcher notes that its tool is running, in `/opt/pwn-broker/run`. `finish` and `tool remove` stop, as `finish` does for an unsaved note, while one of this box's tools is still running, and name it.
+- `finish` lists on its confirmation screen the box's tools and every path under the home folder it will delete (section 8.7). Before archiving, it copies each tool's data into the box. After the archive is written and verified, it removes the tools, then the home data.
+- If removal fails after the archive is verified, the box stays finished: the archive is good. Each failure is one `fail` line, and the working folder is kept. At the next launch, the app finds tools whose only users are finished or missing boxes and offers to remove them.
+- `export` copies the tool data into the box too, and removes nothing.
+- `import`, and reopening a finished box, list the tools the box had and ask whether to install them again. They install the same builds, checked against the SHA-256 the box recorded. A build the index no longer lists is a `warn` line, and the import carries on.
+- Data collected from the home folder stays in the box as a record. It is not put back into the home folder on import.
+- Tools stay installed while a box is active, across `quit` and `resume`.
 
-### Accepted trade
+### 8.7 Tool data
 
-`/opt/pwn-broker/bin` is writable by my user and on root's path, so anything running as me could place a command that root later runs. On a single-user lab VM where I have full `sudo` anyway, that is acceptable. It would not be on a shared machine.
+- A tool whose data location can be chosen is pointed at the box's `tooldata/<tool>/` folder by its launcher. Its data is in the box from the first run, and belongs to whichever box was open when the tool ran.
+- A launcher finds the open box through a short file the app keeps in `/opt/pwn-broker/run`: the box's folder and the prompt's process ID. If that process is no longer running, or no box is open, the tool runs with its own defaults.
+- For a tool that cannot be redirected, the manifest lists the paths under the home folder it writes to. At install, the app records which of them already existed. At `finish` and `export`, it copies those that did not exist before into `tooldata/<tool>/home/`. At `finish`, after the archive is verified, it deletes them.
+- A path that existed before the tool was installed is never deleted. `finish` prints a `warn` line naming it.
+- When another unfinished box also uses the tool, its home data may hold both boxes' results. Installing the tool for the second box says so. `finish` on either box copies the data and leaves it in place for the other.
+- Run as a normal user, the app checks both that user's home and root's, since a tool run with `sudo` may write to either.
+
+### 8.8 First packages
+
+| Package | Version | Kind | On Kali | For the target | Source |
+|---|---|---|---|---|---|
+| `kerbrute` | 1.0.3 | kali | `kerbrute` | | One binary. Apache-2.0 |
+| `pspy` | 1.2.1 | upload | | `pspy64`, `pspy32`, `pspy64s`, `pspy32s` | Four binaries. GPL-3.0 |
+| `certipy` | 5.1.0 | kali | `certipy` | | PyPI `certipy-ad`, needs Python 3.12 or later. MIT |
+| `targetedkerberoast` | 2024.12.16 | kali | `targetedKerberoast` | | One script at commit `ebed079`; upstream has no releases, so the version is the commit's date. GPL-3.0 |
+| `ligolo-ng` | 0.9.2 | both | `ligolo-proxy` | `agent`, `agent.exe` | Three archives, one file taken from each. Needs root for the tunnel. GPL-3.0 |
+| `peass-ng` | 2026.11.14 | upload | | `linpeas.sh`, `winPEASx64.exe`, `winPEASany.exe`, `winPEAS.bat` | Upstream tag `20261114-5ac9329e`. GPL-2.0 or later, with extra clauses |
+
+- Kali already packages `pspy`, `certipy-ad`, `ligolo-ng` and `peass`. Installing mine never changes Kali's; mine wins on PATH while it is installed.
+- `kerbrute` publishes no checksums. Its recipe pins the SHA-256 of the file as first downloaded.
+- Upstream's proxy binary is called `proxy`. On PATH it is `ligolo-proxy`.
+- `targetedKerberoast` lists its dependencies without versions. The package pins them.
+- PEASS-ng publishes several releases a day. The recipe pins one; taking a later one from the same day is a new build.
+- PEASS-ng's licence has clauses of its author's own. Read it before this repository is made public.
+
+### 8.9 What changes in pwn-broker
+
+- A `tools_index` setting.
+- `/opt/pwn-broker/tools/`, `upload/` and `cache/` come into use, with the app's list of installed tools and their users.
+- `box.toml` records each tool: name, version, build, SHA-256 and when it was installed.
+- The status bar and `status` show how many tools the box has.
+- `finish` and `export` gain a step before archiving, and `finish` a step after, for tool data and removal. `finish` checks for running tools before it asks.
+- The launch checks confirm that `python3 -m venv` works, and offer to remove tools left behind by finished boxes.
+
+### 8.10 Testing
+
+- The unit tests build small stand-in packages (a shell script as a binary, a hand-made wheel) and install, list and remove them in a temporary folder. They cover every kind and command type, a wrong hash, a package for another processor, an entry that would escape the folder, a command name already taken, a failed step cleaning up after itself, a tool shared by two boxes, a tool still running at `finish`, and leftovers offered at launch.
+- `pwn-shop`'s CI installs the six real packages on Ubuntu and starts each command.
+- The Kali checklist gains: fill a folder with `fetch.sh` and point `tools_index` at it; install each of the six; run each command; `sudo` with the printed path for `ligolo-proxy`; `finish` leaves no command, no upload folder and no tool data behind; `import` on a fresh VM puts the tools back.
+
+### 8.11 Accepted trade
+
+`/opt/pwn-broker/bin` is writable by my user and first on my PATH, so anything running as me could place a command I later run. On a single-user lab VM that is acceptable. It would not be on a shared machine.
 
 ## 9. What finish puts back
 
@@ -601,10 +801,10 @@ Whatever a box changes on Kali, `finish` undoes. Each change is recorded in `box
 | Change | Phase | Undone by |
 |---|---|---|
 | Lines in `/etc/hosts` | 2 | Removing the lines marked with the box ID |
-| Installed tools | 3 | Removing each tool's folder and link |
+| Installed tools | 3 | Removing each tool's commands, upload files and folder |
 | Tool data in the home folder | 3 | Copying it into the box, then deleting it |
 
-Not undone: system packages installed with `apt`, the PATH line, the `sudo` settings file, and the download cache. Those belong to the app, not to a box.
+Not undone: the PATH line and the download cache. Those belong to the app, not to a box.
 
 ## 10. To verify on Kali
 
@@ -613,12 +813,12 @@ These could not be checked while designing. Each must be confirmed before the pa
 - The terminal reports focus changes to vim, so the note can save on leaving and reload on return. Fallback: a short reload timer.
 - `x-terminal-emulator` exists and accepts a command to run.
 - How vim signals unsaved changes in a way the app can detect before `finish`.
-- Which of `uv` and `pipx` is present by default, and the exact options for installing into a chosen folder from a pinned lock file.
+- `python3 -m venv` works on a fresh Kali, and its Python is 3.12 or 3.13, the versions the bundled wheels cover.
 - Which `asciinema` version to pin, that it writes to disk as it records, and whether it can produce the plain-text copy itself.
 - Where the recording indicator can be shown reliably: window title or shell prompt.
-- Kali's default `sudo` path settings, for the `sudo <tool>` fix.
-- Which of the first six tools Kali already packages.
-- Each first package's licence allows redistribution.
+- Whether Kali's own `ligolo-ng` package installs a command named `ligolo-proxy`, and so which one runs once mine is installed.
+- What `ligolo-proxy` writes, and where, on its first run, so its package lists the right data paths.
+- PEASS-ng's licence, read in full, before `pwn-shop` is made public.
 
 ## 11. Not yet confirmed
 
@@ -649,6 +849,26 @@ These are choices made while writing this document. They stand unless changed.
 - Nightshift is the only theme.
 - History is kept per box.
 - `target rename` and `target remove` exist.
+
+For the tools phase:
+
+- Python tools use Python's own `venv` and `pip` with every dependency bundled as a wheel. This replaces the earlier choice of `uv` or `pipx`.
+- Packages are stored zips with no install script; a manifest says what to run and what to copy.
+- Every package has a build number beside upstream's version, and a published build is never replaced.
+- Python dependencies are pinned in a lock file I commit to `pwn-shop`; CI resolves nothing.
+- The index is rebuilt by CI from a card published with each release, and published as the one file of a standing release tagged `index`. CI commits nothing.
+- The cached index refreshes after a day, with a two-second limit, and `tool refresh` forces it.
+- While `pwn-shop` is private, a folder filled by `build.py` or `fetch.sh` is the only way to reach the packages.
+- One build of a tool is installed on the machine at a time, shared by the unfinished boxes that use it. A different build is refused until the other box lets go.
+- Every command is a launcher script, so the app can tell when a tool is running. `finish` and `tool remove` stop while one is.
+- A removal that fails after the archive is verified leaves the box finished, and the next launch offers to remove what is left.
+- Home-folder data is copied into the box and not put back on import.
+- A tool with no version numbers of its own takes its upstream date as its version: `targetedkerberoast` 2024.12.16, `peass-ng` 2026.11.14.
+- ligolo-ng's proxy is installed as the command `ligolo-proxy`.
+- `pspy` carries all four upstream binaries. `peass-ng` carries `linpeas.sh`, `winPEASx64.exe`, `winPEASany.exe` and `winPEAS.bat`.
+- While both repositories are private, `pwn-shop`'s CI reads `pwn-broker` through a read-only deploy key.
+- The manifest has no field for system packages until a tool needs one.
+- A tool's data is collected into the box at `export` as well as at `finish`.
 
 ## 12. Left to implementation
 
