@@ -334,14 +334,26 @@ def raw_zip(tmp_path, members, manifest=None):
     return path
 
 
+def tree(root):
+    return sorted(root.rglob("*"))
+
+
 def refused(tmp_path, members, manifest=None):
     path = raw_zip(tmp_path, members, manifest)
-    dest = tmp_path / "work" / "dest"
-    before = sorted(p for p in tmp_path.rglob("*"))
-    with pytest.raises(ToolError):
+    assert_clean_failure(tmp_path, path)
+
+
+def assert_clean_failure(tmp_path, path, exc=ToolError):
+    # dest sits two levels below a folder that exists, so parents made on the way are caught
+    work = tmp_path / "work"
+    work.mkdir(exist_ok=True)
+    dest = work / "p" / "q" / "dest"
+    before = tree(tmp_path)
+    with pytest.raises(exc) as info:
         unpack(path, dest)
     assert not dest.exists()
-    assert sorted(p for p in tmp_path.rglob("*")) == before
+    assert tree(tmp_path) == before
+    return info.value
 
 
 GOOD = ("files/kerbrute", b"x", None)
@@ -460,10 +472,8 @@ def test_failure_midway_removes_dest(tmp_path, monkeypatch):
         real(zf, info, target)
 
     monkeypatch.setattr(toolpkg, "_write_member", flaky)
-    dest = tmp_path / "dest"
-    with pytest.raises(ToolError, match="disk full"):
-        unpack(path, dest)
-    assert not dest.exists()
+    err = assert_clean_failure(tmp_path, path)
+    assert "disk full" in str(err)
 
 
 def test_size_mismatch_refused(tmp_path):
@@ -473,9 +483,7 @@ def test_size_mismatch_refused(tmp_path):
     start = data.rindex(b"PK\x01\x02")  # the last central entry is files/kerbrute
     data[start + 24 : start + 28] = (5).to_bytes(4, "little")
     path.write_bytes(bytes(data))
-    with pytest.raises(ToolError):
-        unpack(path, tmp_path / "dest")
-    assert not (tmp_path / "dest").exists()
+    assert_clean_failure(tmp_path, path)
 
 
 def test_encrypted_member_refused(tmp_path):
@@ -484,9 +492,88 @@ def test_encrypted_member_refused(tmp_path):
     pos = data.rindex(b"PK\x01\x02")
     data[pos + 8] |= 1  # general purpose flag bit 0
     path.write_bytes(bytes(data))
-    with pytest.raises(ToolError):
-        unpack(path, tmp_path / "dest")
-    assert not (tmp_path / "dest").exists()
+    assert_clean_failure(tmp_path, path)
+
+
+def test_bad_utf8_name_with_utf8_flag(tmp_path):
+    path = raw_zip(tmp_path, [GOOD])
+    data = bytearray(path.read_bytes())
+    start = data.rindex(b"PK\x01\x02")
+    data[start + 9] |= 0x08  # UTF-8 name flag
+    data[start + 46 + 13] = 0xFF  # last character of the name
+    path.write_bytes(bytes(data))
+    assert_clean_failure(tmp_path, path)
+
+
+def test_corrupt_local_header_mid_extraction(tmp_path):
+    path = raw_zip(tmp_path, [GOOD])
+    data = bytearray(path.read_bytes())
+    local = data.rindex(b"PK")  # the last member is files/kerbrute
+    assert data[local : local + 4] == b"PK\x03\x04"
+    data[local + 7] |= 0x08
+    data[local + 30 + 13] = 0xFF
+    path.write_bytes(bytes(data))
+    assert_clean_failure(tmp_path, path)
+
+
+def test_case_only_collision(tmp_path):
+    path = raw_zip(tmp_path, [GOOD, ("files/KERBRUTE", b"y", None)])
+    work = tmp_path / "work"
+    work.mkdir()
+    dest = work / "p" / "q" / "dest"
+    before = tree(tmp_path)
+    try:
+        unpack(path, dest)
+    except ToolError:
+        # a case-insensitive file system: nothing may be left behind
+        assert tree(tmp_path) == before
+    else:
+        assert dest.is_dir()
+
+
+def test_compressed_member_refused(tmp_path):
+    path = tmp_path / "c.zip"
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("manifest.toml", tomli_w.dumps(sample_manifest()))
+        zf.writestr("files/kerbrute", b"x" * 1000, compress_type=zipfile.ZIP_DEFLATED)
+    assert "compressed" in str(assert_clean_failure(tmp_path, path))
+
+
+def test_too_many_members(tmp_path, monkeypatch):
+    path = raw_zip(tmp_path, [GOOD, ("files/b", b"y", None)])
+    monkeypatch.setattr(toolpkg, "MAX_MEMBERS", 2)
+    assert "entries" in str(assert_clean_failure(tmp_path, path))
+
+
+def test_too_much_declared_size(tmp_path, monkeypatch):
+    path = raw_zip(tmp_path, [GOOD])
+    monkeypatch.setattr(toolpkg, "MAX_UNPACKED_BYTES", 10)
+    assert "bytes" in str(assert_clean_failure(tmp_path, path))
+
+
+def test_interrupt_propagates_and_cleans_up(tmp_path, monkeypatch):
+    path, _, _ = make_package(
+        tmp_path / "pkg", sample_manifest(), {"files/kerbrute": b"x", "files/more": b"y"}
+    )
+    calls = []
+
+    def interrupted(zf, info, target):
+        calls.append(info.filename)
+        if len(calls) == 2:
+            raise KeyboardInterrupt
+        target.write_bytes(b"partial")
+
+    monkeypatch.setattr(toolpkg, "_write_member", interrupted)
+    assert_clean_failure(tmp_path, path, KeyboardInterrupt)
+
+
+def test_existing_dest_is_left_alone(tmp_path):
+    path = raw_zip(tmp_path, [GOOD])
+    dest = tmp_path / "dest"
+    (dest / "inner").mkdir(parents=True)
+    with pytest.raises(ToolError, match="exists"):
+        unpack(path, dest)
+    assert (dest / "inner").is_dir()
 
 
 @pytest.mark.parametrize("name", ["", "/x", "a\\b", "a/../b", "a\0b", "C:/x", "x:", "a/b/.."])

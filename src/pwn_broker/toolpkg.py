@@ -5,7 +5,6 @@ import shutil
 import stat
 import tomllib
 import zipfile
-import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -17,6 +16,8 @@ MANIFEST = "manifest.toml"
 
 _CHUNK = 1024 * 1024
 _MANIFEST_LIMIT = 1024 * 1024
+MAX_MEMBERS = 10_000
+MAX_UNPACKED_BYTES = 1024**3
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 _COMMAND_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _TOP_FILES = (MANIFEST, "LICENSE", "wheels.lock")
@@ -302,8 +303,15 @@ def _check_name(name: str) -> str:
 
 
 def _check_entries(infos: list[zipfile.ZipInfo]) -> dict[str, zipfile.ZipInfo]:
+    if len(infos) > MAX_MEMBERS:
+        raise ToolError(f"package has {len(infos)} entries; the limit is {MAX_MEMBERS}")
+    if sum(i.file_size for i in infos) > MAX_UNPACKED_BYTES:
+        raise ToolError(f"package unpacks to more than {MAX_UNPACKED_BYTES} bytes")
     seen: dict[str, zipfile.ZipInfo] = {}
     for info in infos:
+        if info.compress_type != zipfile.ZIP_STORED:
+            # packages are stored, so there is nothing to decompress and no bomb to fear
+            raise ToolError(f"package entry {info.filename!r} is compressed")
         bare = _check_name(info.filename)
         if bare in seen:
             raise ToolError(f"package entry {info.filename!r} appears twice")
@@ -363,9 +371,33 @@ def _write_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo, target: Path) -> N
         raise ToolError(f"package entry {info.filename!r} is not the size it declares")
 
 
+def _make_dest(dest: Path, created: list[Path]) -> None:
+    # records each folder this call makes, outermost first, so a failure removes only those
+    missing = []
+    for folder in (dest, *dest.parents):
+        if folder.exists():
+            break
+        missing.append(folder)
+    for folder in reversed(missing):
+        folder.mkdir()
+        created.append(folder)
+
+
+def _clean_up(created: list[Path], dest: Path) -> None:
+    for folder in reversed(created):
+        if folder == dest:
+            shutil.rmtree(folder, ignore_errors=True)
+        else:
+            try:
+                folder.rmdir()
+            except OSError:
+                pass
+
+
 def unpack(zip_path: Path, dest: Path) -> Manifest:
     if os.path.lexists(dest):
         raise ToolError(f"{dest} already exists")
+    created: list[Path] = []
     try:
         with zipfile.ZipFile(zip_path) as zf:
             seen = _check_entries(zf.infolist())
@@ -376,18 +408,17 @@ def unpack(zip_path: Path, dest: Path) -> Manifest:
                 raise ToolError(f"{MANIFEST} is too large")
             manifest = _parse_text(zf.read(info), MANIFEST)
             _check_named_files(manifest, seen)
+            _make_dest(dest, created)
             _extract(zf, seen, dest)
-    except ToolError:
-        shutil.rmtree(dest, ignore_errors=True)
-        raise
-    except (zipfile.BadZipFile, OSError, EOFError, zlib.error, NotImplementedError, RuntimeError) as exc:
-        shutil.rmtree(dest, ignore_errors=True)
+    except BaseException as exc:
+        _clean_up(created, dest)
+        if isinstance(exc, ToolError) or not isinstance(exc, Exception):
+            raise
         raise ToolError(f"cannot unpack {zip_path.name}: {exc}") from exc
     return manifest
 
 
 def _extract(zf: zipfile.ZipFile, seen: dict[str, zipfile.ZipInfo], dest: Path) -> None:
-    dest.mkdir(parents=True)
     for bare, info in seen.items():
         target = dest.joinpath(*bare.split("/"))
         if info.is_dir():
