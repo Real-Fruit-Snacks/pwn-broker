@@ -140,7 +140,7 @@ def write_open_box(paths: AppPaths, folder: Path, pid: int) -> None:
 
 def _read_open_box(paths: AppPaths) -> tuple[str, int] | None:
     try:
-        text = paths.run_box.read_text(encoding="utf-8")
+        text = paths.run_box.read_bytes().decode("utf-8")  # bytes: keep any CR visible
     except (OSError, UnicodeDecodeError):
         return None
     lines = text.split("\n")
