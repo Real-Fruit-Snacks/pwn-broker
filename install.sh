@@ -5,17 +5,16 @@ set -eu
 # by `curl | sh` runs nothing.
 
 usage_line() {
-    echo "usage: install.sh [--from <path>] [--config <path>] [--no-path] [--no-asciinema] [--help]"
+    echo "usage: install.sh [--from <file>] [--config <path>] [--no-path] [--help]"
 }
 
 usage_full() {
     usage_line
     cat <<'HELP'
 
-  --from <path>    install from a local folder or wheel instead of the latest release
+  --from <file>    install from a release file on disk instead of the latest release
   --config <path>  copy a settings file to config.toml
   --no-path        do not add /opt/pwn-broker/bin to PATH in ~/.zshrc and ~/.bashrc
-  --no-asciinema   do not download asciinema; record and replay will not work
   --help           show this text
 
 Run it as the user who will use pwn-broker, not with sudo.
@@ -58,10 +57,9 @@ main() {
     FROM=""
     CONFIG=""
     NO_PATH=0
-    NO_ASCIINEMA=0
     HAVE_FROM=0
     HAVE_CONFIG=0
-    TMP=""
+    WORK=""
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -81,10 +79,6 @@ main() {
                 NO_PATH=1
                 shift
                 ;;
-            --no-asciinema)
-                NO_ASCIINEMA=1
-                shift
-                ;;
             --help)
                 usage_full
                 exit 0
@@ -101,31 +95,40 @@ main() {
         fail "the install folder must not be empty or /"
     fi
 
-    trap 'if [ -n "$TMP" ]; then rm -rf "$TMP"; fi' EXIT
+    trap 'if [ -n "$WORK" ]; then rm -rf "$WORK"; fi' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
 
     if [ "$HAVE_FROM" -eq 1 ]; then
-        [ -e "$FROM" ] || fail "$FROM does not exist"
-        # A bare name would be read by pip as a package on PyPI.
+        if [ ! -e "$FROM" ] && [ ! -L "$FROM" ]; then
+            fail "$FROM does not exist"
+        fi
+        case "$FROM" in
+            *.whl) FROM_IS_FILE=0 ;;
+            *) if [ -f "$FROM" ]; then FROM_IS_FILE=1; else FROM_IS_FILE=0; fi ;;
+        esac
+        if [ "$FROM_IS_FILE" -eq 0 ]; then
+            fail "--from takes a release file, pwn-broker-<version>-linux-x86_64.tar.gz. build one from a checkout with: python3 release/build.py"
+        fi
         case "$FROM" in
             /*) ;;
-            *) FROM="./$FROM" ;;
+            *) FROM="$(pwd)/$FROM" ;;
         esac
     fi
     if [ "$HAVE_CONFIG" -eq 1 ]; then
         [ -f "$CONFIG" ] || fail "$CONFIG does not exist"
     fi
 
-    need python3 python3
+    need tar tar
+    need gzip gzip
+    need sha256sum coreutils
     if [ "$HAVE_FROM" -eq 0 ]; then
         need curl curl
-        need sha256sum coreutils
     fi
-
-    python3 -m venv --help >/dev/null 2>&1 || fail "python3 cannot create virtual environments. run: apt install python3-venv"
-    python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' || fail "python3 is older than 3.11. pwn-broker needs 3.11 or later"
-    ok "python3 and venv present"
+    arch="$(uname -m)"
+    if [ "$arch" != "x86_64" ]; then
+        fail "pwn-broker is built for x86_64 Linux. this machine is $arch"
+    fi
 
     if [ -d "$OPT" ]; then
         owner_uid="$(stat -c %u "$OPT")"
@@ -142,57 +145,97 @@ main() {
     fi
     ok "install folder $OPT"
 
-    if [ -x "$OPT/app/bin/python" ] && "$OPT/app/bin/python" -m pip --version >/dev/null 2>&1; then
-        ok "virtual environment reused in $OPT/app"
-    else
-        # only a folder that is a virtual environment is ours to replace
-        if [ -f "$OPT/app/pyvenv.cfg" ]; then
-            rm -rf "$OPT/app"
-        elif [ -e "$OPT/app" ] || [ -L "$OPT/app" ]; then
-            fail "$OPT/app exists and is not a pwn-broker environment. move it or choose another folder"
-        fi
-        APP_CREATED=0
-        if [ ! -e "$OPT/app" ]; then APP_CREATED=1; fi
-        if ! python3 -m venv "$OPT/app"; then
-            if [ "$APP_CREATED" -eq 1 ]; then
-                rm -rf "$OPT/app"
-            fi
-            fail "cannot create the virtual environment in $OPT/app. try: apt install python3-venv"
-        fi
-        ok "virtual environment created in $OPT/app"
-    fi
+    # everything is unpacked and checked here before anything in $OPT is touched
+    WORK="$(mktemp -d "$OPT/.install.XXXXXX")" || fail "cannot create a work folder in $OPT"
 
     if [ "$HAVE_FROM" -eq 1 ]; then
-        TARGET="$FROM"
+        RELEASE="$FROM"
+        RELEASE_NAME="${FROM##*/}"
+        digest="$(sha256sum <"$RELEASE")" || fail "cannot read $RELEASE"
+        ok "release file $RELEASE_NAME, SHA-256 ${digest%% *}"
     else
-        TMP="$(mktemp -d)" || fail "cannot create a temporary folder"
-        curl -fsSL -o "$TMP/SHA256SUMS.txt" "$BASE/SHA256SUMS.txt" || fail "cannot download SHA256SUMS.txt from $BASE"
-        sums_line="$(grep '\.whl$' "$TMP/SHA256SUMS.txt" || true)"
+        curl -fsSL -o "$WORK/SHA256SUMS.txt" "$BASE/SHA256SUMS.txt" || fail "cannot download SHA256SUMS.txt from $BASE"
+        sums_line="$(grep -e '-linux-x86_64\.tar\.gz$' "$WORK/SHA256SUMS.txt" || true)"
         case "$sums_line" in
-            "") fail "SHA256SUMS.txt lists no wheel" ;;
+            "") fail "SHA256SUMS.txt lists no release file" ;;
             *"
-"*) fail "SHA256SUMS.txt lists more than one wheel" ;;
+"*) fail "SHA256SUMS.txt lists more than one release file" ;;
         esac
-        wheel="${sums_line#*  }"
-        case "$wheel" in
-            */* | *..*) fail "SHA256SUMS.txt names an unsafe file: $wheel" ;;
+        RELEASE_NAME="${sums_line#*  }"
+        case "$RELEASE_NAME" in
+            */* | *..*) fail "SHA256SUMS.txt names an unsafe file: $RELEASE_NAME" ;;
+            pwn-broker-*-linux-x86_64.tar.gz) ;;
+            *) fail "SHA256SUMS.txt names an unsafe file: $RELEASE_NAME" ;;
         esac
-        curl -fsSL -o "$TMP/$wheel" "$BASE/$wheel" || fail "cannot download $wheel from $BASE"
-        (cd "$TMP" && printf '%s\n' "$sums_line" | sha256sum -c - >/dev/null 2>&1) || fail "checksum of $wheel does not match SHA256SUMS.txt. nothing was installed"
-        ok "checksum verified for $wheel"
-        TARGET="$TMP/$wheel"
+        RELEASE="$WORK/$RELEASE_NAME"
+        curl -fsSL -o "$RELEASE" "$BASE/$RELEASE_NAME" || fail "cannot download $RELEASE_NAME from $BASE"
+        (cd "$WORK" && printf '%s\n' "$sums_line" | sha256sum -c - >/dev/null 2>&1) || fail "checksum of $RELEASE_NAME does not match SHA256SUMS.txt. nothing was installed"
+        ok "checksum verified for $RELEASE_NAME"
     fi
 
-    "$OPT/app/bin/python" -m pip install --quiet --upgrade "$TARGET" || fail "pip could not install $TARGET"
-    ok "pwn-broker installed"
+    # the file is read on stdin, so tar never takes its name for anything else
+    not_release="$RELEASE_NAME is not a pwn-broker release file"
+    mkdir "$WORK/release"
+    tar -xzf - --no-same-owner -C "$WORK/release" <"$RELEASE" >/dev/null 2>&1 || fail "$not_release"
+    count=0
+    top=""
+    for entry in "$WORK/release"/* "$WORK/release"/.[!.]* "$WORK/release"/..?*; do
+        if [ -e "$entry" ] || [ -L "$entry" ]; then
+            count=$((count + 1))
+            top="$entry"
+        fi
+    done
+    if [ "$count" -ne 1 ] || [ ! -d "$top" ] || [ -L "$top" ]; then
+        fail "$not_release"
+    fi
+    top_name="${top##*/}"
+    case "$top_name" in
+        pwn-broker-*) VERSION="${top_name#pwn-broker-}" ;;
+        *) fail "$not_release" ;;
+    esac
+    case "$VERSION" in
+        "" | *[!A-Za-z0-9.+-]*) fail "$not_release" ;;
+    esac
+    if [ ! -f "$top/python.tar.gz" ] || [ ! -f "$top/wheels.lock" ] || [ ! -d "$top/wheels" ] || [ ! -f "$top/asciinema" ]; then
+        fail "$not_release"
+    fi
+
+    mkdir "$WORK/py"
+    tar -xzf - --no-same-owner -C "$WORK/py" <"$top/python.tar.gz" >/dev/null 2>&1 || fail "$not_release"
+    no_python="the Python in this release does not run on this machine. pwn-broker needs x86_64 Linux with glibc"
+    "$WORK/py/python/bin/python3" -I -c 'import sys' >/dev/null 2>&1 || fail "$no_python"
+    PY_VERSION="$("$WORK/py/python/bin/python3" -I -c 'import platform; print(platform.python_version())' 2>/dev/null)" || fail "$no_python"
+
+    # only folders this installer made are removed: a Python holds bin/python3, an environment pyvenv.cfg
+    if [ -e "$OPT/python" ] || [ -L "$OPT/python" ]; then
+        if [ -L "$OPT/python" ] || [ ! -d "$OPT/python" ] || { [ ! -e "$OPT/python/bin/python3" ] && [ ! -L "$OPT/python/bin/python3" ]; }; then
+            fail "$OPT/python exists and is not a pwn-broker Python. move it or choose another folder"
+        fi
+    fi
+    if [ -e "$OPT/app" ] || [ -L "$OPT/app" ]; then
+        if [ -L "$OPT/app" ] || [ ! -d "$OPT/app" ] || [ ! -f "$OPT/app/pyvenv.cfg" ]; then
+            fail "$OPT/app exists and is not a pwn-broker environment. move it or choose another folder"
+        fi
+    fi
+
+    again="run the installer again"
+    rm -rf "$OPT/app" || fail "cannot remove $OPT/app. $again"
+    rm -rf "$OPT/python" || fail "cannot remove $OPT/python. $again"
+    mv "$WORK/py/python" "$OPT/python" || fail "cannot move the Python to $OPT/python. $again"
+    ok "Python $PY_VERSION in $OPT/python"
+
+    "$OPT/python/bin/python3" -I -m venv "$OPT/app" || fail "cannot create the virtual environment in $OPT/app. $again"
+    ok "virtual environment created in $OPT/app"
+
+    PIP_CONFIG_FILE=/dev/null "$OPT/app/bin/python" -I -m pip --isolated install --quiet --no-index --find-links "$top/wheels" --only-binary :all: --require-hashes -r "$top/wheels.lock" || fail "pip could not install the wheels in $RELEASE_NAME. $again"
+    ok "pwn-broker $VERSION installed"
+
+    cp "$top/asciinema" "$OPT/app/bin/asciinema" || fail "cannot copy asciinema to $OPT/app/bin/asciinema. $again"
+    chmod 755 "$OPT/app/bin/asciinema" || fail "cannot make $OPT/app/bin/asciinema executable. $again"
 
     PWN_BROKER_OPT="$OPT"
     export PWN_BROKER_OPT
-    if [ "$NO_ASCIINEMA" -eq 1 ]; then
-        PWN_BROKER_SKIP_ASCIINEMA=1
-        export PWN_BROKER_SKIP_ASCIINEMA
-    fi
-    "$OPT/app/bin/python" -m pwn_broker setup || fail "pwn-broker setup failed"
+    "$OPT/app/bin/python" -m pwn_broker setup || fail "pwn-broker setup failed. $again"
     ok "launcher and data written in $OPT"
 
     if [ "$HAVE_CONFIG" -eq 1 ]; then
