@@ -36,6 +36,30 @@ class AppPaths:
         return self.opt / "vim"
 
     @property
+    def tools(self) -> Path:
+        return self.opt / "tools"
+
+    @property
+    def upload(self) -> Path:
+        return self.opt / "upload"
+
+    @property
+    def cache(self) -> Path:
+        return self.opt / "cache"
+
+    @property
+    def tools_state(self) -> Path:
+        return self.tools / "installed.toml"
+
+    @property
+    def run_box(self) -> Path:
+        return self.run / "box"
+
+    @property
+    def run_tools(self) -> Path:
+        return self.run / "tools"
+
+    @property
     def active(self) -> Path:
         return self.home / "active"
 

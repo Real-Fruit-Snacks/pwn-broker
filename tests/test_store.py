@@ -6,7 +6,7 @@ import pytest
 from helpers import NASTY, NOW, make_cred
 
 from pwn_broker import store
-from pwn_broker.model import FileRecord, Flag, Target
+from pwn_broker.model import FileRecord, Flag, Target, ToolRecord
 from pwn_broker.store import (
     StoreError,
     load_box,
@@ -190,3 +190,58 @@ def test_write_text_new_file_uses_umask_default(tmp_path):
     finally:
         os.umask(old)
     assert (tmp_path / "a.txt").stat().st_mode & 0o777 == 0o644
+
+
+def _tool(name="chisel", build=1):
+    return ToolRecord(name, "1.10.0", build, "ab" * 32, NOW)
+
+
+def test_tool_records_round_trip(box):
+    box.tools = [_tool(), _tool("ligolo", 2)]
+    save_box(box)
+    assert read_toml(box.path / "box.toml")["tools"][0]["name"] == "chisel"
+    got = load_box(box.path)
+    assert got == box and got.tools == box.tools
+    assert "tools" not in got.extra
+
+
+def test_box_without_tools_loads_empty(box):
+    save_box(box)
+    assert "tools" not in read_toml(box.path / "box.toml")
+    assert load_box(box.path).tools == []
+
+
+def test_old_box_keeps_unknown_tables_beside_tools(box):
+    box.tools = [_tool()]
+    save_box(box)
+    path = box.path / "box.toml"
+    path.write_text(path.read_text(encoding="utf-8") + '\n[hosts]\nfoo = "bar"\n', encoding="utf-8")
+    loaded = load_box(box.path)
+    assert loaded.extra == {"hosts": {"foo": "bar"}}
+    save_box(loaded)
+    data = read_toml(path)
+    assert data["hosts"] == {"foo": "bar"} and len(data["tools"]) == 1
+
+
+@pytest.mark.parametrize("drop", ["name", "version", "build", "sha256", "installed"])
+def test_tool_entry_missing_field(box, drop):
+    box.tools = [_tool()]
+    save_box(box)
+    path = box.path / "box.toml"
+    data = read_toml(path)
+    del data["tools"][0][drop]
+    write_toml(path, data)
+    with pytest.raises(StoreError, match="box.toml"):
+        load_box(box.path)
+
+
+@pytest.mark.parametrize("key,value", [("build", "one"), ("name", 3), ("installed", "soon")])
+def test_tool_entry_wrong_type(box, key, value):
+    box.tools = [_tool()]
+    save_box(box)
+    path = box.path / "box.toml"
+    data = read_toml(path)
+    data["tools"][0][key] = value
+    write_toml(path, data)
+    with pytest.raises(StoreError, match="box.toml"):
+        load_box(box.path)

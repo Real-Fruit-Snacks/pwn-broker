@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from pwn_broker.paths import box_folder_name, safe_name
+from pwn_broker.paths import AppPaths, box_folder_name, safe_name
 
 
 def test_safe_name():
@@ -17,3 +17,11 @@ def test_safe_name():
 
 def test_box_folder_name():
     assert box_folder_name(date(2026, 11, 14), "HTB", "Forest") == "2026-11-14_htb_forest"
+
+
+def test_tool_folders(tmp_path):
+    paths = AppPaths(opt=tmp_path / "o", home=tmp_path / "h")
+    o = tmp_path / "o"
+    assert paths.tools == o / "tools" and paths.upload == o / "upload"
+    assert paths.cache == o / "cache" and paths.tools_state == o / "tools" / "installed.toml"
+    assert paths.run_box == o / "run" / "box" and paths.run_tools == o / "run" / "tools"

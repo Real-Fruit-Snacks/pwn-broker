@@ -7,6 +7,9 @@ from pwn_broker.paths import AppPaths
 from pwn_broker.store import write_toml
 
 DEFAULT_OPT = Path("/opt/pwn-broker")
+DEFAULT_TOOLS_INDEX = (
+    "https://github.com/Real-Fruit-Snacks/pwn-shop/releases/download/index/index.toml"
+)
 
 
 class ConfigError(Exception):
@@ -20,6 +23,7 @@ class Settings:
     default_platform: str = "htb"
     terminal: str = "x-terminal-emulator"
     check_updates: bool = True
+    tools_index: str | None = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +37,14 @@ def _expand(text: str, home_dir: Path) -> Path:
     if text.startswith("~/"):
         return home_dir / text[2:]
     return Path(text)
+
+
+def _index_setting(text: str | None, home_dir: Path) -> str | None:
+    if not text:
+        return None
+    if text.startswith(("http://", "https://")):
+        return text
+    return str(_expand(text, home_dir))
 
 
 def _read_toml(path: Path) -> dict:
@@ -71,6 +83,7 @@ def load(env: Mapping[str, str], home_dir: Path) -> tuple[AppPaths, Settings]:
             if "check_updates" not in data
             else _typed(data, "check_updates", bool, config_file)
         ),
+        tools_index=_index_setting(_typed(data, "tools_index", str, config_file), home_dir),
     )
 
     if settings.home is not None:

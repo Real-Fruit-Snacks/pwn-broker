@@ -3,12 +3,13 @@ import shutil
 import tempfile
 import tomllib
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
 import tomli_w
 
 from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
-from pwn_broker.model import Box, Cred, FileRecord, Flag, Target
+from pwn_broker.model import Box, Cred, FileRecord, Flag, Target, ToolRecord
 
 SCHEMA = 1
 
@@ -86,9 +87,20 @@ def save_box(box: Box) -> None:
         ),
         "flags": {k: {"value": f.value, "at": f.at} for k, f in box.flags.items()},
     }
+    if box.tools:
+        data["tools"] = [asdict(t) for t in box.tools]
     for key, value in box.extra.items():
         data.setdefault(key, value)
     write_toml(box.path / "box.toml", data)
+
+
+def _tool(row: dict) -> ToolRecord:
+    # tomllib gives bool for true/false and int for numbers; a bool is not a build number
+    kinds = {"name": str, "version": str, "build": int, "sha256": str, "installed": datetime}
+    for key, kind in kinds.items():
+        if not isinstance(row[key], kind) or (kind is int and isinstance(row[key], bool)):
+            raise TypeError(f"tools.{key} has the wrong type")
+    return ToolRecord(**{key: row[key] for key in kinds})
 
 
 def load_box(folder: Path) -> Box:
@@ -98,7 +110,7 @@ def load_box(folder: Path) -> Box:
     def make() -> Box:
         known = {
             "schema", "id", "name", "platform", "os", "difficulty", "status",
-            "started", "finished", "last_target", "flags",
+            "started", "finished", "last_target", "flags", "tools",
         }  # fmt: skip
         return Box(
             id=data["id"],
@@ -111,6 +123,7 @@ def load_box(folder: Path) -> Box:
             finished=data.get("finished"),
             last_target=data.get("last_target"),
             flags={k: Flag(value=v["value"], at=v["at"]) for k, v in data.get("flags", {}).items()},
+            tools=[_tool(row) for row in data.get("tools", [])],
             extra={k: v for k, v in data.items() if k not in known},
             path=folder,
         )

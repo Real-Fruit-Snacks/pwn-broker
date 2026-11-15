@@ -251,3 +251,10 @@ def test_vimrc_writes_state_beside_the_note_not_the_cwd(tmp_path):
     assert Path(f"{seen}.dirty").read_text().strip() == "1"
     assert Path(f"{seen}.clean").read_text().strip() == "0"
     assert not (elsewhere / ".note-state").exists()
+
+
+def test_install_data_creates_tool_folders_and_can_run_again(paths):
+    for _ in range(2):
+        install_data(paths)
+        for folder in (paths.tools, paths.upload, paths.cache, paths.run_tools):
+            assert folder.is_dir(), folder

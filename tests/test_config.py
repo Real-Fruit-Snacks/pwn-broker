@@ -105,3 +105,38 @@ def test_state_missing_or_corrupt_is_empty(tmp_path):
 def test_state_round_trip(tmp_path):
     save_state(tmp_path / "state.toml", State("thm"))
     assert load_state(tmp_path / "state.toml") == State("thm")
+
+
+def _settings_for(tmp_path, text):
+    opt = tmp_path / "opt"
+    opt.mkdir(exist_ok=True)
+    (opt / "config.toml").write_text(text)
+    return load({"PWN_BROKER_OPT": str(opt)}, home_dir=tmp_path)[1]
+
+
+def test_tools_index_default_and_constant(tmp_path):
+    assert Settings().tools_index is None
+    assert config.DEFAULT_TOOLS_INDEX.endswith("/releases/download/index/index.toml")
+    assert _settings_for(tmp_path, "").tools_index is None
+
+
+@pytest.mark.parametrize("url", ["http://x.test/index.toml", "https://x.test/i.toml"])
+def test_tools_index_url_kept(tmp_path, url):
+    assert _settings_for(tmp_path, f'tools_index = "{url}"\n').tools_index == url
+
+
+def test_tools_index_folder_expands_home(tmp_path):
+    got = _settings_for(tmp_path, 'tools_index = "~/shop"\n').tools_index
+    assert got == str(tmp_path / "shop")
+    assert _settings_for(tmp_path, 'tools_index = "/srv/shop"\n').tools_index == str(
+        Path("/srv/shop")
+    )
+
+
+def test_tools_index_empty_means_not_set(tmp_path):
+    assert _settings_for(tmp_path, 'tools_index = ""\n').tools_index is None
+
+
+def test_tools_index_wrong_type(tmp_path):
+    with pytest.raises(ConfigError, match="config.toml"):
+        _settings_for(tmp_path, "tools_index = 3\n")

@@ -43,7 +43,11 @@ def _template_is_old_default(template: Path) -> bool:
 
 
 def install_data(paths: AppPaths) -> None:
-    for folder in (paths.run, paths.bin, paths.templates, paths.vim_dir):
+    folders = (
+        paths.run, paths.bin, paths.templates, paths.vim_dir,
+        paths.tools, paths.upload, paths.cache, paths.run_tools,
+    )  # fmt: skip
+    for folder in folders:
         folder.mkdir(parents=True, exist_ok=True)
     template = paths.templates / TEMPLATE_NAME
     if not template.exists() or _template_is_old_default(template):

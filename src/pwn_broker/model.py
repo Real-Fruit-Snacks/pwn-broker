@@ -10,6 +10,15 @@ class Flag:
 
 
 @dataclass
+class ToolRecord:
+    name: str
+    version: str
+    build: int
+    sha256: str
+    installed: datetime
+
+
+@dataclass
 class Box:
     id: str
     name: str
@@ -21,6 +30,7 @@ class Box:
     finished: datetime | None
     last_target: str | None
     flags: dict[str, Flag]
+    tools: list[ToolRecord] = field(default_factory=list)
     extra: dict = field(default_factory=dict)
     path: Path = Path()
 
