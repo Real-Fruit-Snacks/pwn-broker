@@ -127,10 +127,16 @@ def run_shell(session: Session) -> None:
                 break
             line = "quit"
         try:
+            # an OSError here is the lock file itself: every error inside is handled below
             with boxlock.held(session.paths, wait=LOCK_WAIT):
                 try:
+                    reload_if_changed(session)
+                except (StoreError, OSError) as exc:
+                    # acting on stale data, or marking the new state as seen, would hide the change
+                    console.fail(f"could not reload the box: {exc}")
+                    continue
+                try:
                     try:
-                        reload_if_changed(session)
                         rescan(session)
                     except (StoreError, OSError) as exc:
                         console.warn(str(exc))
@@ -139,6 +145,8 @@ def run_shell(session: Session) -> None:
                     mark_seen(session)
         except boxlock.Busy:
             console.fail("record is adding a target in another window; try again")
+        except OSError as exc:
+            console.fail(f"could not use the lock file {session.paths.box_lock}: {exc}")
         except Quit:
             break
         except KeyboardInterrupt:

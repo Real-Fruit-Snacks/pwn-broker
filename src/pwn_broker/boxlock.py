@@ -1,3 +1,4 @@
+import errno
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -12,6 +13,8 @@ except ImportError:  # Windows, where the test suite runs
     import msvcrt
 
 RETRY = 0.1
+# what msvcrt.locking raises when another handle holds the byte
+WINDOWS_CONTENDED = (errno.EACCES, errno.EDEADLK)
 
 
 class Busy(Exception):
@@ -23,13 +26,16 @@ def _try_lock(handle: IO[bytes]) -> bool:
     if fcntl is not None:
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+        except BlockingIOError:
             return False
         return True
     try:
         msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-    except OSError:
-        return False
+    except OSError as exc:
+        # only contention means busy; anything else is a real fault and must not be waited out
+        if isinstance(exc, PermissionError) or exc.errno in WINDOWS_CONTENDED:
+            return False
+        raise
     return True
 
 

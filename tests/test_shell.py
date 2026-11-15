@@ -350,3 +350,56 @@ def reload_from(session):
     from pwn_broker.session import load_session
 
     return load_session(session.paths, session.settings, session.console, session.box, session.clock)
+
+
+def test_a_target_that_cannot_be_read_stops_the_command_and_is_retried(session, loop):
+    from pwn_broker.session import mark_seen
+
+    mark_seen(session)
+    ran = []
+    command("run", "help")(lambda s, a: ran.append(1))
+    elsewhere = add_target(
+        session.box, [], ips=["10.10.10.2"], hostnames=[],
+        scope="external", name="web", now=NOW + timedelta(minutes=1),
+    )  # fmt: skip
+    file = session.box.path / "targets" / elsewhere.name / "target.toml"
+    good = file.read_bytes()
+    file.write_text("this is [not toml", encoding="utf-8")
+    fixed = []
+
+    def between(left):
+        # before the third prompt, the file is repaired
+        if left == 1:
+            file.write_bytes(good)
+            fixed.append(1)
+
+    loop(["run", "run", "run"], between=between)
+    assert fixed
+    assert ran == [1]
+    failures = [text for kind, text in session.console.lines if kind == "fail"]
+    assert len(failures) == 2
+    assert [t.name for t in session.targets] == ["dc01", "web"]
+
+
+def test_a_lock_file_that_cannot_be_used_does_not_end_the_session(session, loop, monkeypatch):
+    from pwn_broker.shell import app
+
+    ran = []
+    command("first", "help")(lambda s, a: ran.append("first"))
+    command("second", "help")(lambda s, a: ran.append("second"))
+    real = app.boxlock.held
+    calls = []
+
+    def held(paths, *, wait):
+        calls.append(1)
+        if len(calls) == 1:
+            raise PermissionError(13, "Permission denied")
+        return real(paths, wait=wait)
+
+    monkeypatch.setattr(app.boxlock, "held", held)
+    loop(["first", "second"])
+    assert ran == ["second"]
+    failures = [text for kind, text in session.console.lines if kind == "fail"]
+    assert len(failures) == 1
+    assert "lock" in failures[0] and "Permission denied" in failures[0]
+    assert "record is adding" not in failures[0]
