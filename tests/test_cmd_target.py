@@ -402,6 +402,41 @@ def test_target_rename_refuses_while_a_window_records_for_it(session, system):
     ]
 
 
+def test_target_rename_refuses_a_window_that_started_while_it_asked(session, system):
+    from casts import recording_now
+
+    class Late(FakeConsole):
+        def ask(self, label, default=None):
+            recording_now(session, system, "dc01")
+            return super().ask(label, default)
+
+    session.console = Late(["dc"])
+    dispatch(session, "target rename dc01")
+    assert session.console.lines == [
+        ("fail", "1 window is still recording for dc01. exit it, then rename it")
+    ]
+    assert [t.name for t in session.targets] == ["dc01"]
+    assert (session.box.path / "targets" / "dc01").is_dir()
+
+
+def test_target_remove_refuses_a_window_that_started_while_it_asked(session, system):
+    from casts import recording_now
+
+    _add(session, "web", "10.10.10.2")
+
+    class Late(FakeConsole):
+        def confirm(self, question, default=False):
+            recording_now(session, system, "web")
+            return super().confirm(question, default)
+
+    session.console = Late(["y"])
+    dispatch(session, "target remove web")
+    assert session.console.lines == [
+        ("fail", "1 window is still recording for web. exit it, then remove it")
+    ]
+    assert [t.name for t in session.targets] == ["dc01", "web"]
+
+
 def test_target_rename_goes_ahead_while_a_window_records_for_another_target(session, system):
     from casts import recording_now
 

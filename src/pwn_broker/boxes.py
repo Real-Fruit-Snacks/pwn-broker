@@ -166,7 +166,10 @@ def edit_target(
 ) -> Target:
     target = find_target(targets, name)
     _validate(ips, hostnames, scope)
-    check_hostnames_free(targets, hostnames, own=target)
+    # only the names it gains: an older box may hold a name two targets already share
+    kept = {held.lower() for held in target.hostnames}
+    gained = [given for given in hostnames if given.lower() not in kept]
+    check_hostnames_free(targets, gained, own=target)
     target.ips = list(ips)
     target.hostnames = list(hostnames)
     target.scope = scope

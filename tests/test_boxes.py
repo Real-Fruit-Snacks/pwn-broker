@@ -148,6 +148,24 @@ def test_edit_target_refuses_a_hostname_another_target_has(box, dc01):
     assert dc01.hostnames == ["FOREST.htb.local"]
 
 
+def test_edit_target_keeps_a_hostname_an_older_box_already_shares(box, dc01):
+    targets = [dc01]
+    twin = add(box, targets, "twin", ips=["10.0.0.2"], hostnames=["twin.htb"])
+    # as a box made before the rule holds it: both targets name the same host
+    twin.hostnames = ["forest.htb.local"]
+    edit_target(
+        box, targets, "dc01", ips=["10.10.10.161"],
+        hostnames=["forest.htb.local", "dc01.htb"], scope="internal",
+    )  # fmt: skip
+    assert dc01.hostnames == ["forest.htb.local", "dc01.htb"] and dc01.scope == "internal"
+    with pytest.raises(BoxError, match="^twin.htb is already a hostname of twin$"):
+        twin.hostnames = ["forest.htb.local", "twin.htb"]
+        edit_target(
+            box, targets, "dc01", ips=["10.10.10.161"],
+            hostnames=["forest.htb.local", "twin.htb"], scope="internal",
+        )  # fmt: skip
+
+
 def test_targets_that_already_share_a_hostname_on_disk_still_load(box, dc01):
     from dataclasses import replace
 

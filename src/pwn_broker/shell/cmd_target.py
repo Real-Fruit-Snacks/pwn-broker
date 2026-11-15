@@ -108,6 +108,8 @@ def target_rename(session: Session, args: list[str]) -> None:
         raise ValueError(f"{old} is already its name")
     before = note.title_text(target)
     had_line = old in session.box.hosts
+    # again: a window may have started recording while the question waited
+    _not_recording(session, target, "rename")
     boxes.rename_target(session.box, session.targets, old, new, creds=session.creds)
     if session.current is target:
         set_current(session, target)
@@ -127,6 +129,8 @@ def target_remove(session: Session, args: list[str]) -> None:
     if not session.console.confirm(f"remove target {target.name}?"):
         return
     had_line = target.name in session.box.hosts
+    # again: a window may have started recording while the question waited
+    _not_recording(session, target, "remove")
     boxes.remove_target(session.box, session.targets, target.name)
     if session.current is target:
         set_current(session, session.targets[0] if session.targets else None)
