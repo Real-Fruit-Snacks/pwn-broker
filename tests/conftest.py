@@ -75,3 +75,27 @@ def session(paths, box, dc01):
     write_note(box, render_note(template, box, [dc01]))
     later = NOW + timedelta(hours=1)
     return Session(paths, Settings(), FakeConsole(), box, [dc01], [], dc01, lambda: later)
+
+
+@pytest.fixture
+def ran():
+    return []
+
+
+@pytest.fixture
+def env(paths, tmp_path, ran):
+    from pwn_broker.cli import Env
+    from pwn_broker.config import Settings
+    from pwn_broker.console import FakeConsole
+
+    return Env(
+        paths=paths,
+        settings=Settings(),
+        console=FakeConsole(),
+        clock=lambda: NOW,
+        environ={"DISPLAY": ":0", "PATH": str(paths.bin)},
+        cwd=tmp_path,
+        pid=4242,
+        home=tmp_path / "user",
+        run=ran.append,
+    )

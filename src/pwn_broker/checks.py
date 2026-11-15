@@ -169,7 +169,11 @@ def version_check(
 
 
 def launch_checks(
-    paths: AppPaths, settings: Settings, env: Mapping[str, str], home: Path
+    paths: AppPaths,
+    settings: Settings,
+    env: Mapping[str, str],
+    home: Path,
+    include_version: bool = True,
 ) -> list[CheckResult]:
     results = run_checks(
         paths,
@@ -177,7 +181,8 @@ def launch_checks(
         env,
         repair_path=lambda: setup.ensure_path_line(home / ".zshrc", paths.bin),
     )
-    version = version_check(settings)
-    if version is not None:
-        results.append(version)
+    if include_version:
+        version = version_check(settings)
+        if version is not None:
+            results.append(version)
     return results

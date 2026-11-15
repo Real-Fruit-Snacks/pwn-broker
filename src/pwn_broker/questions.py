@@ -1,5 +1,6 @@
 import ipaddress
 from dataclasses import dataclass
+from datetime import date
 
 from pwn_broker.boxes import SCOPES, BoxError, find_target, parse_values
 from pwn_broker.console import Console
@@ -162,3 +163,37 @@ def ask_cred(console: Console, session: Session, defaults: Cred | None = None) -
     found_on = ask_found_on(console, session, defaults.found_on if defaults else None)
     note = console.ask("note", (defaults.note if defaults else "") or None)
     return CredAnswers(username, domain, secret, kind, found_on, note)
+
+
+@dataclass
+class BoxAnswers:
+    name: str
+    platform: str
+    day: date
+    os_name: str
+    difficulty: str
+
+
+def ask_box(console: Console, *, default_platform: str, today: date) -> BoxAnswers:
+    while True:
+        name = console.ask("box name")
+        if name != "" and _usable(name):
+            break
+        console.fail("the box name needs at least one letter or digit")
+
+    platform = console.ask("platform", default_platform)
+    if platform == default_platform:
+        platform = platform.strip().lower()
+
+    while True:
+        text = console.ask("date", today.isoformat())
+        try:
+            day = date.fromisoformat(text)
+        except ValueError:
+            console.fail("use the date format YYYY-MM-DD")
+            continue
+        break
+
+    os_name = console.ask("os")
+    difficulty = console.ask("difficulty")
+    return BoxAnswers(name, platform, day, os_name, difficulty)
