@@ -98,10 +98,14 @@ def expect_error(data, field):
 def test_schema_must_be_1():
     with pytest.raises(ToolError, match="upgrade pwn-broker"):
         parse_manifest(sample_manifest(schema=2))
+
+
+def test_a_manifest_without_a_schema_cannot_be_read():
     data = sample_manifest()
     del data["schema"]
-    with pytest.raises(ToolError, match="upgrade pwn-broker"):
+    with pytest.raises(ToolError) as err:
         parse_manifest(data)
+    assert "cannot be read" in str(err.value) and "upgrade" not in str(err.value)
 
 
 @pytest.mark.parametrize("name", ["", "Upper", "-lead", "a b", "a/b", "a_b", 5])

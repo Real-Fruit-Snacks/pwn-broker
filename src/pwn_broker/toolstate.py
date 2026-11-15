@@ -3,6 +3,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from pwn_broker.model import Box
 from pwn_broker.paths import AppPaths
 from pwn_broker.store import SCHEMA, StoreError, read_toml, write_text, write_toml
 from pwn_broker.toolpkg import ToolError
@@ -115,6 +116,27 @@ def save_installed(paths: AppPaths, installed: dict[str, Installed]) -> None:
         for t in installed.values()
     ]
     write_toml(paths.tools_state, {"schema": SCHEMA, "tool": rows})
+
+
+def present(paths: AppPaths, box: Box) -> set[str]:
+    """The box's tools this machine has for it: listed, used by the box, and its folder there."""
+    installed = load_installed(paths)
+    found = set()
+    for record in box.tools:
+        item = installed.get(record.name)
+        if item is None or box.id not in item.users or not item.folder:
+            continue
+        if Path(item.folder).is_dir():
+            found.add(record.name)
+    return found
+
+
+def present_count(paths: AppPaths, box: Box) -> int:
+    # for the status bar and status: an unreadable list confirms nothing, so nothing is counted
+    try:
+        return len(present(paths, box))
+    except (ToolError, OSError):
+        return 0
 
 
 def orphans(installed: dict[str, Installed], unfinished_ids: set[str]) -> list[Installed]:

@@ -51,6 +51,12 @@ def _have(session: Session) -> set[str]:
     return {t.name for t in session.box.tools}
 
 
+def _status(session: Session) -> dict[str, str]:
+    # installed only when the machine has it for this box, not merely because the box records it
+    here = toolstate.present(session.paths, session.box)
+    return {t.name: "installed" if t.name in here else "not installed" for t in session.box.tools}
+
+
 def _run_column(session: Session, item: Installed) -> str:
     if item.commands:
         return ", ".join(item.commands)
@@ -63,7 +69,7 @@ def tool_list(session: Session, args: list[str]) -> None:
     if option is not None and option != "--installed":
         raise ValueError(f"unknown option: {option}")
     console = session.console
-    have = _have(session)
+    status = _status(session)
     if option is None:
         rows = []
         for tool in sorted(_index(session).tools, key=lambda t: t.name):
@@ -73,7 +79,7 @@ def tool_list(session: Session, args: list[str]) -> None:
                     tool.name,
                     tool.latest,
                     build.kind if build else "",
-                    "installed" if tool.name in have else "",
+                    status.get(tool.name, ""),
                     _on_kali(session, build.commands) if build else "no",
                 ]
             )
@@ -102,7 +108,7 @@ def tool_list(session: Session, args: list[str]) -> None:
                 record.name,
                 build_id(record.version, record.build),
                 build.kind if build else "",
-                "installed",
+                status[record.name],
                 _on_kali(session, item.commands) if item else "no",
                 _run_column(session, item) if item else "",
             ]
@@ -118,7 +124,7 @@ def tool_search(session: Session, args: list[str]) -> None:
     if not found:
         session.console.info(f"no tools match {' '.join(args)}")
         return
-    have = _have(session)
+    status = _status(session)
     rows = []
     for tool in sorted(found, key=lambda t: t.name):
         build = _latest(tool)
@@ -127,7 +133,7 @@ def tool_search(session: Session, args: list[str]) -> None:
                 tool.name,
                 tool.latest,
                 build.kind if build else "",
-                "installed" if tool.name in have else "",
+                status.get(tool.name, ""),
                 tool.description,
             ]
         )
@@ -241,7 +247,8 @@ def tool_install(session: Session, args: list[str]) -> None:
         home=toolhooks.user_home(),
         console=console,
         now=session.clock(),
-        on_path=lambda cmd: _lookup(cmd),
+        # the app's own bin is left out, so another copy is found even once a launcher exists
+        on_path=lambda cmd: _lookup(cmd, path=_outside_bin(session)),
     )
     if sharing:
         console.warn(

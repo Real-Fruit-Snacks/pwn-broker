@@ -168,6 +168,9 @@ def _tool(row: object, index: int) -> ToolEntry:
 
 
 def parse_index(data: dict) -> Index:
+    if "schema" not in data:
+        # an empty or cut-short file, not one from a newer version
+        raise ToolError("the index cannot be read (it has no schema)")
     schema = data.get("schema")
     if schema != 1 or isinstance(schema, bool):
         raise ToolError("schema: this index needs a newer pwn-broker; upgrade pwn-broker")
@@ -276,9 +279,10 @@ def is_url(text: str) -> bool:
 
 
 def _not_found(where: str, reason: str = "") -> ToolError:
+    # every failure with nothing to fall back on ends the same way: where, why, and the setting
     extra = f" ({reason})" if reason else ""
     return ToolError(
-        f"no tool index found at {where}{extra}; "
+        f"no usable tool index at {where}{extra}; "
         "set tools_index in config.toml to point at a folder that holds index.toml"
     )
 
@@ -326,10 +330,11 @@ def load_index(
     if not is_url(where):
         file = Path(where) / INDEX_FILE
         try:
-            raw = file.read_bytes()
+            return _parse_bytes(file.read_bytes())
         except OSError as exc:
             raise _not_found(str(file), str(exc)) from exc
-        return _parse_bytes(raw)
+        except ToolError as exc:
+            raise _not_found(str(file), str(exc)) from exc
 
     cached = _read_cached(paths, where)
     if cached is not None and not force and _is_fresh(paths, where, now):
@@ -340,8 +345,6 @@ def load_index(
     except Exception as exc:
         if cached is not None and not force:
             return cached
-        if isinstance(exc, ToolError):
-            raise
         raise _not_found(where, str(exc) or type(exc).__name__) from exc
     # the download parsed, so it may replace the cached copy; a cache that cannot be
     # written costs only the saving, not the answer

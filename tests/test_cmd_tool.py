@@ -657,3 +657,61 @@ def test_refresh_with_the_index_unreachable_is_one_fail_line(session, tmp_path):
     console = run(session, "tool refresh")
     assert len(console.lines) == 1 and console.lines[0][0] == "fail"
     assert str(tmp_path / "nowhere") in console.lines[0][1]
+
+
+
+# ---- what counts as installed
+
+
+def lose_the_tool(session, how):
+    installed = toolstate.load_installed(session.paths)
+    item = installed["kerbrute"]
+    if how == "not listed":
+        del installed["kerbrute"]
+    elif how == "not a user":
+        item.users = ["someone-else"]
+    else:
+        import shutil
+
+        shutil.rmtree(item.folder)
+    toolstate.save_installed(session.paths, installed)
+
+
+@pytest.mark.parametrize("how", ["not listed", "not a user", "folder gone"])
+def test_a_tool_the_box_records_but_the_machine_lacks_is_not_installed(session, shop, how):
+    start = session.box.started
+    run(session, "tool install kerbrute")
+    run(session, "tool install ligolo-ng")
+    lose_the_tool(session, how)
+    _columns, rows = table(run(session, "tool list"))
+    assert [r[3] for r in rows] == ["not installed", "installed"]
+    _columns, rows = table(run(session, "tool list --installed"))
+    assert [r[3] for r in rows] == ["not installed", "installed"]
+    _columns, rows = table(run(session, "tool search stand-in"))
+    assert [r[3] for r in rows] == ["not installed", "installed"]
+    assert toolbar_text(session, start).endswith("1 target   1 tool   00:00")
+    assert "tools     1" in lines(run(session, "status"), "info")
+
+
+def test_the_toolbar_counts_nothing_while_the_installed_list_cannot_be_read(session, shop):
+    start = session.box.started
+    run(session, "tool install kerbrute")
+    session.paths.tools_state.write_text("not toml [", encoding="utf-8")
+    assert toolbar_text(session, start).endswith("1 target   00:00")
+
+
+def test_installing_a_root_tool_names_the_copy_sudo_would_run(session, shop, monkeypatch):
+    seen = []
+
+    def lookup(command, path=None):
+        seen.append(path)
+        return "/usr/bin/ligolo-proxy" if command == "ligolo-proxy" else None
+
+    monkeypatch.setattr(cmd_tool, "_lookup", lookup)
+    monkeypatch.setenv("PATH", f"{session.paths.bin}{cmd_tool.os.pathsep}/usr/bin")
+    console = run(session, "tool install ligolo-ng")
+    full = (session.paths.bin / "ligolo-proxy").as_posix()
+    assert lines(console, "warn")[-1] == (
+        f"sudo ligolo-proxy runs /usr/bin/ligolo-proxy; use sudo {full}"
+    )
+    assert seen and all(path == "/usr/bin" for path in seen)

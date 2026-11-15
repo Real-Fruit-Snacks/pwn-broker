@@ -679,6 +679,46 @@ def test_warns_about_a_name_elsewhere_on_path(paths, box, tmp_path):
     assert not [1 for kind, _t in paths2_console.lines if kind == "warn"]
 
 
+def ligolo(tmp_path, **overrides):
+    return build(
+        tmp_path,
+        files={"files/proxy": SCRIPT}, name="ligolo-ng", needs_root=True,
+        command=[{"name": "ligolo-proxy", "type": "binary", "path": "files/proxy"}],
+        **overrides,
+    )  # fmt: skip
+
+
+def test_a_root_tool_with_another_copy_on_path_names_what_sudo_runs(paths, box, other, tmp_path):
+    zip_path, entry = ligolo(tmp_path)
+    elsewhere = {"ligolo-proxy": "/usr/bin/ligolo-proxy"}
+    unfinished = {box.id: box.name, other.id: other.name}
+    _item, console, installed = do_install(
+        paths, box, entry, zip_path, tmp_path, unfinished=unfinished, on_path=elsewhere.get
+    )
+    full = (paths.bin / "ligolo-proxy").as_posix()
+    line = ("warn", f"sudo ligolo-proxy runs /usr/bin/ligolo-proxy; use sudo {full}")
+    assert console.lines[-1] == line
+    # a second box taking the same build hears it too
+    _item, console, _i = do_install(
+        paths, other, entry, zip_path, tmp_path,
+        installed=installed, unfinished=unfinished, on_path=elsewhere.get,
+    )  # fmt: skip
+    assert console.lines[-1] == line
+
+
+def test_no_sudo_line_without_root_or_without_another_copy(paths, box, tmp_path):
+    zip_path, entry = build(tmp_path)
+    _i, console, _installed = do_install(
+        paths, box, entry, zip_path, tmp_path, on_path=lambda name: "/usr/bin/" + name
+    )
+    assert not any(t.startswith("sudo ") for k, t in console.lines if k == "warn")
+    zip2, entry2 = ligolo(tmp_path / "second")
+    _i, console, _installed = do_install(
+        paths, box, entry2, zip2, tmp_path, on_path=lambda name: str(paths.bin / name)
+    )
+    assert not any(k == "warn" for k, _t in console.lines)
+
+
 def test_failure_in_launcher_step_removes_earlier_launchers(paths, box, tmp_path, monkeypatch):
     from pwn_broker import toolinstall
 

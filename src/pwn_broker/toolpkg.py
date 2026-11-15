@@ -224,6 +224,9 @@ def _python(data: dict, needed: bool) -> PythonSpec | None:
 
 
 def parse_manifest(data: dict) -> Manifest:
+    if "schema" not in data:
+        # an empty or cut-short file, not one from a newer version
+        raise ToolError("the manifest cannot be read (it has no schema)")
     if data.get("schema") != 1 or isinstance(data.get("schema"), bool):
         raise ToolError("schema: this package needs a newer pwn-broker; upgrade pwn-broker")
     name = _text(data, "name", "name")

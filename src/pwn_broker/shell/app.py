@@ -10,7 +10,7 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
 
-from pwn_broker import toolindex
+from pwn_broker import toolindex, toolstate
 from pwn_broker.boxes import TARGET_FOLDERS
 from pwn_broker.session import Session, rescan
 from pwn_broker.shell.commands import COMMANDS, Quit, dispatch
@@ -43,7 +43,7 @@ def toolbar_text(session: Session, now: datetime) -> str:
         parts.append(f"{target.name}  {address}" if address else target.name)
     count = len(session.targets)
     parts.append(f"{count} target" if count == 1 else f"{count} targets")
-    tools = len(session.box.tools)
+    tools = toolstate.present_count(session.paths, session.box)
     if tools:
         parts.append(f"{tools} tool" if tools == 1 else f"{tools} tools")
     minutes = max(0, int((now - session.box.started).total_seconds())) // 60

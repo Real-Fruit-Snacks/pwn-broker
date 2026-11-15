@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from pwn_broker import boxes, checks, notewindow, store
+from pwn_broker import boxes, checks, notewindow, store, toolstate
 from pwn_broker.model import FileRecord, Flag
 from pwn_broker.note import NOTE_NAME, NoteError
 from pwn_broker.questions import ask_value
@@ -115,7 +115,7 @@ def status(session: Session, args: list[str]) -> None:
         ("started", box.started.date().isoformat()),
         ("status", box.status),
         ("targets", str(len(session.targets))),
-        ("tools", str(len(box.tools))),
+        ("tools", str(toolstate.present_count(session.paths, box))),
         ("creds", str(len(session.creds))),
         ("files", str(len(store.load_files(box)))),
         ("user flag", _flag_line(session, "user")),

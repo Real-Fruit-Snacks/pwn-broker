@@ -139,8 +139,9 @@ def test_parse_schema_must_be_one(schema):
 
 
 def test_parse_missing_schema():
-    with pytest.raises(ToolError, match="upgrade pwn-broker"):
+    with pytest.raises(ToolError) as err:
         toolindex.parse_index({"tool": []})
+    assert "cannot be read" in str(err.value) and "upgrade" not in str(err.value)
 
 
 @pytest.mark.parametrize(
@@ -857,3 +858,54 @@ def test_a_redirect_to_https_is_followed(monkeypatch):
     handler = stand_in(monkeypatch, {URL: (302, other, b""), other: (200, None, b"schema = 1\n")})
     assert toolindex._fetch_index(URL, 2) == b"schema = 1\n"
     assert handler.asked == [URL, other]
+
+
+# ---- one message for every failure with nothing to fall back on
+
+
+def assert_says_where(err, where):
+    text = str(err.value)
+    assert where in text and "set tools_index in config.toml" in text, text
+
+
+def test_a_timeout_without_a_cache_says_where_and_how_to_set_it(paths, monkeypatch):
+    gate = threading.Event()
+
+    def slow(url, timeout):
+        gate.wait(5)
+        return b""
+
+    monkeypatch.setattr(toolindex, "QUICK_TIMEOUT", 0.05)
+    try:
+        with pytest.raises(ToolError) as err:
+            toolindex.load_index(paths, url_settings(), now=NOW, fetch=slow)
+    finally:
+        gate.set()
+    assert_says_where(err, URL)
+    assert "no answer" in str(err.value)
+
+
+def test_an_http_error_without_a_cache_says_where(paths):
+    import urllib.error
+
+    def refused(url, timeout):
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    with pytest.raises(ToolError) as err:
+        toolindex.load_index(paths, url_settings(), now=NOW, fetch=refused)
+    assert_says_where(err, URL)
+
+
+@pytest.mark.parametrize("body", [b"garbage = [", b"tool = []\n", b"schema = 2\n"])
+def test_a_download_that_does_not_parse_says_where(paths, body):
+    with pytest.raises(ToolError) as err:
+        toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(body))
+    assert_says_where(err, URL)
+
+
+@pytest.mark.parametrize("body", ["garbage = [", "tool = []\n", "schema = 2\n"])
+def test_a_folder_index_that_does_not_parse_says_where(paths, tmp_path, body):
+    (tmp_path / "index.toml").write_text(body, encoding="utf-8")
+    with pytest.raises(ToolError) as err:
+        toolindex.load_index(paths, Settings(tools_index=str(tmp_path)), now=NOW)
+    assert_says_where(err, str(tmp_path / "index.toml"))

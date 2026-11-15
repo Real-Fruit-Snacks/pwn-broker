@@ -187,6 +187,19 @@ def _existing(folder: Path, entries: list[str]) -> dict[str, bool]:
     return {p: os.path.lexists(folder / Path(*p.split("/"))) for p in entries}
 
 
+def _sudo_lines(
+    paths: AppPaths, console: Console, item: Installed, on_path: Callable[[str], str | None]
+) -> None:
+    # sudo searches its own folders, not PATH, so it finds the other copy, never this one
+    if not item.needs_root:
+        return
+    for command in item.commands:
+        other = on_path(command)
+        if other and not _inside(Path(other), paths.bin):
+            full = (paths.bin / command).as_posix()
+            console.warn(f"sudo {command} runs {other}; use sudo {full}")
+
+
 def _record(box: Box, record: ToolRecord) -> None:
     box.tools = [t for t in box.tools if t.name != record.name] + [record]
 
@@ -240,7 +253,9 @@ def install(
                 f"finish or remove it there before installing {entry.version}"
             )
         if same and (others or Path(current.folder).is_dir()):
-            return _join(paths, box, current, users, installed, console, now)
+            joined = _join(paths, box, current, users, installed, console, now)
+            _sudo_lines(paths, console, joined, on_path)
+            return joined
         if not others:
             # nobody is using it and it is not wanted as it is: take it off first
             remove_files(paths, current)
@@ -322,6 +337,7 @@ def install(
             _restore_list(paths, installed, exc)
         raise
     _show(paths, console, item, entry.version)
+    _sudo_lines(paths, console, item, on_path)
     return item
 
 
