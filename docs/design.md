@@ -90,18 +90,18 @@ Three phases. Each is usable when it is done.
 | 2. Recording and Kali changes | `record`, `replay`, `/etc/hosts` management, VPN check, ping on target add |
 | 3. Tools | The `pwn-shop` repo and its release workflow, the first six packages, the `tool` commands |
 
-Phase 1 is built and specified in full below. Phase 3 is built next and is specified in full in section 8. Phase 2 is specified to the level decided so far and gets its own detailed design before it is built.
+Phases 1 and 3 are built. Phase 2 is built last, is specified in full in section 7, and ships with the other two in the first release.
 
 ### On disk
 
 ```
 /opt/pwn-broker/                 owned by the installing user
-  app/                           the application, in its own virtual environment
+  app/                           the application, in its own virtual environment, and the pinned asciinema
   bin/                           on PATH: pwn-broker, record, tool links and launchers
   templates/notes.md             note template, editable
   vim/vimrc                      loaded with vim -u
   vim/nightshift.vim             Nightshift colours for vim
-  run/                           which box is open, and its lock
+  run/                           which box is open and its lock, running tools, recording windows
   state.toml                     last-used values, rebuilt when missing
   tools/<name>/<version>/        phase 3
   upload/<name>/                 phase 3
@@ -163,7 +163,7 @@ Root and a normal user are two ways of setting up a VM. They are not two users s
 
 - No path is hard-coded to `/root`. Boxes live under the home folder of the user who installed the app.
 - The app runs as the user who installed it. Started as anyone else, including through `sudo pwn-broker`, it refuses and names the user to run it as.
-- Which box is open is recorded in `/opt/pwn-broker/run`, not under a home folder. `record` and tool launchers may run under `sudo`, where the home folder is root's, and they still have to find the box.
+- Which box is open is recorded in `/opt/pwn-broker/run`, not under a home folder. Tool launchers may run under `sudo`, where the home folder is root's, and they still have to find the box.
 - One helper runs privileged steps: directly as root, or through `sudo` otherwise.
 - As a normal user, tools run with `sudo` leave root-owned files in the box. `finish` and `export` correct ownership before archiving.
 - Every feature is tested as root and as a normal user.
@@ -190,7 +190,8 @@ ok    5 checks passed
 warn  display   no desktop session; open the note with: vim -u /opt/pwn-broker/vim/vimrc notes.md
 ```
 
-- Dependencies present: vim, a terminal emulator, tar. The tools phase adds a working `python3 -m venv`; the recording phase adds `asciinema`.
+- Dependencies present: vim, a terminal emulator, tar. The tools phase adds a working `python3 -m venv`; the recording phase adds the pinned `asciinema` (section 7.10).
+- A VPN tunnel is up (section 7.8).
 - A desktop session exists.
 - The PATH line is present.
 - The home folders exist.
@@ -498,35 +499,206 @@ On a fresh VM the file does not exist. The installer takes `--config <path>` to 
 
 ## 7. Phase 2: recording and Kali changes
 
-Decided so far. A detailed design comes before it is built.
+Ships in the first release, with phases 1 and 3. It adds `record` and `replay`, the box's lines in `/etc/hosts`, a VPN check and a ping for each new target.
 
-**`record <target>`**, typed in any terminal window:
+### 7.1 Approaches
+
+| Decision | Options | Chosen | Why |
+|---|---|---|---|
+| Times in the text copy | On every line · marker lines · none | On every line | One grep answers both what happened and when |
+| When the text is written | When the window closes · while recording | When the window closes | The text is always the settled screen, and there is no second process per window. The cost: a window that is still open has no text yet |
+| How lines are worked out | A terminal model from `pyte` · a model of my own · asciinema's own text output | `pyte` (my call) | zsh redraws the command line as I type, and a home-made reader gets that subtly wrong. asciinema's own text output carries no times |
+| `finish` with a window recording | Warn · refuse | Refuse (my call, changed from "warn") | Anything recorded after the archive is made would be deleted with the box folder. A running tool already stops `finish` the same way |
+| An unknown address given to `record` | Send me to the prompt · add it from `record` | Add it from `record` | Decided earlier. It makes `record` a second writer of the box, which section 7.3 deals with |
+
+### 7.2 record
+
+`record [target]`, typed in any terminal window:
 
 ```
 # record 10.10.10.161
 ok  recording this window for dc01 (forest)
     targets/dc01/recordings/2026-11-14_1432.cast
+    exit this shell to stop
+[rec dc01] ┌──(root㉿kali)-[~]
+└─# exit
+ok  recording saved, 14 min
+    targets/dc01/recordings/2026-11-14_1432.cast
+    targets/dc01/recordings/2026-11-14_1432.txt
 ```
 
-- The target can be given as an IP, a hostname or a name. The recording goes into that target's `recordings/` folder.
-- Every window gets its own file, named by start time.
-- It always files under the box that is open. With no box open, it says so and records nothing.
-- Recording starts only when I type the command.
-- An address that is not a target offers to add it.
-- The window shows that it is recording and for which target.
-- Built on `asciinema`. The installer fetches a pinned, hash-checked copy into `app/`, so the version is the same on every VM and does not depend on `apt`.
-- Recordings are only ever written to a local file. Nothing is uploaded.
-- Beside each `.cast` file the app writes a plain-text copy with clock times, for reading in vim and for grep.
-- Each recording's header names the box by ID.
-- `replay` in the prompt lists a target's recordings and plays one, with long idle gaps capped.
-- `finish` warns if a window is still recording.
-- Passwords typed on a command line are recorded and go into the archive.
+- The target can be given as an IP, a hostname or a name, matched the way `target use` matches. With no target, it records for the box's last-used target and says which.
+- It always files under the box that is open. With no box open it says so, records nothing and exits with status 1.
+- Recording starts only when I type the command, and ends when I exit that shell.
+- Every window gets its own file, named by its start time to the minute. If that name is taken, `-2`, `-3` and so on are added.
+- Inside a window that is already recording, `record` refuses and names the target that window records for.
+- It starts my own shell (`$SHELL`) under the pinned `asciinema`, quietly, with a title of the box name, the target name and the box ID. That title is the recording's header naming the box.
+- Keystrokes are never captured, only what the terminal shows. A password typed at a hidden prompt is not recorded. One typed on a command line is, and goes into the archive.
+- asciinema is run with an empty settings folder of the app's own, so nothing in my home folder changes how it records. Recordings are only ever written to a local file. Nothing is uploaded.
+- While recording, the shell's prompt starts with `[rec <target>]`. This is done for zsh and bash, by starting the shell with a small startup file of the app's that loads my own and then adds the prefix. Any other shell records without the prefix.
+- A marker in `/opt/pwn-broker/run/recordings/` says which windows are recording: one file per window, holding the process start time, the target and the file. A marker whose process is gone is ignored and cleared, as for tools.
+- `record` runs only as the user who installed the app, the same rule as the prompt (section 6.2). Run through `sudo` by a normal user, it refuses and says to run `record` first and `sudo` inside it. Otherwise root would own the note and the new target's folder, and the prompt could no longer write them.
+- Read from asciinema's source, each event is written to the file as it happens. CI proves that before anything is built on it. If it turned out to hold output back, a killed window would lose what was held and an export would hold slightly less. Nothing else here would change.
+- If `asciinema` is missing or does not match its pinned checksum, `record` says to run the installer again and starts nothing.
+- If `asciinema` ends with an error, `record` says so with its status, and still writes the text copy from whatever is on disk.
+- A window that is closed or killed leaves its `.cast` as far as it was written. Its text copy is written later (section 7.4).
 
-**`/etc/hosts`.** Adding a target that has a hostname offers to add the line. Each line the app adds is marked with the box ID. `finish` removes exactly those lines. `import` puts them back.
+### 7.3 An address that is not a target
 
-**VPN check.** At launch, warn if no VPN tunnel is up. The VPN address is shown in the status bar.
+```
+# record 10.10.10.200
+10.10.10.200 is not a target of forest. add it? [y/N]
+```
 
-**Ping.** A new target is pinged once and the result reported. No reply is a warning, not a failure, since Windows targets often do not answer.
+On yes, `record` asks the same questions as `target add`, with the address filled in, and creates the target exactly as `target add` does: folders, note section, lists, the `/etc/hosts` offer and the ping. Then it records. The prompt's current target does not change.
+
+That makes two programs that can change a box, so:
+
+- A lock file in `/opt/pwn-broker/run` is held by the prompt for the length of each command, and by `record` while it adds a target.
+- `record` waits up to five seconds for the lock. If the prompt is in the middle of a command, it says so, adds nothing and records nothing.
+- At the start of each command, the prompt reloads the box, its targets and its credentials from disk if any of them changed since it last read them.
+
+`record` writes box data only to add a target. Everything else it writes is its own recording.
+
+### 7.4 The text copy
+
+Beside each `.cast` the app writes a `.txt` of the same name, for reading in vim and for grep:
+
+```
+box      forest  6f9c1e0a-52c1-4b7e-9d0c-1a2b3c4d5e6f
+target   dc01
+started  2026-11-14 14:32:07
+cast     2026-11-14_1432.cast
+
+14:32:07  ┌──(root㉿kali)-[~]
+14:32:15  └─# nmap -sC -sV 10.10.10.161
+14:32:15  Starting Nmap 7.95
+14:32:41  PORT    STATE SERVICE
+14:32:41  88/tcp  open  kerberos-sec
+14:40:12  [full-screen program until 14:43:30, see the cast]
+---- 2026-11-15 ----
+00:01:10  └─# evil-winrm -i 10.10.10.161 -u svc-alfresco
+```
+
+- Every line of text starts with the time its last character was drawn, in the VM's local time, then two spaces. An empty line stays empty.
+- A line of dashes with the date appears wherever the date changes.
+- The text is made by replaying the recording through a model of the terminal at the recorded size, following every resize. A line is taken when it scrolls off the top of the screen, when the screen is cleared (`clear`, Ctrl-L), when a resize leaves no room for it, and at the end for whatever is still on the screen. A command half typed when the screen is cleared is taken as it stood, and appears again when it is finished.
+- Colours and control sequences are dropped. A redrawn line (a progress bar, a command edited before Enter) appears once, as it last stood.
+- A line the terminal wrapped is joined back into one, so a long hash is one line to grep.
+- A full-screen program (vim, less, a menu) draws on the terminal's alternate screen. Its content is left out and one line says when it ran. The `.cast` still holds it.
+- Trailing spaces are removed. Nothing else is changed.
+- It is written by `record` when its window closes. `export`, `finish` and `replay` write it for any recording whose text is missing or older than its `.cast`, so a killed window still gets one. For a window still recording, `export` writes the text as far as the recording has got.
+- It is written to a temporary file and renamed, so a half-written text never stands in for a whole one.
+- Making it needs no `asciinema`: the app reads the `.cast` itself. It reads the format the pinned `asciinema` writes (asciicast v3). An incomplete last line, as a power cut leaves, is ignored. A file it cannot read gets a `warn` line naming it, and no text.
+
+### 7.5 replay
+
+```
+forest/dc01 > replay
+ n  started            length   size
+ 1  2026-11-14 14:32   14 min   212 KB
+ 2  2026-11-14 15:10   recording now
+forest/dc01 > replay 1
+```
+
+| Command | Does |
+|---|---|
+| `replay [target]` | Lists the recordings of the current target, or the named one, oldest first |
+| `replay [target] <n>` | Plays one in the prompt window. Idle gaps longer than two seconds are cut to two. Space pauses, Ctrl-C stops and returns to the prompt |
+
+Playing needs `asciinema`. Listing does not.
+
+### 7.6 Finish, export, import, status
+
+- `finish` refuses while a window is recording for the box, and names the targets: `fail  2 windows are still recording (dc01, web01). exit them, then finish again`.
+- `export` goes ahead and warns that a window is still recording. It writes the missing text copies first. A recording still being written is packed up to its last whole line, and `files.toml` and the manifest hold the size and checksum of exactly that much, so the archive verifies like any other. A recording only ever grows at its end, so that much of it cannot change.
+- `quit` warns if a window is still recording. The window keeps recording into the box.
+- Recordings are files in the box like any other, so `files.toml` and `manifest.toml` record them and `import` restores them. Between commands, a `.cast` that is still being recorded is not hashed again each time it grows. Its checksum is filled in when its window closes, or at `export` for the part that is packed.
+- `status` gains a `recordings` line. The status bar shows `rec 2` while windows are recording, and nothing when none are.
+
+### 7.7 /etc/hosts
+
+A target with an IP and a hostname can have one line in `/etc/hosts`:
+
+```
+10.10.10.161 forest.htb.local dc01.htb.local  # pwn-broker 6f9c1e0a-52c1-4b7e-9d0c-1a2b3c4d5e6f
+```
+
+- `target add` (at launch, in the prompt or from `record`) and `target edit` ask `add dc01's hostnames to /etc/hosts? [Y/n]` when the target has both and has no line yet. The default is yes, because a line is easy to take back and nearly every box needs one.
+- The line is the target's first IP and all its hostnames, ending with a marker that holds the box ID.
+- `box.toml` records which targets have a line. The box's lines in the file are always rewritten as a set from that record, so `target edit` changes the line and `target remove` takes it out.
+- `finish` removes exactly the lines marked with the box's ID, after the archive is verified. If it cannot, the box is still finished, the lines are printed, and the next launch offers to remove them.
+- Opening a box (new, resumed, reopened or imported) puts its recorded lines back if they are missing, and says so.
+- At launch, lines marked with the ID of a box that is finished or no longer on disk are offered for removal.
+
+**Clashes.** The first line in `/etc/hosts` that names a host wins, so a second one would do nothing.
+
+- A hostname already on a line marked for another of my boxes: that line is taken out, with a `warn` naming the box. It returns when that box is opened again.
+- A hostname already on an unmarked line with the same IP: nothing is added for that name, and the app says it already resolves.
+- A hostname already on an unmarked line with a different IP: nothing is added, and the `warn` shows the line, its number and the command to run once I have removed it. Unmarked lines are never changed.
+
+| Command | Does |
+|---|---|
+| `hosts` | The box's lines, and whether each is in `/etc/hosts` now |
+| `hosts add [target]` | Adds the line for the current or named target |
+| `hosts remove [target]` | Takes it out and forgets it |
+
+**Writing the file.**
+
+- The whole file is read, changed in memory and written back in place, not renamed over: the file can be a mount, and its owner and mode must not change. Every byte that is not one of my marked lines is kept as it was.
+- Just before writing, the file is read again. If it changed, the app starts over once, then gives up with a `warn`.
+- As root the app writes it directly. As a normal user it writes the new content under `/opt/pwn-broker/run` and copies it into place with `sudo`. If that fails or I decline, nothing is changed and the line is printed for me to add.
+- Only a plain hostname is written: letters, digits, hyphens and dots, 253 characters at most. Anything else is refused with a `warn`, so a hostname can never carry a second entry or a comment into the file.
+- If `/etc/hosts` is missing, a link, or not a regular file, nothing is written and the app says why.
+
+### 7.8 VPN check
+
+- A launch check, `vpn`: `warn` when no interface named `tun<n>` has an IPv4 address. It never blocks and never starts a VPN.
+- With several tunnels, the lowest-numbered one with an address is used.
+- The status bar shows `vpn 10.10.14.7`, or `no vpn`. It is read again with each command and each redraw of the bar. A read that fails counts as no VPN and never holds the prompt up.
+- `status` shows the same.
+- `{lhost}` in `tool info` examples is filled from this address.
+
+### 7.9 Ping
+
+- Each new target with an IP is pinged once at its first IP, with a two-second wait, from wherever it was added.
+- `ok  10.10.10.161 answered in 43 ms`, or `warn  10.10.10.161 did not answer a ping; Windows targets often do not`.
+- Ctrl-C during the wait cancels the ping and nothing else.
+- With no `ping` on the machine, the app says once per session that it did not check.
+
+### 7.10 Install and launch checks
+
+- The installer downloads `asciinema` 3.2.1, the static x86_64 Linux build from asciinema's own GitHub release, checks it against a SHA-256 pinned in `install.sh`, and puts it in `/opt/pwn-broker/app/bin/`. That folder is not on PATH, so Kali's own `asciinema`, if there is one, is untouched.
+- A copy already there with the right checksum is not downloaded again.
+- If the download fails or the checksum does not match, nothing is kept, the installer says so and carries on. Everything but `record` and `replay` works.
+- `record` is a launcher in `/opt/pwn-broker/bin`, written by setup and put back by the launch check if it is missing.
+- `pyte` 0.8.2 becomes a dependency of the app, pinned exactly because the text copy leans on how it works inside.
+- New launch checks: `asciinema` (present and matching its pin; a `warn` says to run the installer again) and `vpn`.
+- `record` and `asciinema` join the command names a tool package may not use, in both repositories.
+- asciinema is GPL-3.0-or-later and is fetched from upstream at install, never shipped in this repository. `pyte` is LGPL-3.0 and is installed by `pip` as a dependency.
+
+### 7.11 What changes in pwn-broker
+
+- The box lock and the reload at the start of each command (section 7.3).
+- The target commands call the `/etc/hosts` offer and the ping.
+- `finish`, `export` and `import` gain recording and hosts steps through the same hook lists the tools use.
+- The status bar and `status` gain the VPN address and the recording count.
+- CI installs the pinned `asciinema`, zsh and bash on Ubuntu and runs real recordings there.
+
+### 7.12 Testing
+
+- The text copy is plain Python over a `.cast`, tested everywhere. Its cases: a zsh session and a bash session recorded by the real `asciinema` in CI and committed, and hand-written files for a wrapped line, a redrawn line, a full-screen program, a cleared screen, a resize to a shorter window, midnight, and a cut-off last line.
+- `/etc/hosts` is tested against a file in a temporary folder, as root and as a normal user, including that every other byte survives.
+- The VPN read, the ping and `asciinema` are each run through a seam the tests replace. The real `asciinema` runs only in CI on Linux; those tests skip elsewhere.
+- The prompt prefix, the window behaviour and Kali's own zsh settings are checked by hand on Kali, and `docs/kali-checks.md` gains those steps.
+
+### 7.13 Accepted trades
+
+- A window that is still open has no text copy until it closes or the box is exported.
+- A full-screen program appears only in the `.cast`.
+- A password typed on a command line is recorded.
+- The `[rec]` prefix exists for zsh and bash only.
+- Only `tun` interfaces count as a VPN.
 
 ## 8. Phase 3: tools
 
@@ -817,8 +989,11 @@ These could not be checked while designing. Each must be confirmed before the pa
 - `x-terminal-emulator` exists and accepts a command to run.
 - How vim signals unsaved changes in a way the app can detect before `finish`.
 - `python3 -m venv` works on a fresh Kali, and its Python is 3.12 or 3.13, the versions the bundled wheels cover.
-- Which `asciinema` version to pin, that it writes to disk as it records, and whether it can produce the plain-text copy itself.
-- Where the recording indicator can be shown reliably: window title or shell prompt.
+- The pinned `asciinema` runs on Kali, and writes to disk as it records rather than at the end.
+- The `[rec <target>]` prefix shows with Kali's own zsh settings, survives its prompt toggle, and leaves the rest of my shell setup as it was.
+- The text copy of a real session on Kali reads cleanly: command lines as typed, with zsh's suggestions and highlighting gone.
+- Writing `/etc/hosts` in place works on Kali, as root and through `sudo`.
+- The VPN interface on Hack The Box is `tun0`.
 - Kali's own `ligolo-ng` package installs a command named `ligolo-proxy`. Confirm it, and that with mine installed a bare `ligolo-proxy` runs mine and a bare `sudo ligolo-proxy` runs Kali's.
 - What `ligolo-proxy` writes, and where, on its first run, so its package lists the right data paths.
 - PEASS-ng's licence, read in full, before `pwn-shop` is made public.
@@ -852,6 +1027,28 @@ These are choices made while writing this document. They stand unless changed.
 - Nightshift is the only theme.
 - History is kept per box.
 - `target rename` and `target remove` exist.
+
+For recording and Kali changes:
+
+- `record` with no target records for the last-used target.
+- `record` refuses to run through `sudo` as a user other than the one who installed the app.
+- An export packs a recording that is still being written up to its last whole line.
+- The text copy takes the lines on the screen when it is cleared.
+- `finish` refuses while a window is recording, where the earlier outline said it warns.
+- The recording indicator is a `[rec <target>]` prefix on the shell prompt, for zsh and bash.
+- The recording's header names the box through its title: box name, target name, box ID.
+- asciinema runs with an empty settings folder of the app's own.
+- The text copy leaves out full-screen programs and joins wrapped lines.
+- `replay` plays in the prompt window, with idle gaps cut to two seconds.
+- `pyte` is the terminal model, pinned to one version.
+- The `/etc/hosts` question defaults to yes, because a line is easy to take back.
+- A target's line uses its first IP.
+- An open box's hostname wins over another of my boxes' lines; an unmarked line is never changed.
+- `hosts`, `hosts add` and `hosts remove` exist.
+- Only `tun` interfaces count as a VPN, and there is no setting for it.
+- A new target is pinged wherever it is added, including from `record`.
+- A failed asciinema download does not stop the install.
+- The prompt and `record` share a lock, and the prompt reloads the box from disk when it has changed.
 
 For the tools phase:
 
