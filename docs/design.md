@@ -540,7 +540,7 @@ ok  recording saved, 14 min
 - A marker in `/opt/pwn-broker/run/recordings/` says which windows are recording: one file per window, holding the process start time, the target and the file. A marker whose process is gone is ignored and cleared, as for tools.
 - `record` runs only as the user who installed the app, the same rule as the prompt (section 6.2). Run through `sudo` by a normal user, it refuses and says to run `record` first and `sudo` inside it. Otherwise root would own the note and the new target's folder, and the prompt could no longer write them.
 - Read from asciinema's source, each event is written to the file as it happens. CI proves that before anything is built on it. If it turned out to hold output back, a killed window would lose what was held and an export would hold slightly less. Nothing else here would change.
-- If `asciinema` is missing or does not match its pinned checksum, `record` says to run the installer again and starts nothing.
+- If `asciinema` is missing or does not match its pinned checksum, `record` says to run `check` in the prompt, which offers to download it, and starts nothing.
 - If `asciinema` ends with an error, `record` says so with its status, and still writes the text copy from whatever is on disk.
 - A window that is closed or killed leaves its `.cast` as far as it was written. Its text copy is written later (section 7.4).
 
@@ -676,7 +676,7 @@ ok  /etc/hosts updated
 
 - A launch check, `vpn`: `warn  vpn  no VPN tunnel is up. start one with: vpn start` when no interface named `tun<n>` has an IPv4 address. It never blocks.
 - With several tunnels, the lowest-numbered one with an address is used.
-- The status bar shows `vpn 10.10.14.7`, or `no vpn`. It is read again with each command and each redraw of the bar. A read that fails counts as no VPN and never holds the prompt up.
+- The status bar shows `vpn 10.10.14.7`, or `no vpn`. It is read again with each command, and at most every ten seconds while the bar redraws. A read that fails counts as no VPN and never holds the prompt up.
 - `status` shows the same.
 - `{lhost}` in `tool info` examples is filled from this address.
 
@@ -728,12 +728,13 @@ ok  vpn up, 10.10.14.7 on tun0
 
 ### 7.10 Install and launch checks
 
-- The installer downloads `asciinema` 3.2.1, the static x86_64 Linux build from asciinema's own GitHub release, checks it against a SHA-256 pinned in `install.sh`, and puts it in `/opt/pwn-broker/app/bin/`. That folder is not on PATH, so Kali's own `asciinema`, if there is one, is untouched.
+- The installer's setup step downloads `asciinema` 3.2.1, the static x86_64 Linux build from asciinema's own GitHub release, checks it against a SHA-256 pinned in the app, and puts it in `/opt/pwn-broker/app/bin/`. That folder is not on PATH, so Kali's own `asciinema`, if there is one, is untouched.
+- `install.sh --no-asciinema` skips the download.
 - A copy already there with the right checksum is not downloaded again.
 - If the download fails or the checksum does not match, nothing is kept, the installer says so and carries on. Everything but `record` and `replay` works.
 - `record` is a launcher in `/opt/pwn-broker/bin`, written by setup and put back by the launch check if it is missing.
 - `pyte` 0.8.2 becomes a dependency of the app, pinned exactly because the text copy leans on how it works inside.
-- New launch checks: `asciinema` (present and matching its pin; a `warn` says to run the installer again) and `vpn`.
+- New launch checks: `asciinema` (present and matching its pin; a `warn` offers to download it again) and `vpn`.
 - `record`, `asciinema`, `openvpn`, `ping` and `ip` join the command names a tool package may not use, in both repositories. The app runs each of them by name, and a tool's command would be found first.
 - asciinema is GPL-3.0-or-later and is fetched from upstream at install, never shipped in this repository. `pyte` is LGPL-3.0 and is installed by `pip` as a dependency.
 
@@ -748,9 +749,9 @@ ok  vpn up, 10.10.14.7 on tun0
 
 ### 7.12 Testing
 
-- The text copy is plain Python over a `.cast`, tested everywhere. Its cases: a zsh session and a bash session recorded by the real `asciinema` in CI and committed, and hand-written files for a wrapped line, a redrawn line, a full-screen program, a cleared screen, a resize to a shorter window, midnight, and a cut-off last line.
+- The text copy is plain Python over a `.cast`, tested everywhere. Its cases: hand-written files for a wrapped line, a redrawn line, a full-screen program, a cleared screen, a resize to a shorter window, midnight, and a cut-off last line.
 - `/etc/hosts` is tested against a file in a temporary folder, as root and as a normal user, including that every other byte survives.
-- The VPN read, the ping, `openvpn` and `asciinema` are each run through a seam the tests replace. No test starts a real VPN. The real `asciinema` runs only in CI on Linux; those tests skip elsewhere.
+- The VPN read, the ping, `openvpn` and `asciinema` are each run through a seam the tests replace. No test starts a real VPN. The real `asciinema` runs only in CI on Linux, where a zsh session and a bash session are recorded through a pseudo-terminal and their text copies checked; those tests skip elsewhere.
 - The prompt prefix, the window behaviour and Kali's own zsh settings are checked by hand on Kali, and `docs/kali-checks.md` gains those steps.
 
 ### 7.13 Accepted trades
@@ -1120,6 +1121,7 @@ For recording and Kali changes:
 - A tunnel the app did not start is never stopped.
 - A new target is pinged wherever it is added, including from `record`.
 - A failed asciinema download does not stop the install.
+- The asciinema pin lives in the app, not in `install.sh`, so the installer and the launch check share it.
 - The prompt and `record` share a lock, and the prompt reloads the box from disk when it has changed.
 
 For the tools phase:
