@@ -1127,7 +1127,7 @@ No package in the first batch needs a system package, so the manifest has no fie
 
 ### 8.12 Python runtimes
 
-Built. Where the build differs from the first design, this section describes what was built.
+The app's side is built and tested; pwn-shop's side is built on a branch and not published. Where the build differs from the first design, this section describes what was built.
 
 **Why.** A Python tool runs on Kali's own `python3`, from wheels bundled for a fixed list of versions. That has two faults. A tool that needs a Python Kali does not have cannot be packaged. And every time Kali moves to a new Python, the Python tools are refused until I rebuild them: the Kali image went to 3.14 and refused both.
 
@@ -1135,16 +1135,16 @@ Built. Where the build differs from the first design, this section describes wha
 
 | Decision | Options | Chosen | Why |
 |---|---|---|---|
-| Where a tool's Python comes from | Kali's own · bundled inside each tool · a shared runtime package · fetched at install by `uv` or `apt` | A shared runtime package | A stripped Python build is about 36 MB. Inside each tool, twenty Python tools would carry 720 MB of the same files; shared, it is 36 MB per Python version in use, and a fix to Python is one rebuild. Fetching at install needs the network and is not pinned by my checksums, and `apt` changes Kali |
+| Where a tool's Python comes from | Kali's own · bundled inside each tool · a shared runtime package · fetched at install by `uv` or `apt` | A shared runtime package | A stripped Python build is about 34 MiB. Inside each tool, twenty Python tools would carry 680 MiB of the same files; shared, it is 34 MiB per Python version in use, and a fix to Python is one rebuild. Fetching at install needs the network and is not pinned by my checksums, and `apt` changes Kali |
 | Which tools use one | Every Python tool · only those Kali's Python cannot run | Every Python tool | A Kali upgrade can then never break a tool, a tool carries wheels for one Python, and there is one way to build a Python tool |
 | What a tool may depend on | Runtimes only · other tools too · version ranges | Runtimes only, by name | Tool-to-tool dependencies and ranges are where package managers get complicated. A list leaves room for another kind of runtime later |
-| How the runtime is carried | The upstream archive as one file · its files unpacked into the zip | The upstream archive, byte for byte | The archive is 36 MB and holds 100 MB of files, a thousand of them links. Kept whole, the package stays small and its checksum is upstream's own |
+| How the runtime is carried | The upstream archive as one file · its files unpacked into the zip | The upstream archive, byte for byte | The archive is about 34 MiB and holds about 100 MB of files, a thousand of them links. Kept whole, the package stays small and its checksum is upstream's own |
 
 **A runtime package.** A package of kind `runtime`, named for its Python series:
 
 ```
 manifest.toml
-LICENSE                     Python's licence, then the licences of what the build bundles
+LICENSE                     Python's licence, and the notices of what the build bundles (below)
 files/python.tar.gz         the upstream build, byte for byte
 ```
 
@@ -1156,7 +1156,7 @@ build = 1
 kind = "runtime"
 description = "CPython 3.13, for the tools that require it"
 upstream = "https://github.com/astral-sh/python-build-standalone"
-licence = "PSF-2.0 and others (see LICENSE)"
+licence = "PSF-2.0"
 arch = "x86_64"
 
 [runtime]
@@ -1166,7 +1166,7 @@ series = "3.13"                      # the Python the requiring tools' wheels ar
 ```
 
 - The source is the `install_only_stripped` build for `x86_64-unknown-linux-gnu` from `astral-sh/python-build-standalone`, pinned in the recipe by size and SHA-256. Upstream publishes its own checksums, so the pin has a second source.
-- The archive carries no licences for the libraries it bundles, so `LICENSE` is more than Python's: CPython's licence, then, each under a heading naming it, the licence of every library the build bundles (OpenSSL, SQLite, zlib, expat, libffi, Tcl/Tk and the others) and those of `pip` and the libraries it vendors, copied byte for byte from upstream's full distribution of the same build and from the archive. The manifest's `licence` reads `PSF-2.0 and others (see LICENSE)`. This is how pwn-shop's `runtimes` branch builds it.
+- The archive carries no licences for the libraries it bundles, so the package's `LICENSE` is meant to carry CPython's licence and, copied from upstream, the notices of what the build bundles (OpenSSL, SQLite, zlib and others) and of `pip` and the libraries it vendors. That part is still being settled: on its branch, pwn-shop gathers them from the build's own full distribution and from CPython's source, has not yet audited the binary against that list, and gives the manifest's `licence` as `PSF-2.0 and others (see LICENSE)`.
 - A runtime has no `[[command]]`, no `[[upload]]`, no `[data]` and no `[python]`. A manifest with any of them is refused.
 - A runtime puts nothing in `/opt/pwn-broker/bin`. Kali's own `python3` is never shadowed, and the reserved command names do not change.
 - Package names may now hold a dot, so `python-3.13` is a name: lower-case letters, digits, hyphens and dots, starting with a letter or digit, with no two dots together and none at the end. Both repositories apply the same rule.
@@ -1197,7 +1197,7 @@ ok    certipy 5.1.0 installed
 run   certipy   from any terminal
 ```
 
-The size is the runtime's zip in MiB, rounded: 34 for this build, which is about 36 million bytes.
+The size is the runtime's zip in mebibytes, rounded to a whole number: 34 for this build.
 
 1. The app picks the tool's build and reads what it requires from the index. The checks that do not need the package (a runtime's name, another build already on the box or in use by another box, a command name taken) run first, so a tool that would be refused costs no download.
 2. For each runtime it requires that is not on the machine, the app takes the latest build of that name from the index, downloads it, checks its size and SHA-256 as for any package, unpacks the zip into `tools/<runtime>/<version>-<build>/`, and unpacks the archive under the rules below into a `root/` folder inside it. The interpreter must be a regular file inside `root/`, links followed. The archive file is then deleted; the zip stays in the download cache. A runtime that is already there, at any build, is used as it is. One whose files are missing or damaged is removed and installed again.
@@ -1247,11 +1247,11 @@ Making the environment runs the runtime's interpreter. That is the one new thing
 - The archive rules, one test per refusal, on every platform.
 - `requires` in a manifest and in the index; the install order and what is removed when a step fails; removal after the last tool; a runtime left behind; `import`.
 - On Linux, a stand-in runtime: a small archive whose `python3` is a script that runs the machine's own Python, so a real environment is made from it.
-- The real runtime runs in pwn-shop's CI, on Ubuntu and in the Kali image, and in this repository's `kali` job, which wraps the pinned upstream archive in a test runtime package and installs a small Python test tool on it.
+- The real upstream archive has been installed and used on Kali by this repository's `kali` job, which wraps it in a test runtime package and installs a small Python test tool on it: the archive passed the unpacking rules, and the tool ran on the runtime's Python 3.13 while Kali's own was 3.14. Installing pwn-shop's own runtime and tools, on Ubuntu and in the Kali image, is what pwn-shop's CI is built to do on its branch; it has not run.
 
 **Accepted trades.**
 
-- The first Python tool on a machine costs a 36 MB download and about 100 MB of disk.
+- The first Python tool on a machine costs the runtime: a download the app shows as 34 MB (the zip in mebibytes, rounded), about 100 MB unpacked, and the zip, which stays in the download cache.
 - The runtime carries its own OpenSSL and other libraries. They are fixed when I publish a new build of the runtime, not when Kali updates.
 - The runtime's interpreter runs during an install.
 - x86_64 with glibc only, as for every other package.
