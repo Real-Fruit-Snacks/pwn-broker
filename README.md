@@ -235,7 +235,7 @@ run   ligolo-proxy   from any terminal
 files /opt/pwn-broker/upload/ligolo-ng   agent  agent.exe
 ```
 
-The first Python tool brings its runtime with it, and says so first:
+The first tool that requires a runtime brings it, and says so first:
 
 ```
 forest/dc01 > tool install certipy
@@ -250,7 +250,7 @@ Those are the shape of the output, not recorded runs. The runtime's size is its 
 - **`sudo` is never reconfigured.** `sudo` does not search your PATH, so a tool that needs root is run as `sudo <full path>`. The app prints that path after install and in `tool info`. A bare `sudo <command>` finds nothing, or Kali's own command of that name: Kali's `ligolo-ng` package installs its own `ligolo-proxy`, so with both installed a bare `ligolo-proxy` runs the installed one and a bare `sudo ligolo-proxy` runs Kali's. Install prints a `warn` line when that happens.
 - **One build of a tool per machine**, shared by every unfinished box that uses it. A box that already has another build has to `tool remove` first.
 - **At `finish`**, the tools this box installed are removed unless another unfinished box still uses them. For a tool that writes to your home folder, the manifest lists the paths. Before the archive is made, `finish` copies that data into the box, and it deletes it afterwards only if it did not exist before the install and was copied in full; a path that could not be copied in full is kept, with a warning. A copy already in the box from an earlier install is kept beside the new one. `tool remove` by the last box that uses a tool does the same with its data. `finish` refuses while one of the box's tools is running, and names it.
-- **`export`** copies tool data into the box and removes nothing. **`import`**, and reopening a finished box, offer to install the box's tools again, at the same builds and checked against the SHA-256 the box recorded. A Python tool comes back with its runtime: the one already on the machine, at any build, or the latest in the index. When that is not the build the box recorded, a line says so.
+- **`export`** copies tool data into the box and removes nothing. **`import`**, and reopening a finished box, offer to install the box's tools again, at the same builds and checked against the SHA-256 the box recorded. A tool that requires a runtime comes back with it: the one already on the machine, at any build, or the latest in the index. When that is not the build the box recorded, a line says so.
 
 ### Tool history
 

@@ -1138,7 +1138,7 @@ The app's side is built and tested; pwn-shop's side is built on a branch and not
 | Where a tool's Python comes from | Kali's own · bundled inside each tool · a shared runtime package · fetched at install by `uv` or `apt` | A shared runtime package | A stripped Python build is about 34 MiB. Inside each tool, twenty Python tools would carry 680 MiB of the same files; shared, it is 34 MiB per Python version in use, and a fix to Python is one rebuild. Fetching at install needs the network and is not pinned by my checksums, and `apt` changes Kali |
 | Which tools use one | Every Python tool · only those Kali's Python cannot run | Every Python tool | A Kali upgrade can then never break a tool, a tool carries wheels for one Python, and there is one way to build a Python tool |
 | What a tool may depend on | Runtimes only · other tools too · version ranges | Runtimes only, by name | Tool-to-tool dependencies and ranges are where package managers get complicated. A list leaves room for another kind of runtime later |
-| How the runtime is carried | The upstream archive as one file · its files unpacked into the zip | The upstream archive, byte for byte | The archive is about 34 MiB and holds about 100 MB of files, a thousand of them links. Kept whole, the package stays small and its checksum is upstream's own |
+| How the runtime is carried | The upstream archive as one file · its files unpacked into the zip | The upstream archive, byte for byte | The archive is about 34 MiB and holds about 95 MiB of files, a thousand of them links. Kept whole, the package stays small and its checksum is upstream's own |
 
 **A runtime package.** A package of kind `runtime`, named for its Python series:
 
@@ -1156,7 +1156,7 @@ build = 1
 kind = "runtime"
 description = "CPython 3.13, for the tools that require it"
 upstream = "https://github.com/astral-sh/python-build-standalone"
-licence = "PSF-2.0"
+licence = "PSF-2.0 and others (see LICENSE)"
 arch = "x86_64"
 
 [runtime]
@@ -1251,7 +1251,7 @@ Making the environment runs the runtime's interpreter. That is the one new thing
 
 **Accepted trades.**
 
-- The first Python tool on a machine costs the runtime: a download the app shows as 34 MB (the zip in mebibytes, rounded), about 100 MB unpacked, and the zip, which stays in the download cache.
+- The first tool that requires a runtime costs that runtime: a download the app shows as 34 MB (the zip in mebibytes, rounded), about 100 MB unpacked, and the zip, which stays in the download cache.
 - The runtime carries its own OpenSSL and other libraries. They are fixed when I publish a new build of the runtime, not when Kali updates.
 - The runtime's interpreter runs during an install.
 - x86_64 with glibc only, as for every other package.
@@ -1308,7 +1308,7 @@ These could not be checked while designing. Each was meant to be confirmed befor
 - The terminal reports focus changes to vim, so the note can save on leaving and reload on return. Fallback: a short reload timer. Still open: the Kali run has no real desktop.
 - `x-terminal-emulator` exists and accepts a command to run. Confirmed in the Kali image, where it is `lxterm`, Debian's wrapper around xterm, and takes `-e`. Still open for the terminal a Kali desktop opens by default.
 - How vim signals unsaved changes in a way the app can detect before `finish`. Still open: the Kali run never leaves the note unsaved.
-- `python3 -m venv` works on a fresh Kali, and its Python is 3.12 or 3.13, the versions the bundled wheels cover. The first half is confirmed in the Kali image. The second is not: Kali's Python is now 3.14 (3.14.8 in the Kali 2026.3 image), which build 1 of the two Python tools, `certipy` and `targetedkerberoast`, does not cover, so `tool install` refuses it there. Build 2 of each covers Python 3.12, 3.13 and 3.14. Build 3 of each, built in pwn-shop but not yet published, requires the `python-3.13` runtime and does not use Kali's Python at all (8.12); the `kali` job installs a small Python test tool on that runtime.
+- `python3 -m venv` works on a fresh Kali, and its Python is 3.12 or 3.13, the versions the bundled wheels cover. The first half is confirmed in the Kali image. The second is not: Kali's Python is now 3.14 (3.14.8 in the Kali 2026.3 image), which build 1 of the two Python tools, `certipy` and `targetedkerberoast`, does not cover, so `tool install` refuses it there. Build 2 of each covers Python 3.12, 3.13 and 3.14. Build 3 of each, built in pwn-shop but not yet published, requires the `python-3.13` runtime and does not use Kali's Python at all (8.12); this repository's `kali` job installs a small Python test tool on a runtime package it builds around the same upstream archive.
 - The pinned `asciinema` runs on Kali, and writes to disk as it records rather than at the end. Confirmed in the Kali image: the real-asciinema tests pass there as root, and the run records a window and plays it back.
 - The `[rec <target>]` prefix shows with Kali's own zsh settings, survives its prompt toggle, and leaves the rest of my shell setup as it was. That it shows, in front of Kali's own two-line prompt, is confirmed in the Kali image. The prompt toggle and the rest of the shell setup are still open.
 - The text copy of a real session on Kali reads cleanly: command lines as typed, with zsh's suggestions and highlighting gone. Still open: the Kali run records two short commands, and its text copy has the timed output line, but not a session with suggestions and highlighting.
