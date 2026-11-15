@@ -112,7 +112,10 @@ def system(tmp_path_factory, monkeypatch):
 
     def safe_init(self, *args, **kwargs):
         original(self, *args, **kwargs)
-        for name in ("hosts_path", "is_root", "run_privileged", "ping"):
+        # an equal path is the same file, so it is compared by value
+        if self.hosts_path == defaults["hosts_path"]:
+            self.hosts_path = fake.hosts_path
+        for name in ("is_root", "run_privileged", "ping"):
             if getattr(self, name) is defaults[name]:
                 setattr(self, name, getattr(fake, name))
 

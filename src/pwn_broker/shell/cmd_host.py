@@ -1,8 +1,7 @@
 from pwn_broker import boxes, hostflow, hosts, note
 from pwn_broker.model import Target
 from pwn_broker.session import Session, refresh
-from pwn_broker.shell.commands import command, take_args
-from pwn_broker.store import save_box
+from pwn_broker.shell.commands import COMMANDS, command, take_args
 from pwn_broker.targetflow import update_note
 
 NO_CURRENT = "no current target; pick one with: target use <name>"
@@ -96,9 +95,7 @@ def host_remove(session: Session, args: list[str]) -> None:
     session.console.ok(_count(target))
     if target.name not in session.box.hosts:
         return
-    if not hostnames:
-        session.box.hosts.remove(target.name)
-        save_box(session.box)
+    hostflow.forget_if_unwanted(session, target)
     hostflow.sync(session)
 
 
@@ -116,6 +113,14 @@ def host_list(session: Session, args: list[str]) -> None:
         else:
             row.append("yes" if row[1].lower() in listed else "no")
     session.console.table(["target", "name", "in /etc/hosts"], rows)
+
+
+@command("host file", "the target's line in /etc/hosts")
+def host_file(session: Session, args: list[str]) -> None:
+    take_args(args)
+    for name in sorted(COMMANDS):
+        if name.startswith("host file "):
+            session.console.info(f"{name}   {COMMANDS[name][1]}")
 
 
 @command("host file on", "put the target's line into /etc/hosts")

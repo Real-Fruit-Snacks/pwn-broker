@@ -605,3 +605,22 @@ def test_main_registers_the_tool_hooks(tmp_path, monkeypatch):
     assert main([]) == 0
     assert toolhooks.block in lifecycle.BLOCK_HOOKS
     assert toolhooks.restore in lifecycle.RESTORE_HOOKS
+
+
+def test_new_box_goes_on_when_the_hosts_record_cannot_be_saved(env, system, monkeypatch):
+    from pwn_broker import hostflow
+
+    def broken(box):
+        raise StoreError("box.toml: disk full")
+
+    monkeypatch.setattr(hostflow, "save_box", broken)
+    env.console = FakeConsole(
+        ["forest", "", "", "windows", "easy",
+         "", "10.10.10.161", "forest.htb.local", "", "dc01",
+         "y", "10.10.10.162", "", "internal", "",
+         "", ""]
+    )  # fmt: skip
+    s = new_box(env)
+    assert system.pings == ["10.10.10.161", "10.10.10.162"]
+    assert s.box.hosts == []
+    assert env.console.lines[-1] == ("ok", "box forest created")

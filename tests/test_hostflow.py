@@ -248,10 +248,26 @@ def test_file_off_for_a_target_with_no_line_changes_nothing(session):
     assert session.hosts_path.read_bytes() == before
 
 
-def test_file_off_keeps_the_record_when_the_write_fails(session):
+def test_file_off_that_cannot_write_says_which_line_to_remove(session):
     hostflow.file_on(session, session.targets[0])
     session.is_root = lambda: False
     session.console = FakeConsole()
     hostflow.file_off(session, session.targets[0])
-    assert _recorded(session) == ["dc01"]
-    assert session.console.lines == [("warn", "/etc/hosts was not changed: cp exited 1")]
+    assert _recorded(session) == []
+    assert session.console.lines == [
+        ("warn", "/etc/hosts was not changed: cp exited 1"),
+        ("info", "remove this line yourself:"),
+        ("raw", _line(session, "10.10.10.161 forest.htb.local")),
+    ]
+
+
+def test_a_name_left_out_of_the_line_is_warned_about_once(session):
+    session.targets[0].hostnames = ["forest.htb.local", "bad_name"]
+    session.box.hosts = ["dc01"]
+    assert hostflow.sync(session) is True
+    warning = "bad_name is not a plain hostname, so it was left out of dc01's line in /etc/hosts"
+    assert ("warn", warning) in session.console.lines
+    session.console = FakeConsole()
+    session.targets[0].hostnames.append("crm.forest.htb")
+    assert hostflow.sync(session) is True
+    assert not any(kind == "warn" for kind, _ in session.console.lines)

@@ -77,3 +77,22 @@ def test_cancelling_the_question_still_pings(session, system):
     targetflow.add(session, WEB, make_current=True)
     assert session.box.hosts == []
     assert session.console.lines[1:] == [("info", "cancelled"), ("ok", "10.10.10.50 answered in 1 ms")]
+
+
+def test_a_record_that_cannot_be_saved_is_a_warning_and_the_ping_still_runs(
+    session, system, monkeypatch
+):
+    from pwn_broker import hostflow
+    from pwn_broker.store import StoreError
+
+    def broken(box):
+        raise StoreError("box.toml: disk full")
+
+    monkeypatch.setattr(hostflow, "save_box", broken)
+    session.console = FakeConsole(["y"])
+    targetflow.after_add(session, session.targets[0])
+    assert session.box.hosts == []
+    assert session.console.lines == [
+        ("warn", "the /etc/hosts line could not be recorded: box.toml: disk full"),
+        ("ok", "10.10.10.161 answered in 1 ms"),
+    ]

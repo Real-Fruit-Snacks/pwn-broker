@@ -299,3 +299,15 @@ def test_test_sessions_never_reach_the_system(paths, box, system):
     assert built.is_root is not privilege.is_root
     assert built.run_privileged is not privilege.run_privileged
     assert built.ping is not ping.once
+
+
+def test_a_test_session_given_an_equal_hosts_path_is_still_guarded(paths, box, system):
+    from pathlib import Path
+
+    from pwn_broker.session import Session
+
+    built = Session(
+        paths, Settings(), FakeConsole(), box, [], [], None, lambda: NOW,
+        hosts_path=Path("/etc/hosts"),
+    )  # fmt: skip
+    assert built.hosts_path == system.hosts_path

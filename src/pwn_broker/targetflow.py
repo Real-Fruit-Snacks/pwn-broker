@@ -81,5 +81,7 @@ def after_add(session: Session, target: Target) -> None:
     except Cancelled:
         # the target is made; only the line is skipped
         session.console.info("cancelled")
+    except (StoreError, OSError) as exc:
+        session.console.warn(f"the /etc/hosts line could not be recorded: {exc}")
     if target.ips:
         _ping(session, target.ips[0])

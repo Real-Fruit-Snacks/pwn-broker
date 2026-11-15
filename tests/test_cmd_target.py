@@ -441,3 +441,34 @@ def test_target_remove_of_a_target_without_a_line_leaves_the_file(session):
     assert web not in session.targets
     assert session.console.lines == [("ok", "target web removed")]
     assert session.hosts_path.read_bytes() == before
+
+
+def test_target_edit_that_clears_the_hostnames_forgets_the_line(session):
+    session.console = FakeConsole(["", "", "", ""])
+    dispatch(session, "target edit dc01")
+    session.console = FakeConsole(["", "-", ""])
+    dispatch(session, "target edit dc01")
+    assert session.box.hosts == [] and load_box(session.box.path).hosts == []
+    assert _hosts_text(session) == "127.0.0.1 localhost\n"
+
+
+def test_target_edit_that_clears_the_ip_forgets_the_line(session):
+    session.console = FakeConsole(["", "", "", ""])
+    dispatch(session, "target edit dc01")
+    session.console = FakeConsole(["-", "", ""])
+    dispatch(session, "target edit dc01")
+    assert load_box(session.box.path).hosts == []
+    assert _hosts_text(session) == "127.0.0.1 localhost\n"
+
+
+def test_target_remove_that_cannot_write_says_which_line_to_remove(session):
+    session.console = FakeConsole(["", "", "", ""])
+    dispatch(session, "target edit dc01")
+    session.is_root = lambda: False
+    session.console = FakeConsole(["y"])
+    dispatch(session, "target remove dc01")
+    assert session.console.lines[1:] == [
+        ("warn", "/etc/hosts was not changed: cp exited 1"),
+        ("info", "remove this line yourself:"),
+        ("raw", _hosts_line(session, "10.10.10.161 forest.htb.local")),
+    ]

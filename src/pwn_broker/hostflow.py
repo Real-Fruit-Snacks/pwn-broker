@@ -44,16 +44,22 @@ def _not_changed(session: Session, exc: hosts.HostsError, want: list[hosts.Wante
     console = session.console
     console.warn(f"{FILE} was not changed: {_reason(exc)}")
     try:
-        present = set(hosts.marked(hosts.read(session.hosts_path)).get(session.box.id, []))
+        present = hosts.marked(hosts.read(session.hosts_path)).get(session.box.id, [])
     except hosts.HostsError:
-        present = set()
+        present = []
+    lines = []
     for entry in want:
         try:
-            text = hosts.line(entry, session.box.id)
+            lines.append(hosts.line(entry, session.box.id))
         except hosts.HostsError:
             continue
+    for text in lines:
         if text not in present:
             console.info("add this line yourself:")
+            console.raw(text)
+    for text in present:
+        if text not in lines:
+            console.info("remove this line yourself:")
             console.raw(text)
 
 
@@ -86,6 +92,28 @@ def _report(
         console.info("    " + text)
 
 
+def _left_out(session: Session, want: list[hosts.Wanted]) -> None:
+    by_name = {t.name: t for t in session.targets}
+    for entry in want:
+        for name in by_name[entry.target].hostnames:
+            notice = f"left out {entry.target} {name}"
+            if hosts.valid_hostname(name) or notice in session.notices:
+                continue
+            session.notices.add(notice)
+            session.console.warn(
+                f"{name} is not a plain hostname, so it was left out of "
+                f"{entry.target}'s line in {FILE}"
+            )
+
+
+def forget_if_unwanted(session: Session, target: Target) -> None:
+    """Take a target off box.hosts once it can no longer have a line, so the record stays true."""
+    box = session.box
+    if target.name in box.hosts and not (target.ips and _names(target)):
+        box.hosts.remove(target.name)
+        save_box(box)
+
+
 def sync(session: Session) -> bool:
     """Rewrite the box's lines from box.hosts; false when the file could not be changed."""
     want = wanted(session)
@@ -97,6 +125,7 @@ def sync(session: Session) -> bool:
         outcomes.append(outcome)
         return outcome.text
 
+    _left_out(session, want)
     root = session.is_root()
     try:
         if not root:
@@ -138,7 +167,11 @@ def _record(session: Session, target: Target) -> None:
         sync(session)
         return
     box.hosts.append(target.name)
-    save_box(box)
+    try:
+        save_box(box)
+    except BaseException:
+        box.hosts.remove(target.name)
+        raise
     if not sync(session):
         # the record follows the file: nothing was written, so nothing is recorded
         box.hosts.remove(target.name)
@@ -171,13 +204,10 @@ def file_off(session: Session, target: Target) -> None:
     if target.name not in box.hosts:
         session.console.ok(f"{target.name} has no line in {FILE}")
         return
-    at = box.hosts.index(target.name)
     box.hosts.remove(target.name)
     save_box(box)
-    if not sync(session):
-        # the line is still in the file, so the record keeps it
-        box.hosts.insert(at, target.name)
-        save_box(box)
+    # if the write fails, sync prints the line to remove by hand; the next sync takes it out too
+    sync(session)
 
 
 def listed(session: Session) -> set[str] | None:

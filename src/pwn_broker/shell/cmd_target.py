@@ -70,10 +70,12 @@ def target_edit(session: Session, args: list[str]) -> None:
         hostnames=answers.hostnames,
         scope=answers.scope,
     )
+    had_line = target.name in session.box.hosts
+    hostflow.forget_if_unwanted(session, target)
     update_note(session, lambda text: note.retitle(text, before, note.title_text(target)))
     refresh(session)
     session.console.ok(f"target {target.name} updated")
-    if target.name in session.box.hosts:
+    if had_line:
         hostflow.sync(session)
     else:
         hostflow.offer(session, target)

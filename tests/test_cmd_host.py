@@ -238,3 +238,20 @@ def test_host_file_on_says_what_is_missing(session):
 def test_host_file_off_without_a_line(session):
     dispatch(session, "host file off")
     assert session.console.lines == [("ok", "dc01 has no line in /etc/hosts")]
+
+
+def test_host_remove_leaving_only_an_invalid_name_forgets_the_line(session):
+    session.targets[0].hostnames = ["forest.htb.local", "bad_name"]
+    _file_on(session)
+    dispatch(session, "host remove forest.htb.local")
+    assert session.targets[0].hostnames == ["bad_name"]
+    assert load_box(session.box.path).hosts == []
+    assert _text(session) == "127.0.0.1 localhost\n"
+
+
+def test_host_file_alone_lists_on_and_off(session):
+    dispatch(session, "host file")
+    assert session.console.lines == [
+        ("info", "host file off   take the target's line out of /etc/hosts and forget it"),
+        ("info", "host file on   put the target's line into /etc/hosts"),
+    ]
