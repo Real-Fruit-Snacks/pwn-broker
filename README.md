@@ -12,7 +12,7 @@ No release has been published yet, so that line does not work today. From a clon
 sh install.sh --from .
 ```
 
-The installer asks no questions. It creates `/opt/pwn-broker` (using `sudo` once if it has to) and gives it to you, builds a virtual environment in `app/`, installs the package there, and adds `/opt/pwn-broker/bin` to PATH in `~/.zshrc` and, if it exists, `~/.bashrc`. Nothing goes into the system Python. Run it again to upgrade.
+Run the installer as the user who will use pwn-broker, not with `sudo`; it asks for `sudo` itself when it needs to create the folder. It asks no questions otherwise. It creates `/opt/pwn-broker` (using `sudo` once if it has to) and gives it to you, builds a virtual environment in `app/`, installs the package there, and adds `/opt/pwn-broker/bin` to PATH in `~/.zshrc` and, if it exists, `~/.bashrc`. Nothing goes into the system Python. Run it again to upgrade.
 
 | Option | Does |
 |---|---|
@@ -21,7 +21,7 @@ The installer asks no questions. It creates `/opt/pwn-broker` (using `sudo` once
 | `--no-path` | Leave the shell config files alone |
 | `--help` | Show the options |
 
-Set `PWN_BROKER_OPT` to install somewhere other than `/opt/pwn-broker`. Without `--from`, the installer downloads the wheel from the latest GitHub release and checks its SHA-256 against `SHA256SUMS.txt` before installing anything.
+Set `PWN_BROKER_OPT` to install somewhere other than `/opt/pwn-broker`. Without `--from`, the installer downloads the wheel from the latest GitHub release and checks its SHA-256 against `SHA256SUMS.txt` before installing anything. That catches a corrupted download; it does not prove who published the release.
 
 ## Context
 

@@ -52,3 +52,49 @@ def test_install_sh_help_and_unknown_option():
     assert bad.returncode == 2 and "usage" in bad.stderr
     missing = subprocess.run(["sh", str(SCRIPT), "--from"], capture_output=True, text=True)
     assert missing.returncode == 2
+
+
+SHELLS = [s for s in ("sh", "dash") if shutil.which(s)]
+shells = pytest.mark.parametrize("shell", SHELLS)
+
+
+def run_script(shell, *args):
+    return subprocess.run([shell, str(SCRIPT), *args], capture_output=True, text=True)
+
+
+@shells
+def test_install_sh_syntax_in_each_shell(shell):
+    assert subprocess.run([shell, "-n", str(SCRIPT)]).returncode == 0
+
+
+@shells
+def test_install_sh_option_errors(shell):
+    assert run_script(shell, "--help").returncode == 0
+    for args in (["--nope"], ["--config"], ["--from"], ["--from", ""], ["--config", ""]):
+        result = run_script(shell, *args)
+        assert result.returncode == 2 and "usage" in result.stderr
+
+
+@shells
+def test_install_sh_missing_from_or_config_fails_before_installing(shell, tmp_path):
+    gone = str(tmp_path / "gone")
+    for args in (["--from", gone], ["--config", gone]):
+        result = run_script(shell, *args)
+        assert result.returncode == 1
+        assert result.stderr.strip() == f"fail  {gone} does not exist"
+
+
+def test_install_sh_runs_nothing_before_main():
+    lines = SCRIPT.read_text(encoding="utf-8").splitlines()
+    assert [row for row in lines if row.strip()][-1] == 'main "$@"'
+    top_level = []
+    in_function = False
+    for row in lines[1:]:
+        if in_function:
+            in_function = row != "}"
+        elif row.strip() and not row.startswith("#"):
+            if row.endswith("() {"):
+                in_function = True
+            else:
+                top_level.append(row)
+    assert top_level == ["set -eu", 'main "$@"']
