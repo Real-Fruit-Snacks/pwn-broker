@@ -1,6 +1,7 @@
 import ipaddress
 import os
 import re
+import secrets
 import stat
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?")
 # ipaddress accepts an IPv6 scope ID holding any character, spaces and line breaks included
 IP_CHARS = re.compile(r"[0-9A-Fa-f.:]+")
 MARKER = re.compile(rb"# pwn-broker ([A-Za-z0-9._-]+)[ \t]*")
+FIELD_GAP = re.compile(rb"[ \t]+")
 CHANGED = "changed"
 
 
@@ -100,16 +102,23 @@ def _owner(content: bytes) -> str | None:
     return found.group(1).decode("ascii") if found else None
 
 
+def _key(name: str) -> bytes:
+    # a valid hostname is ASCII; only ASCII letters are folded, so no Unicode case rule applies
+    return name.encode("ascii").lower()
+
+
 def _entry(content: bytes):
     """(address, lowercased names) of a line, or None when its first field is not an address."""
-    fields = content.split(b"#", 1)[0].split()
+    # the resolver splits fields on space and tab only
+    fields = [field for field in FIELD_GAP.split(content.split(b"#", 1)[0]) if field]
     if not fields:
         return None
     try:
         address = ipaddress.ip_address(fields[0].decode("ascii"))
     except (UnicodeDecodeError, ValueError):
         return None
-    return address, {field.decode("utf-8", "replace").lower() for field in fields[1:]}
+    # bytes.lower() folds ASCII letters only; a non-ASCII name never equals a valid hostname
+    return address, {field.lower() for field in fields[1:]}
 
 
 def _decode(content: bytes) -> str:
@@ -143,28 +152,36 @@ def rewrite(text: bytes, box_id: str, wanted: list[Wanted]) -> Outcome:
         _check(entry)
     pieces = _split(text)
     ending = _ending(pieces)
-    # (line number, raw, owner, content) of every line kept from the file
-    kept = []
+    wanted_keys = {_key(name) for entry in wanted for name in entry.names}
+    # Another of my boxes' line naming a wanted host is taken out whatever this box ends up
+    # writing: left in place, it could win over an unmarked line with the same name.
+    out: list[bytes] = []
+    taken_out: list[tuple[str, str]] = []
+    # (line number in the original file, content, address, keys) of every unmarked entry
+    unmarked = []
     for number, raw in enumerate(pieces, start=1):
         content = _content(raw)
         owner = _owner(content)
-        if owner != box_id:
-            kept.append((number, raw, owner, content))
-    unmarked = []
-    for number, _raw, owner, content in kept:
-        parsed = _entry(content) if owner is None else None
-        if parsed is not None:
+        if owner == box_id:
+            continue
+        parsed = _entry(content)
+        if owner is not None:
+            if parsed is not None and parsed[1] & wanted_keys:
+                taken_out.append((owner, _decode(content)))
+                continue
+        elif parsed is not None:
             unmarked.append((number, content, *parsed))
+        out.append(raw)
 
     already: list[tuple[str, str]] = []
     blocked: list[tuple[str, str, int, str]] = []
     written: list[str] = []
-    claimed: dict[str, tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, str]] = {}
+    claimed: dict[bytes, tuple[ipaddress.IPv4Address | ipaddress.IPv6Address, str]] = {}
     for entry in wanted:
         address = _parse_ip(entry.ip)
         names = []
         for name in entry.names:
-            key = name.lower()
+            key = _key(name)
             if key in claimed:
                 first_address, first_line = claimed[key]
                 if first_address == address:
@@ -184,17 +201,8 @@ def rewrite(text: bytes, box_id: str, wanted: list[Wanted]) -> Outcome:
         new = line(Wanted(entry.target, entry.ip, names), box_id)
         written.append(new)
         for name in names:
-            claimed[name.lower()] = (address, new)
+            claimed[_key(name)] = (address, new)
 
-    taken_out: list[tuple[str, str]] = []
-    out = []
-    for _number, raw, owner, content in kept:
-        if owner is not None:
-            parsed = _entry(content)
-            if parsed is not None and parsed[1] & claimed.keys():
-                taken_out.append((owner, _decode(content)))
-                continue
-        out.append(raw)
     if written and out and not out[-1].endswith(b"\n"):
         out[-1] += ending
     out.extend(value.encode("ascii") + ending for value in written)
@@ -236,7 +244,8 @@ def _write_in_place(path: Path, after: bytes) -> None:
 
 
 def _copy_into_place(path: Path, after: bytes, scratch: Path, run) -> None:
-    staged = scratch / f"hosts-{os.getpid()}.new"
+    # random part too, so a file left by a crashed process with the same ID never blocks a write
+    staged = scratch / f"hosts-{os.getpid()}-{secrets.token_hex(8)}.new"
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
     try:
         handle = os.open(staged, flags, 0o600)

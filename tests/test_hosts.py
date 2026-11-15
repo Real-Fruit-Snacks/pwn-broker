@@ -287,13 +287,71 @@ def test_other_box_line_taken_out_whole_and_reported():
     assert outcome.blocked == []
 
 
-def test_other_box_line_kept_when_name_is_blocked_anyway():
-    theirs = mine("10.10.10.175", "shared.htb", box_id=OTHER)
-    text = b"10.0.0.5 shared.htb\n" + theirs + b"\n"
-    outcome = hosts.rewrite(text, ME, [Wanted("dc01", "10.10.10.161", ["shared.htb"])])
-    assert outcome.text == text
+def test_other_box_line_before_same_ip_unmarked_line_taken_out():
+    theirs = mine("10.0.0.9", "foo.htb", box_id=OTHER)
+    text = theirs + b"\n10.0.0.5 foo.htb\n"
+    outcome = hosts.rewrite(text, ME, [Wanted("t", "10.0.0.5", ["foo.htb"])])
+    assert outcome.text == b"10.0.0.5 foo.htb\n"
+    assert outcome.taken_out == [(OTHER, theirs.decode())]
+    assert outcome.already == [("t", "foo.htb")]
+    assert outcome.blocked == []
+    assert outcome.written == []
+
+
+def test_other_box_line_before_different_ip_unmarked_line_taken_out():
+    theirs = mine("10.0.0.9", "foo.htb", box_id=OTHER)
+    text = theirs + b"\n10.0.0.7 foo.htb\n"
+    outcome = hosts.rewrite(text, ME, [Wanted("t", "10.0.0.5", ["foo.htb"])])
+    assert outcome.text == b"10.0.0.7 foo.htb\n"
+    assert outcome.taken_out == [(OTHER, theirs.decode())]
+    assert outcome.already == []
+    assert outcome.blocked == [("t", "foo.htb", 2, "10.0.0.7 foo.htb")]
+    assert outcome.written == []
+
+
+def test_other_box_line_after_unmarked_line_taken_out():
+    theirs = mine("10.0.0.9", "foo.htb", box_id=OTHER)
+    text = b"10.0.0.5 foo.htb\n" + theirs + b"\n"
+    outcome = hosts.rewrite(text, ME, [Wanted("t", "10.0.0.5", ["foo.htb"])])
+    assert outcome.text == b"10.0.0.5 foo.htb\n"
+    assert outcome.taken_out == [(OTHER, theirs.decode())]
+    assert outcome.already == [("t", "foo.htb")]
+
+
+def test_non_ascii_name_never_equals_ascii_name():
+    # U+212A KELVIN SIGN lowers to "k" under Unicode rules
+    text = "10.0.0.1 K.htb\n".encode()
+    outcome = hosts.rewrite(text, ME, [Wanted("t", "10.0.0.5", ["k.htb"])])
+    assert outcome.blocked == []
+    assert outcome.already == []
+    assert outcome.text == text + mine("10.0.0.5", "k.htb") + b"\n"
+
+
+def test_non_ascii_name_on_other_box_line_never_takes_it_out():
+    theirs = "10.0.0.9 K.htb  # pwn-broker other".encode()
+    outcome = hosts.rewrite(theirs + b"\n", ME, [Wanted("t", "10.0.0.5", ["k.htb"])])
     assert outcome.taken_out == []
-    assert outcome.blocked == [("dc01", "shared.htb", 1, "10.0.0.5 shared.htb")]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        b"10.0.0.7\x0bk.htb\n",
+        b"10.0.0.7 a.htb\x0bk.htb\n",
+        b"10.0.0.7 a.htb\x0ck.htb\n",
+        b"10.0.0.7 a.htb\rk.htb\n",
+        b"10.0.0.7 k.htb\r",
+    ],
+)
+def test_fields_split_on_space_and_tab_only(text):
+    outcome = hosts.rewrite(text, ME, [Wanted("t", "10.0.0.5", ["k.htb"])])
+    assert outcome.blocked == []
+    assert outcome.already == []
+
+
+def test_fields_split_on_tab():
+    outcome = hosts.rewrite(b"10.0.0.7\tx.htb\t\tk.htb\n", ME, [Wanted("t", "10.0.0.5", ["k.htb"])])
+    assert outcome.blocked == [("t", "k.htb", 1, "10.0.0.7\tx.htb\t\tk.htb")]
 
 
 def test_same_ip_on_unmarked_line_reported_already_and_left_off():
@@ -488,6 +546,27 @@ def test_write_as_user_copies_through_run_and_cleans_up(file, scratch):
         assert run.scratch_seen[1] == "0o600"
     assert file.read_bytes() == after
     assert list(scratch.iterdir()) == []
+
+
+def test_write_as_user_survives_leftover_scratch_file(file, scratch):
+    leftover = scratch / f"hosts-{os.getpid()}.new"
+    leftover.write_bytes(b"left by a crashed run\n")
+    run = FakeRun()
+    after = b"127.0.0.1 localhost\n10.0.0.1 a.htb\n"
+    hosts.write(file, file.read_bytes(), after, root=False, scratch=scratch, run=run)
+    assert file.read_bytes() == after
+    assert Path(run.calls[0][1]) != leftover
+    assert list(scratch.iterdir()) == [leftover]
+    assert leftover.read_bytes() == b"left by a crashed run\n"
+
+
+def test_write_as_user_scratch_names_differ_between_writes(file, scratch):
+    run = FakeRun()
+    first = file.read_bytes()
+    hosts.write(file, first, b"one\n", root=False, scratch=scratch, run=run)
+    hosts.write(file, b"one\n", b"two\n", root=False, scratch=scratch, run=run)
+    assert run.calls[0][1] != run.calls[1][1]
+    assert Path(run.calls[0][1]).name.startswith(f"hosts-{os.getpid()}-")
 
 
 def test_write_as_user_failure_raises_and_cleans_up(file, scratch):
