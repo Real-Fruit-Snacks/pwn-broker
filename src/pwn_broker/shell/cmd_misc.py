@@ -115,6 +115,7 @@ def status(session: Session, args: list[str]) -> None:
         ("started", box.started.date().isoformat()),
         ("status", box.status),
         ("targets", str(len(session.targets))),
+        ("tools", str(len(box.tools))),
         ("creds", str(len(session.creds))),
         ("files", str(len(store.load_files(box)))),
         ("user flag", _flag_line(session, "user")),

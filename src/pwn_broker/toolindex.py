@@ -331,6 +331,19 @@ def load_index(
     return fresh
 
 
+def known_names(paths: AppPaths, settings: Settings) -> list[str]:
+    # for completions: only what is already on disk, never a fetch
+    where = location(settings)
+    try:
+        if is_url(where):
+            index = _read_cached(paths, where)
+        else:
+            index = _parse_bytes((Path(where) / INDEX_FILE).read_bytes())
+    except Exception:
+        return []
+    return sorted(t.name for t in index.tools) if index is not None else []
+
+
 # ---- lookups
 
 

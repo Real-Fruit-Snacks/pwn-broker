@@ -734,3 +734,26 @@ def test_default_index_fetch_is_bounded(monkeypatch):
             toolindex._fetch_index(url, 5.0)
     with _Serve(b"small") as url:
         assert toolindex._fetch_index(url, 5.0) == b"small"
+
+
+def test_known_names_reads_the_cache_without_fetching(paths):
+    toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode()))
+    assert toolindex.known_names(paths, url_settings()) == ["kerbrute"]
+
+
+def test_known_names_is_empty_without_a_cache_or_for_another_source(paths):
+    assert toolindex.known_names(paths, url_settings()) == []
+    toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode()))
+    other = Settings(tools_index="https://example.invalid/other/index.toml")
+    assert toolindex.known_names(paths, other) == []
+
+
+def test_known_names_reads_a_folder_index_and_survives_a_bad_one(paths, tmp_path):
+    folder = tmp_path / "shop"
+    folder.mkdir()
+    settings = Settings(tools_index=str(folder))
+    assert toolindex.known_names(paths, settings) == []
+    (folder / "index.toml").write_text(index_text(), encoding="utf-8")
+    assert toolindex.known_names(paths, settings) == ["kerbrute"]
+    (folder / "index.toml").write_text("broken = [", encoding="utf-8")
+    assert toolindex.known_names(paths, settings) == []

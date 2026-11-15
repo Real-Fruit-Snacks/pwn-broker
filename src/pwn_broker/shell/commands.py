@@ -8,6 +8,7 @@ from pwn_broker.creds import CredError
 from pwn_broker.note import NoteError
 from pwn_broker.session import Session
 from pwn_broker.store import StoreError
+from pwn_broker.toolpkg import ToolError
 
 Handler = Callable[[Session, list[str]], None]
 
@@ -18,7 +19,7 @@ class Quit(Exception):
 
 COMMANDS: dict[str, tuple[Handler, str]] = {}
 
-_HANDLED = (BoxError, CredError, StoreError, ArchiveError, NoteError, ValueError, OSError)
+_HANDLED = (BoxError, CredError, StoreError, ArchiveError, NoteError, ToolError, ValueError, OSError)
 
 
 def command(name: str, help: str) -> Callable[[Handler], Handler]:

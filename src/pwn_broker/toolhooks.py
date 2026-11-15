@@ -1,7 +1,7 @@
 from collections.abc import Callable
 from pathlib import Path
 
-from pwn_broker import boxes as boxlist, lifecycle, tooldata, toolindex, toolinstall, toolstate
+from pwn_broker import lifecycle, tooldata, toolindex, toolinstall, toolstate
 from pwn_broker.console import Cancelled, Console
 from pwn_broker.model import ToolRecord
 from pwn_broker.paths import AppPaths
@@ -38,6 +38,11 @@ def _others(item: Installed, box_id: str, unfinished: dict[str, str]) -> bool:
 # ---- finish and export
 
 
+def running_text(paths: AppPaths, tool: str, pid: int) -> str:
+    marker = toolstate.mark_path(paths, tool, pid)
+    return f"{tool} is still running (process {pid}); stop it first, or remove {marker} if it is not"
+
+
 def block(
     session: Session,
     *,
@@ -49,9 +54,7 @@ def block(
         return None
     found = toolstate.running(session.paths, names, alive=alive, started=started)
     if found:
-        tool, pid = found[0]
-        marker = toolstate.mark_path(session.paths, tool, pid)
-        return f"{tool} is still running (process {pid}); stop it first, or remove {marker} if it is not"
+        return running_text(session.paths, *found[0])
     try:
         load_installed(session.paths)
     except ToolError:
@@ -113,16 +116,8 @@ def undo(session: Session) -> None:
     if not box.tools:
         return
     installed = load_installed(session.paths)
-    unfinished = unfinished_boxes(session.paths)
     # the box being finished is freed whatever its status reads at this moment
-    unfinished.pop(box.id, None)
-    if toolstate.unreadable_boxes(session.paths):
-        # a box that cannot be read may still use a tool: keep it for every user not known to be done
-        known = {b.id for b in boxlist.list_boxes(session.paths)[0]}
-        for item in installed.values():
-            for user in item.users:
-                if user != box.id and user not in known:
-                    unfinished[user] = "a box that cannot be read"
+    unfinished = toolstate.holding_boxes(session.paths, installed, excluding=box.id)
     homes = _homes()
     problems: list[str] = []
     kept_records = list(box.tools)

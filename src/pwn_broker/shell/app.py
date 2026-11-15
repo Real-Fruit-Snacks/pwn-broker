@@ -10,6 +10,7 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
 
+from pwn_broker import toolindex
 from pwn_broker.boxes import TARGET_FOLDERS
 from pwn_broker.session import Session, rescan
 from pwn_broker.shell.commands import COMMANDS, Quit, dispatch
@@ -23,6 +24,8 @@ PATH_FOLDERS = tuple(sorted({*TARGET_FOLDERS, "lists", "screenshots"}))
 IMPORT_COMMAND = "cred import "
 
 _TARGET_ARG = re.compile(r"(" + "|".join(TARGET_ARG_COMMANDS) + r") (\S*)")
+_TOOL_INDEX_ARG = re.compile(r"(tool install|tool info) (\S*)")
+_TOOL_BOX_ARG = re.compile(r"(tool remove) (\S*)")
 _PATH_ARG = re.compile(re.escape(PATH_COMMAND) + r" (\S*)")
 
 
@@ -40,9 +43,28 @@ def toolbar_text(session: Session, now: datetime) -> str:
         parts.append(f"{target.name}  {address}" if address else target.name)
     count = len(session.targets)
     parts.append(f"{count} target" if count == 1 else f"{count} targets")
+    tools = len(session.box.tools)
+    if tools:
+        parts.append(f"{tools} tool" if tools == 1 else f"{tools} tools")
     minutes = max(0, int((now - session.box.started).total_seconds())) // 60
     parts.append(f"{minutes // 60:02d}:{minutes % 60:02d}")
     return " " + "   ".join(parts)
+
+
+def _tool_names(session: Session, text: str) -> set[str]:
+    # only what is already on disk: a completion must never fetch or wait
+    try:
+        match = _TOOL_INDEX_ARG.fullmatch(text)
+        if match:
+            names = toolindex.known_names(session.paths, session.settings)
+        else:
+            match = _TOOL_BOX_ARG.fullmatch(text)
+            if not match:
+                return set()
+            names = [t.name for t in session.box.tools]
+        return {f"{match[1]} {n}" for n in names if n.startswith(match[2])}
+    except Exception:
+        return set()
 
 
 def completions(session: Session, text: str) -> list[str]:
@@ -53,6 +75,7 @@ def completions(session: Session, text: str) -> list[str]:
         found.update(
             f"{command} {t.name}" for t in session.targets if t.name.startswith(partial)
         )
+    found.update(_tool_names(session, text))
     match = _PATH_ARG.fullmatch(text)
     if match:
         found.update(

@@ -153,6 +153,7 @@ def test_status_shows_box_at_a_glance(session):
         "started   2026-11-14",
         "status    active",
         "targets   1",
+        "tools     0",
         "creds     1",
         "files     1",
         "user flag recorded 12:00",

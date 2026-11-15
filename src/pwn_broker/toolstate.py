@@ -124,6 +124,29 @@ def unreadable_boxes(paths: AppPaths) -> list[str]:
     return problems
 
 
+def holding_boxes(
+    paths: AppPaths, installed: dict[str, Installed], *, excluding: str | None = None
+) -> dict[str, str]:
+    """The boxes that count as still using tools, id to name.
+
+    The box being released is left out. While any box cannot be read, every user of a tool
+    that is not a box the listing could load is kept, so nothing is removed on a guess.
+    """
+    from pwn_broker import boxes
+
+    found, problems = boxes.list_boxes(paths)
+    holding = {b.id: b.name for b in found if b.status == "active"}
+    if excluding is not None:
+        holding.pop(excluding, None)
+    if problems:
+        known = {b.id for b in found}
+        for item in installed.values():
+            for user in item.users:
+                if user != excluding and user not in known:
+                    holding[user] = "a box that cannot be read"
+    return holding
+
+
 def _resolve_alive(alive: Callable[[int], bool] | None) -> Callable[[int], bool]:
     if alive is not None:
         return alive

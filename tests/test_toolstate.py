@@ -279,3 +279,16 @@ def test_unreadable_boxes_names_the_folders_that_cannot_be_loaded(paths, box):
     (broken / "box.toml").write_text("nope [", encoding="utf-8")
     [problem] = unreadable_boxes(paths)
     assert problem.startswith("broken: ")
+
+
+def test_holding_boxes_drops_the_box_being_released(paths, box, other):
+    found = toolstate.holding_boxes(paths, {}, excluding=box.id)
+    assert found == {other.id: other.name}
+
+
+def test_holding_boxes_keeps_every_unknown_user_while_a_box_cannot_be_read(paths, box, other):
+    (paths.active / "broken").mkdir()
+    (paths.active / "broken" / "box.toml").write_text("nope [", encoding="utf-8")
+    ghost = item("ghost", users=["gone-box", box.id])
+    found = toolstate.holding_boxes(paths, {"ghost": ghost}, excluding=box.id)
+    assert found == {other.id: other.name, "gone-box": "a box that cannot be read"}
