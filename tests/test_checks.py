@@ -1,12 +1,17 @@
 import json
 import os
+import threading
+import time
 
 import pytest
 
+from pwn_broker import checks
 from pwn_broker.checks import (
     CheckResult,
     latest_version,
+    launch_checks,
     newer,
+    newer_release_within,
     report,
     run_checks,
     version_check,
@@ -132,7 +137,7 @@ def test_report_lists_each_problem_and_offers_repair():
     assert fixed == [1]
     assert c.asked == ["fix it now?"]
     assert c.lines == [
-        ("ok", "1 checks passed"),
+        ("ok", "1 check passed"),
         ("warn", "path   not on PATH"),
         ("info", "open a new terminal"),
         ("ok", "path fixed"),
@@ -169,6 +174,66 @@ def test_report_repair_oserror_prints_fail():
     c = FakeConsole(["y"])
     report(c, [CheckResult("folders", "warn", "m", repair=boom)])
     assert c.lines[-1] == ("fail", "disk full")
+
+
+def test_report_repair_valueerror_prints_one_fail():
+    def boom():
+        raise ValueError("bad text")
+
+    c = FakeConsole(["y"])
+    report(c, [CheckResult("path", "warn", "m", repair=boom)])
+    assert c.lines == [("warn", "path   m"), ("fail", "bad text")]
+
+
+@pytest.mark.parametrize("count,line", [(1, "1 check passed"), (2, "2 checks passed"), (7, "7 checks passed")])
+def test_report_count_is_singular_for_one(count, line):
+    c = FakeConsole()
+    report(c, [CheckResult("vim", "ok", "")] * count)
+    assert c.lines == [("ok", line)]
+
+
+def test_newer_release_within_returns_the_result(monkeypatch):
+    found = CheckResult("version", "warn", "9.9 is available")
+    monkeypatch.setattr(checks, "version_check", lambda settings: found)
+    assert newer_release_within(Settings()) is found
+
+
+def test_newer_release_within_gives_up_after_the_timeout(monkeypatch):
+    release = threading.Event()
+    monkeypatch.setattr(checks, "version_check", lambda settings: release.wait(10))
+    started = time.monotonic()
+    try:
+        assert newer_release_within(Settings(), timeout=0.05) is None
+        assert time.monotonic() - started < 2
+    finally:
+        release.set()
+
+
+def test_newer_release_within_swallows_errors(monkeypatch):
+    def boom(settings):
+        raise RuntimeError("no network")
+
+    monkeypatch.setattr(checks, "version_check", boom)
+    assert newer_release_within(Settings()) is None
+
+
+def test_path_repair_also_writes_bashrc_when_it_exists(paths, tmp_path):
+    home = tmp_path / "user"
+    home.mkdir()
+    (home / ".bashrc").write_text("# mine\n", encoding="utf-8")
+    [path] = [r for r in launch_checks(paths, Settings(), {"PATH": ""}, home, include_version=False) if r.name == "path"]
+    path.repair()
+    for rc in (".zshrc", ".bashrc"):
+        assert paths.bin.as_posix() in (home / rc).read_text(encoding="utf-8")
+    assert (home / ".bashrc").read_text(encoding="utf-8").startswith("# mine\n")
+
+
+def test_path_repair_leaves_a_missing_bashrc_alone(paths, tmp_path):
+    home = tmp_path / "user"
+    home.mkdir()
+    [path] = [r for r in launch_checks(paths, Settings(), {"PATH": ""}, home, include_version=False) if r.name == "path"]
+    path.repair()
+    assert (home / ".zshrc").exists() and not (home / ".bashrc").exists()
 
 
 def test_newer():

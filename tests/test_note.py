@@ -153,3 +153,17 @@ def test_update_table_accepts_markers_with_trailing_spaces(dc01):
 
 def test_append_section_with_empty_template_changes_nothing(dc01):
     assert append_section("text\n\n", "", dc01) == "text\n\n"
+
+
+def test_append_section_fills_the_box_fields_like_render_note(box, dc01):
+    section = "## $target on $name ($platform, $os, $difficulty, $date) $5\n"
+    out = append_section("top\n", section, dc01, box)
+    assert out == "top\n\n## dc01 on forest (htb, windows, easy, 2026-11-14) $5\n"
+    assert render_note(SECTION_MARK + "\n" + section, box, [dc01]).endswith(out[len("top\n\n"):])
+    assert append_section("", section, dc01) == "## dc01 on $name ($platform, $os, $difficulty, $date) $5\n"
+
+
+def test_read_note_that_is_not_utf8_raises_note_error_naming_it(box):
+    (box.path / NOTE_NAME).write_bytes(b"# forest\n\xff\xfe broken\n")
+    with pytest.raises(NoteError, match="notes.md"):
+        read_note(box)

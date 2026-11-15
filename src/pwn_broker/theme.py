@@ -18,6 +18,9 @@ def prompt_style() -> Style:
     return Style.from_dict(
         {
             "prompt": f"{EMBER} bold",
+            # questions asked by commands: only the shell prompt is Ember
+            "question": MUTE,
+            "answer": TEXT,
             "toolbar": MUTE,
             # the default bottom-toolbar style is reverse video
             "bottom-toolbar": f"noreverse {MUTE} bg:default",

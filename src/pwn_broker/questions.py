@@ -96,7 +96,10 @@ class CredAnswers:
     works_on: list[str] = field(default_factory=list)
 
 
-def ask_value(console: Console, label: str, default: str | None = None) -> str:
+def ask_value(
+    console: Console, label: str, default: str | None = None, *, sentinel: str | None = None
+) -> str:
+    # `sentinel` is an answer with its own meaning (the "-" for no domain), returned as typed
     while True:
         answer = console.ask(label, default)
         try:
@@ -105,9 +108,9 @@ def ask_value(console: Console, label: str, default: str | None = None) -> str:
             console.fail(str(exc))
             continue
         break
-    if not has_edge_space(answer):
+    if answer == sentinel or not has_edge_space(answer):
         return answer
-    console.info(f"the {label} starts or ends with a space")
+    console.warn(f"the {label} starts or ends with a space")
     while True:
         choice = console.ask("keep or trim", "keep")
         if choice == "keep":
@@ -118,7 +121,7 @@ def ask_value(console: Console, label: str, default: str | None = None) -> str:
 
 def ask_domain(console: Console, session: Session, current: str | None = None) -> str:
     default = last_domain(session.creds) if current is None else current
-    answer = console.ask("domain", default or None)
+    answer = ask_value(console, "domain", default or None, sentinel="-")
     # a lone "-" is how a default domain is declined
     return "" if answer == "-" else answer
 
@@ -179,7 +182,7 @@ def ask_cred(console: Console, session: Session, defaults: Cred | None = None) -
 
     found_on = ask_found_on(console, session, defaults.found_on if defaults else None)
     works_on = ask_works_on(console, session, defaults.works_on) if defaults else []
-    note = console.ask("note", (defaults.note if defaults else "") or None)
+    note = ask_value(console, "note", (defaults.note if defaults else "") or None)
     return CredAnswers(username, domain, secret, kind, found_on, note, works_on)
 
 

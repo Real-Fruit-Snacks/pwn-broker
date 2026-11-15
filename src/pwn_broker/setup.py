@@ -35,8 +35,11 @@ def path_line(opt_bin: Path) -> str:
 
 def ensure_path_line(rc: Path, opt_bin: Path) -> bool:
     line = path_line(opt_bin)
+    # a dotfiles symlink stays a link: the file it points at is the one that changes
+    rc = rc.resolve()
     try:
-        with open(rc, encoding="utf-8", newline="") as fh:
+        # surrogateescape carries bytes that are not UTF-8 through unchanged
+        with open(rc, encoding="utf-8", errors="surrogateescape", newline="") as fh:
             existing = fh.read()
     except FileNotFoundError:
         write_text(rc, line + "\n", newline="")
@@ -44,7 +47,7 @@ def ensure_path_line(rc: Path, opt_bin: Path) -> bool:
     if any(PATH_MARK in row for row in existing.splitlines()):
         return False
     lead = "" if not existing or existing.endswith("\n") else "\n"
-    write_text(rc, existing + lead + line + "\n", newline="")
+    write_text(rc, existing + lead + line + "\n", newline="", errors="surrogateescape")
     return True
 
 

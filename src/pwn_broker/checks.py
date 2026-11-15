@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import threading
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -90,7 +91,7 @@ def run_checks(
 def report(console: Console, results: list[CheckResult]) -> None:
     passed = sum(1 for r in results if r.status == "ok")
     if passed:
-        console.ok(f"{passed} checks passed")
+        console.ok("1 check passed" if passed == 1 else f"{passed} checks passed")
     for result in results:
         if result.status == "ok":
             continue
@@ -114,7 +115,7 @@ def _offer_repair(console: Console, name: str, repair: Callable[[], None]) -> No
         return
     try:
         repair()
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         console.fail(str(exc))
     else:
         console.ok(f"{name} fixed")
@@ -168,6 +169,22 @@ def version_check(
     return CheckResult("version", "warn", f"{latest} is available, this is {current}")
 
 
+def newer_release_within(settings: Settings, timeout: float = 2.0) -> CheckResult | None:
+    # a slow or hanging network must never hold up the prompt
+    found: list[CheckResult | None] = []
+
+    def look() -> None:
+        try:
+            found.append(version_check(settings))
+        except Exception:
+            pass
+
+    thread = threading.Thread(target=look, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    return found[0] if found else None
+
+
 def launch_checks(
     paths: AppPaths,
     settings: Settings,
@@ -175,12 +192,13 @@ def launch_checks(
     home: Path,
     include_version: bool = True,
 ) -> list[CheckResult]:
-    results = run_checks(
-        paths,
-        settings,
-        env,
-        repair_path=lambda: setup.ensure_path_line(home / ".zshrc", paths.bin),
-    )
+    def add_path_lines() -> None:
+        # the same rc files the installer writes to
+        setup.ensure_path_line(home / ".zshrc", paths.bin)
+        if (home / ".bashrc").exists():
+            setup.ensure_path_line(home / ".bashrc", paths.bin)
+
+    results = run_checks(paths, settings, env, repair_path=add_path_lines)
     if include_version:
         version = version_check(settings)
         if version is not None:

@@ -17,11 +17,11 @@ class StoreError(Exception):
     pass
 
 
-def write_text(path: Path, text: str, *, newline: str = "\n") -> None:
+def write_text(path: Path, text: str, *, newline: str = "\n", errors: str = "strict") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=TEMP_PREFIX, suffix=TEMP_SUFFIX)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", errors=errors, newline=newline) as fh:
             fh.write(text)
         # mkstemp makes the file 0600; keep the old mode, or the usual default for a new file
         if path.exists():

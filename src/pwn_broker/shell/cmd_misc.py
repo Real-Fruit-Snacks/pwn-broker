@@ -4,6 +4,7 @@ from pathlib import Path
 from pwn_broker import boxes, checks, notewindow, store
 from pwn_broker.model import FileRecord, Flag
 from pwn_broker.note import NOTE_NAME, NoteError
+from pwn_broker.questions import ask_value
 from pwn_broker.session import Session, write_new_note
 from pwn_broker.store import StoreError
 from pwn_broker.shell.commands import COMMANDS, command, take_args
@@ -47,7 +48,7 @@ def _flag(which: str):
     def handler(session: Session, args: list[str]) -> None:
         take_args(args)
         console = session.console
-        value = console.ask("flag")
+        value = ask_value(console, "flag")
         if value == "":
             console.fail("no flag typed")
             return
@@ -126,7 +127,12 @@ def status(session: Session, args: list[str]) -> None:
 @command("check", "run the setup checks again")
 def check(session: Session, args: list[str]) -> None:
     take_args(args)
-    results = checks.launch_checks(session.paths, session.settings, os.environ, Path.home())
+    results = checks.launch_checks(
+        session.paths, session.settings, os.environ, Path.home(), include_version=False
+    )
+    newer = checks.newer_release_within(session.settings)
+    if newer is not None:
+        results.append(newer)
     checks.report(session.console, results)
 
 

@@ -96,6 +96,27 @@ def test_ensure_path_line_creates_missing_rc(tmp_path):
     assert rc.read_bytes() == path_line(Path("/o/bin")).encode() + b"\n"
 
 
+def test_ensure_path_line_keeps_an_rc_that_is_not_utf8(tmp_path):
+    rc = tmp_path / ".zshrc"
+    rc.write_bytes(b"alias caf\xe9=ls\n")
+    assert ensure_path_line(rc, Path("/o/bin")) is True
+    assert rc.read_bytes() == b"alias caf\xe9=ls\n" + path_line(Path("/o/bin")).encode() + b"\n"
+    assert ensure_path_line(rc, Path("/o/bin")) is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_ensure_path_line_writes_through_a_symlinked_rc(tmp_path):
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    real = dotfiles / "zshrc"
+    real.write_text("alias a=b\n", encoding="utf-8")
+    rc = tmp_path / ".zshrc"
+    rc.symlink_to(real)
+    assert ensure_path_line(rc, Path("/o/bin")) is True
+    assert rc.is_symlink() and rc.resolve() == real.resolve()
+    assert real.read_text(encoding="utf-8") == "alias a=b\n" + path_line(Path("/o/bin")) + "\n"
+
+
 def test_load_template_falls_back_to_packaged(paths):
     assert load_template(paths) == packaged("notes.md")
     install_data(paths)

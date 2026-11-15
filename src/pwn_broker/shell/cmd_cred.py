@@ -3,7 +3,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TypeVar
 
-from pwn_broker import boxes, creds
+from pwn_broker import boxes, creds, store
 from pwn_broker.lists import ListSummary
 from pwn_broker.model import Cred
 from pwn_broker.questions import ask_cred, ask_domain, ask_found_on
@@ -36,6 +36,11 @@ def _guarded(session: Session, change: Callable[[], T]) -> T:
         return change()
     except BaseException:
         session.creds[:] = snapshot
+        # the change may have reached disk before the step that failed; put that back too
+        try:
+            store.save_creds(session.box, session.creds)
+        except Exception:
+            pass
         raise
 
 

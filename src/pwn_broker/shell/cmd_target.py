@@ -38,7 +38,7 @@ def target_add(session: Session, args: list[str]) -> None:
 
     def add_section(text: str) -> str:
         _, section = note.split_template(setup.load_template(session.paths))
-        return note.append_section(text, section, target)
+        return note.append_section(text, section, target, session.box)
 
     _update_note(session, add_section)
     set_current(session, target)

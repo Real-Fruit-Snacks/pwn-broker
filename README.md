@@ -36,7 +36,7 @@ pwn-broker import <file>   unpack an exported box
 pwn-broker resume [name]   reopen an active box
 ```
 
-Launch runs a few checks, then offers a new box, an import, or any active box to resume. Only one box is open at a time. The prompt commands:
+Launch runs a few checks, then offers a new box, an import, any active box to resume, or a finished box that is still on disk to reopen. Only one box is open at a time. The prompt commands:
 
 | Command | Does |
 |---|---|
@@ -101,9 +101,9 @@ Edits made by hand to these files are overwritten at the next rebuild.
 
 ## Tested on
 
-- The unit tests, on Windows 11 with Python 3.13: 567 passed, 13 skipped. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer).
+- The unit tests, on Windows 11 with Python 3.13: 689 passed, 15 skipped. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer).
 - *Not* tested: Kali Linux. The app has not been run there.
-- *Not* tested: `install.sh`. It passes `sh -n` and its help and option handling are tested, but it has not been run end to end.
+- *Not* tested: `install.sh`. It passes `sh -n`, its help and option handling are tested, and so is how it treats an existing `app/` folder (with a stand-in for `python3`), but it has not been run end to end.
 - *Not* tested: the note window and the prompt on a real terminal.
 
 ## Known issues
@@ -113,6 +113,7 @@ Edits made by hand to these files are overwritten at the next rebuild.
 - `cred edit` cannot clear a secret or a note. Remove the credential and add it again.
 - A file whose name contains a backslash stops `finish` and `export` until it is renamed.
 - Tabs inside a secret show as spaces in `cred list`. `cred show` prints them unchanged.
+- Links and special files (named pipes, sockets, devices) in a box are not archived. `export` and `finish` list them, and `finish` says how many will go when the folder is removed.
 
 ## Configuration
 

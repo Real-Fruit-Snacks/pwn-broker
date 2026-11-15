@@ -34,16 +34,19 @@ def table_lines(targets: list[Target]) -> list[str]:
     ]
 
 
-def render_note(template: str, box: Box, targets: list[Target]) -> str:
-    header, section = split_template(template)
-    values = {
+def _box_values(box: Box) -> dict[str, str]:
+    return {
         "name": box.name,
         "platform": box.platform,
         "date": box.started.date().isoformat(),
         "os": box.os or "",
         "difficulty": box.difficulty or "",
-        "targets": "\n".join(table_lines(targets)),
     }
+
+
+def render_note(template: str, box: Box, targets: list[Target]) -> str:
+    header, section = split_template(template)
+    values = {**_box_values(box), "targets": "\n".join(table_lines(targets))}
     parts = [Template(header).safe_substitute(values)]
     for target in targets:
         parts.append("\n" + Template(section).safe_substitute(values, target=target.name))
@@ -81,10 +84,11 @@ def update_table(text: str, targets: list[Target]) -> str:
     return "".join(lines[: begin + 1] + new + lines[end:])
 
 
-def append_section(text: str, section_template: str, target: Target) -> str:
+def append_section(text: str, section_template: str, target: Target, box: Box | None = None) -> str:
     if not section_template:
         return text
-    section = Template(section_template).safe_substitute(target=target.name)
+    values = _box_values(box) if box is not None else {}
+    section = Template(section_template).safe_substitute(values, target=target.name)
     section = section.rstrip("\r\n") + "\n"
     base = text.rstrip("\r\n")
     return f"{base}\n\n{section}" if base else section
@@ -96,8 +100,12 @@ def rename_heading(text: str, old: str, new: str) -> str:
 
 
 def read_note(box: Box) -> str:
-    with open(box.path / NOTE_NAME, encoding="utf-8", newline="") as fh:
-        return fh.read()
+    path = box.path / NOTE_NAME
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            return fh.read()
+    except UnicodeDecodeError as exc:
+        raise NoteError(f"{path} is not valid UTF-8 text, so it was left as it is ({exc.reason})") from None
 
 
 def write_note(box: Box, text: str) -> None:

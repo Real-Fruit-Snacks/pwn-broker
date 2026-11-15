@@ -496,15 +496,15 @@ def test_install_failure_suggests_repair(env, quiet, monkeypatch):
     assert env.console.lines[-1] == ("info", "run the installer again to repair the install")
 
 
-def test_version_check_overlaps_the_checks(env, quiet, monkeypatch, box, ran):
+def test_start_runs_the_checks_then_the_update_check(env, quiet, monkeypatch, box, ran):
     order = []
     monkeypatch.setattr(checks, "version_check", lambda s: order.append("version"))
     monkeypatch.setattr(
-        checks, "launch_checks", lambda *a, **k: order.append("checks") or []
+        checks, "launch_checks", lambda *a, **k: order.append(("checks", k)) or []
     )
     env.cwd = box.path
     start(env, [])
-    assert sorted(order) == ["checks", "version"]
+    assert order == [("checks", {"include_version": False}), "version"]
 
 
 def test_main_reports_unexpected_errors(monkeypatch, tmp_path, capsys):

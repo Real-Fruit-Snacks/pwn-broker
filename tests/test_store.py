@@ -163,7 +163,6 @@ def test_none_values_are_omitted_and_read_back_as_none(box):
     assert "finished" not in read_toml(box.path / "box.toml")
     got = load_box(box.path)
     assert got.finished is None and got.last_target is None
-    assert os.path.exists(box.path / "box.toml")
 
 
 def test_write_text_writes_content_and_leaves_no_temp_file(tmp_path):

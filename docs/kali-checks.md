@@ -10,7 +10,7 @@ Then `sh install.sh --from .`, open a new terminal, and work one box end to end.
 - [ ] The palette shows as the brand hex values, and `NO_COLOR=1 pwn-broker` prints no colour.
 - [ ] `cred add` with `p@ss "word" with spaces\` round-trips through `cred show` and `lists/passwords.txt` unchanged.
 - [ ] As a normal user: `sudo nmap -oA` into a target's `scans/`, then `finish`. The archive is written and verified, and the folder can be removed.
-- [ ] `sudo pwn-broker` as the normal user refuses to start and names the user.
+- [ ] `sudo /opt/pwn-broker/bin/pwn-broker` as the normal user refuses to start and names the user (the full path, because `sudo` does not search the user's PATH).
 - [ ] `export`, copy the file to a second VM, `pwn-broker import <file>`: targets, note, creds and flags are all there and the prompt opens on the last target.
 - [ ] A second `pwn-broker` in another terminal, while a box is open, refuses and names the open box.
 - [ ] At a question, Ctrl-C cancels that command and returns to the prompt. Ctrl-D at the prompt offers the export and quits.

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from pwn_broker import config
 from pwn_broker.config import (
     ConfigError,
     Settings,
@@ -13,12 +14,30 @@ from pwn_broker.config import (
 )
 
 
-def test_defaults(tmp_path):
-    paths, settings = load({}, home_dir=tmp_path)
+def test_default_install_root_without_reading_it(tmp_path, monkeypatch):
+    read = []
+    monkeypatch.setattr(config, "_read_toml", lambda path: read.append(path) or {})
+    paths, _ = load({}, home_dir=tmp_path)
     assert paths.opt == Path("/opt/pwn-broker")
+    assert read == [Path("/opt/pwn-broker/config.toml")]
+
+
+def test_defaults(tmp_path):
+    paths, settings = load({"PWN_BROKER_OPT": str(tmp_path / "opt")}, home_dir=tmp_path)
     assert paths.home == tmp_path / "pwn-broker"
     assert paths.active == paths.home / "active" and paths.wrapped == paths.home / "wrapped"
     assert settings == Settings()
+
+
+@pytest.mark.parametrize("key", ["home", "copy_to"])
+def test_empty_path_setting_means_not_set(tmp_path, key):
+    opt = tmp_path / "opt"
+    opt.mkdir()
+    (opt / "config.toml").write_text(f'{key} = ""\n')
+    env = {"PWN_BROKER_OPT": str(opt), "PWN_BROKER_HOME": str(tmp_path / "h")}
+    paths, settings = load(env, home_dir=tmp_path)
+    assert getattr(settings, key) is None
+    assert paths.home == tmp_path / "h"
 
 
 def test_config_file_overrides(tmp_path):
@@ -33,7 +52,8 @@ def test_config_file_overrides(tmp_path):
 
 
 def test_env_home_override(tmp_path):
-    paths, _ = load({"PWN_BROKER_HOME": str(tmp_path / "h")}, home_dir=tmp_path)
+    env = {"PWN_BROKER_OPT": str(tmp_path / "opt"), "PWN_BROKER_HOME": str(tmp_path / "h")}
+    paths, _ = load(env, home_dir=tmp_path)
     assert paths.home == tmp_path / "h"
 
 

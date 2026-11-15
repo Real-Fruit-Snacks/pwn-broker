@@ -697,6 +697,24 @@ def test_replace_reports_where_the_old_box_is_when_restore_fails(replacing, monk
     assert not any(n.startswith(".import-") for n in os.listdir(active))
 
 
+def test_replace_names_the_parked_box_when_the_destination_reappears(replacing, monkeypatch):
+    dest, active, existing = replacing
+    real = os.replace
+
+    def blocked(src, dst):
+        if os.path.basename(dst) == existing.name and ".import-" in os.fspath(src):
+            os.mkdir(dst)
+            raise OSError("destination is in use")
+        return real(src, dst)
+
+    monkeypatch.setattr(archive.os, "replace", blocked)
+    with pytest.raises(ArchiveError) as caught:
+        unpack(dest, active, replace=True)
+    [parked] = [active / n for n in os.listdir(active) if ".replaced-" in n]
+    assert str(parked) in str(caught.value)
+    assert (parked / "old.txt").read_text() == "old"
+
+
 def test_replace_restores_old_box_on_interrupt(replacing, monkeypatch):
     dest, active, existing = replacing
     fail_move_into(monkeypatch, existing.name, times=1, exc=KeyboardInterrupt())

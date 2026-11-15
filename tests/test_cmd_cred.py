@@ -5,6 +5,7 @@ import pytest
 from helpers import NASTY, NOW, make_cred
 from pwn_broker import session as session_module
 from pwn_broker import shell  # noqa: F401  (fills the command registry)
+from pwn_broker import store
 from pwn_broker.boxes import add_target
 from pwn_broker.config import Settings
 from pwn_broker.console import FakeConsole, TermConsole
@@ -45,12 +46,40 @@ def test_ask_value_keep_trim_and_reask():
     console = FakeConsole([" pw ", "maybe", "trim"])
     assert ask_value(console, "secret") == "pw"
     assert console.asked == ["secret", "keep or trim", "keep or trim"]
-    assert [k for k, _ in console.lines] == ["info"]
+    assert console.lines == [("warn", "the secret starts or ends with a space")]
     assert ask_value(FakeConsole([" pw ", ""]), "secret") == " pw "
 
 
 def test_ask_value_default():
     assert ask_value(FakeConsole([""]), "secret", "old") == "old"
+
+
+def test_ask_cred_catches_a_multiline_domain_at_the_question(session):
+    console = FakeConsole(["bob", "HTB\nCORP", "CORP", "", "", ""])
+    got = ask_cred(console, session)
+    assert got.domain == "CORP"
+    assert console.asked[:3] == ["username", "domain", "domain"]
+    assert len([k for k, _ in console.lines if k == "fail"]) == 1
+
+
+def test_ask_cred_domain_dash_is_not_an_edge_space_question(session):
+    _seed(session, domain="CORP")
+    console = FakeConsole(["bob", "-", "", "", ""])
+    assert ask_cred(console, session).domain == ""
+    assert "keep or trim" not in console.asked
+
+
+@pytest.mark.parametrize("answer, stored", [("keep", " CORP "), ("trim", "CORP")])
+def test_ask_cred_domain_edge_space_asks_keep_or_trim(session, answer, stored):
+    console = FakeConsole(["bob", " CORP ", answer, "", "", ""])
+    assert ask_cred(console, session).domain == stored
+    assert console.asked[:3] == ["username", "domain", "keep or trim"]
+
+
+def test_ask_cred_catches_a_multiline_note_and_edge_spaces_at_the_question(session):
+    console = FakeConsole(["bob", "", "", "", "line one\nline two", " n ", "trim"])
+    assert ask_cred(console, session).note == "n"
+    assert console.asked[-3:] == ["note", "note", "keep or trim"]
 
 
 def test_ask_cred_blank_secret_skips_kind(session):
@@ -201,6 +230,44 @@ def test_failed_save_restores_edit_remove_and_works(session, monkeypatch):
         assert _lines(session, "ok") == [], line
 
 
+def _break_lists(monkeypatch):
+    def broken(box, targets, creds):
+        raise OSError("lists folder is read-only")
+
+    monkeypatch.setattr(session_module, "rebuild_lists", broken)
+
+
+def test_failure_after_the_save_puts_disk_back_too(session, monkeypatch):
+    _seed(session, secret="old")
+    session_module.save_creds(session.box, session.creds)
+    _break_lists(monkeypatch)
+    session.console = FakeConsole(["bob", "", "pw", "", "", ""])
+    dispatch(session, "cred add")
+    assert [c.username for c in session.creds] == ["administrator"]
+    assert load_creds(session.box) == session.creds
+    assert _lines(session, "fail") == ["lists folder is read-only"]
+
+
+def test_failure_of_the_second_save_is_ignored(session, monkeypatch):
+    _break_lists(monkeypatch)
+    real = store.save_creds
+    calls = []
+
+    def flaky(box, creds):
+        calls.append(len(creds))
+        if len(calls) > 1:
+            raise OSError("disk gone")
+        real(box, creds)
+
+    monkeypatch.setattr(session_module, "save_creds", flaky)
+    monkeypatch.setattr(store, "save_creds", flaky)
+    session.console = FakeConsole(["bob", "", "pw", "", "", ""])
+    dispatch(session, "cred add")
+    assert calls == [1, 0]
+    assert session.creds == []
+    assert _lines(session, "fail") == ["lists folder is read-only"]
+
+
 def test_remove_remembers_the_number_on_an_old_box(session):
     _seed(session)
     assert "last_cred_n" not in session.box.extra
@@ -268,6 +335,7 @@ def test_username_and_note_are_exact(session, value):
     answers = [value, "", "", "", value]
     if has_edge_space(value):
         answers.insert(1, "keep")
+        answers.append("keep")
     session.console = FakeConsole(answers)
     dispatch(session, "cred add")
     [c] = load_creds(session.box)
@@ -494,6 +562,18 @@ def test_cred_import_missing_directory_and_binary_fail(session, tmp_path):
         assert kind == "fail" and str(target) in text
         assert session.console.asked == []
     assert session.creds == []
+
+
+def test_cred_add_works_with_a_note_that_is_not_utf8(session):
+    note = session.box.path / "notes.md"
+    note.write_bytes(b"# forest\n\xff broken\n")
+    session.console = FakeConsole(["bob", "", "pw", "", "", ""])
+    dispatch(session, "cred add")
+    assert [c.username for c in load_creds(session.box)] == ["bob"]
+    assert _lines(session, "ok")[0] == "cred 1 saved, found on dc01"
+    [warn] = _lines(session, "warn")
+    assert "notes.md" in warn
+    assert note.read_bytes() == b"# forest\n\xff broken\n"
 
 
 def test_colon_username_prints_warn(session):

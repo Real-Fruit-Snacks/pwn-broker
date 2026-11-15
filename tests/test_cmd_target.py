@@ -93,6 +93,16 @@ def test_target_add_updates_everything(session):
     assert ("ok", "target web01 created") in session.console.lines
 
 
+def test_target_add_section_template_can_use_box_fields(session):
+    session.paths.templates.mkdir(parents=True)
+    template = f"# $name\n{note.SECTION_MARK}\n## $target on $name ($platform)\n"
+    (session.paths.templates / "notes.md").write_text(template, encoding="utf-8")
+    session.console = FakeConsole(["10.10.10.50", "", "", "web01"])
+    dispatch(session, "target add")
+    text = (session.box.path / "notes.md").read_text(encoding="utf-8")
+    assert text.rstrip().endswith("## web01 on forest (htb)")
+
+
 def test_target_add_without_a_note(session):
     (session.box.path / "notes.md").unlink()
     session.console = FakeConsole(["10.10.10.50", "", "", "web01"])

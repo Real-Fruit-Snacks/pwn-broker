@@ -2,8 +2,10 @@ import io
 
 import pytest
 from helpers import NASTY
+from prompt_toolkit.document import Document
 from rich.console import Console as RichConsole
 
+from pwn_broker import theme
 from pwn_broker.console import Cancelled, FakeConsole, TermConsole, status_line
 from pwn_broker.theme import color_enabled
 
@@ -108,6 +110,35 @@ def test_term_ask_and_confirm_cancel_on_interrupt_and_eof(monkeypatch, exc):
         console.ask("user")
     with pytest.raises(Cancelled):
         console.confirm("go?")
+
+
+def _color(style, classes):
+    return "#" + style.get_attrs_for_style_str(classes).color.upper()
+
+
+def test_question_label_is_mute_and_typed_text_is_text_colour(monkeypatch):
+    seen = []
+
+    def fake_prompt(message, **kwargs):
+        seen.append((message, kwargs))
+        return "y"
+
+    monkeypatch.setattr("prompt_toolkit.prompt", fake_prompt)
+    console = TermConsole({}, out=io.StringIO())
+    console.ask("user")
+    console.confirm("go?")
+    for message, kwargs in seen:
+        assert [cls for cls, _ in message] == ["class:question"]
+        style, lexer = kwargs["style"], kwargs["lexer"]
+        line = lexer.lex_document(Document("typed"))(0)
+        assert [cls for cls, _ in line] == ["class:answer"]
+        assert _color(style, "class:question") == theme.MUTE
+        assert _color(style, "class:answer") == theme.TEXT
+        assert theme.EMBER not in {_color(style, "class:question"), _color(style, "class:answer")}
+
+
+def test_shell_prompt_is_still_ember():
+    assert _color(theme.prompt_style(), "class:prompt") == theme.EMBER
 
 
 def test_fake_records_lines_and_tables():

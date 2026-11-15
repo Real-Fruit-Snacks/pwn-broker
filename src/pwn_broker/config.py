@@ -60,8 +60,9 @@ def load(env: Mapping[str, str], home_dir: Path) -> tuple[AppPaths, Settings]:
     copy_text = _typed(data, "copy_to", str, config_file)
     defaults = Settings()
     settings = Settings(
-        home=_expand(home_text, home_dir) if home_text is not None else None,
-        copy_to=_expand(copy_text, home_dir) if copy_text is not None else None,
+        # an empty string is "not set", never the current folder
+        home=_expand(home_text, home_dir) if home_text else None,
+        copy_to=_expand(copy_text, home_dir) if copy_text else None,
         default_platform=_typed(data, "default_platform", str, config_file)
         or defaults.default_platform,
         terminal=_typed(data, "terminal", str, config_file) or defaults.terminal,

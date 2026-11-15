@@ -1,6 +1,5 @@
 import os
 import sys
-import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -193,25 +192,6 @@ def _pick_session(env: Env, argv: list[str]) -> Session | None:
     return choose(env)
 
 
-def _newer_release(settings: Settings) -> Callable[[], checks.CheckResult | None]:
-    found: list[checks.CheckResult | None] = []
-
-    def look() -> None:
-        try:
-            found.append(checks.version_check(settings))
-        except Exception:
-            pass
-
-    thread = threading.Thread(target=look, daemon=True)
-    thread.start()
-
-    def result() -> checks.CheckResult | None:
-        thread.join(2.0)
-        return found[0] if found else None
-
-    return result
-
-
 def _usage(env: Env, argv: list[str]) -> int | None:
     console = env.console
     if argv == ["--version"]:
@@ -255,7 +235,6 @@ def _prepare(env: Env) -> int | None:
             console.info("run the installer again to repair the install")
             return 1
 
-    wait_for_version = _newer_release(env.settings)
     results = checks.launch_checks(
         env.paths, env.settings, env.environ, env.home, include_version=False
     )
@@ -263,7 +242,7 @@ def _prepare(env: Env) -> int | None:
     if any(r.status == "fail" for r in results):
         return 1
 
-    newer = wait_for_version()
+    newer = checks.newer_release_within(env.settings)
     if newer is not None:
         console.warn(f"{newer.name}   {newer.message}")
     return None

@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 from datetime import date, datetime, timedelta, timezone
 
@@ -305,6 +306,10 @@ def test_release_without_run_folder(paths):
 @pytest.mark.skipif(sys.platform == "win32", reason="uses os.kill")
 def test_pid_alive_posix():
     assert pid_alive(os.getpid())
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    # reaped, so the pid names no process (reuse this soon is vanishingly unlikely)
+    assert pid_alive(child.pid) is False
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="windows only")

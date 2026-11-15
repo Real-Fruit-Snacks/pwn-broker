@@ -271,7 +271,14 @@ def _move_into_place(new: Path, final: Path, replace: bool) -> None:
             os.replace(final, parked)
         os.replace(new, final)
     except BaseException as exc:
-        if parked is not None and os.path.lexists(parked) and not os.path.lexists(final):
+        if parked is not None and os.path.lexists(parked):
+            if os.path.lexists(final):
+                if not isinstance(exc, Exception):
+                    raise
+                raise ArchiveError(
+                    f"could not move the new box into place and {final} is in the way; "
+                    f"the old box is kept at {parked} ({exc})"
+                ) from exc
             try:
                 os.replace(parked, final)
             except OSError as restore_exc:

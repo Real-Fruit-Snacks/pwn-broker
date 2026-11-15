@@ -1,3 +1,5 @@
+import threading
+import time
 from datetime import timedelta
 
 import pytest
@@ -52,9 +54,25 @@ def test_flag_replacing_asks_first(session):
     dispatch(session, "flag root")
     assert session.console.asked == ["flag", "replace the root flag?"]
     assert session.box.flags["root"].value == "old"
-    session.console = FakeConsole([" new ", "y"])
+    session.console = FakeConsole([" new ", "keep", "y"])
     dispatch(session, "flag root")
     assert load_box(session.box.path).flags["root"] == Flag(" new ", session.clock())
+
+
+def test_flag_multiline_paste_is_asked_again(session):
+    session.console = FakeConsole([FLAG + "\n" + FLAG, FLAG])
+    dispatch(session, "flag user")
+    assert session.console.asked == ["flag", "flag"]
+    assert len(_fails(session.console)) == 1
+    assert load_box(session.box.path).flags["user"].value == FLAG
+
+
+@pytest.mark.parametrize("answer,stored", [("keep", f" {FLAG}"), ("trim", FLAG)])
+def test_flag_edge_space_asks_keep_or_trim(session, answer, stored):
+    session.console = FakeConsole([f" {FLAG}", answer])
+    dispatch(session, "flag user")
+    assert session.console.asked == ["flag", "keep or trim"]
+    assert load_box(session.box.path).flags["user"].value == stored
 
 
 def test_path_prints_target_folder_and_subfolder(session):
@@ -146,14 +164,28 @@ def test_status_shows_box_at_a_glance(session):
 def test_check_command_reruns_checks(session, monkeypatch):
     calls = []
 
-    def fake(paths, settings, env, home):
-        calls.append((paths, settings))
+    def fake(paths, settings, env, home, include_version=True):
+        calls.append((paths, settings, include_version))
         return [CheckResult("vim", "ok", "/usr/bin/vim")]
 
     monkeypatch.setattr(checks, "launch_checks", fake)
+    monkeypatch.setattr(checks, "version_check", lambda settings: CheckResult("version", "warn", "9.9 is available"))
     dispatch(session, "check")
-    assert calls == [(session.paths, session.settings)]
-    assert ("ok", "1 checks passed") in session.console.lines
+    assert calls == [(session.paths, session.settings, False)]
+    assert session.console.lines == [("ok", "1 check passed"), ("warn", "version   9.9 is available")]
+
+
+def test_check_command_does_not_wait_long_for_the_update_check(session, monkeypatch):
+    release = threading.Event()
+    monkeypatch.setattr(checks, "run_checks", lambda *a, **k: [CheckResult("vim", "ok", "x")])
+    monkeypatch.setattr(checks, "version_check", lambda settings: release.wait(10))
+    started = time.monotonic()
+    try:
+        dispatch(session, "check")
+    finally:
+        release.set()
+    assert time.monotonic() - started < 5
+    assert session.console.lines == [("ok", "1 check passed")]
 
 
 def test_launch_checks_repairs_path_and_adds_version(paths, tmp_path, monkeypatch):

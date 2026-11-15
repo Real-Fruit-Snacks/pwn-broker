@@ -143,11 +143,13 @@ class TermConsole:
 
     def _prompt(self, message: str) -> str:
         from prompt_toolkit import prompt
+        from prompt_toolkit.lexers import SimpleLexer
 
         try:
             return prompt(
-                [("class:prompt", message)],
+                [("class:question", message)],
                 style=theme.prompt_style() if self._color else None,
+                lexer=SimpleLexer("class:answer"),
             )
         except (KeyboardInterrupt, EOFError):
             raise Cancelled() from None
