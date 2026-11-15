@@ -26,6 +26,13 @@ class ToolRecord:
     sha256: str
     installed: datetime
     runtime: RuntimeRecord | None = None
+    # set by tool remove; the row stays, so the box shows every tool it ever used
+    removed: datetime | None = None
+
+
+def current_tools(box: "Box") -> list[ToolRecord]:
+    """The tools the box has now: its rows with no removal time, at most one per name."""
+    return [t for t in box.tools if t.removed is None]
 
 
 @dataclass

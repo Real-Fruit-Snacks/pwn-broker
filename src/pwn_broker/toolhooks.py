@@ -1,9 +1,10 @@
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
-from pwn_broker import lifecycle, tooldata, toolindex, toolinstall, toolstate
+from pwn_broker import lifecycle, tooldata, toolindex, toolinstall, toollog, toolstate
 from pwn_broker.console import Cancelled, Console
-from pwn_broker.model import Box, RuntimeRecord, ToolRecord
+from pwn_broker.model import Box, RuntimeRecord, ToolRecord, current_tools
 from pwn_broker.paths import AppPaths
 from pwn_broker.session import Session
 from pwn_broker.store import StoreError, save_box
@@ -34,6 +35,64 @@ def user_homes() -> list[Path]:
 
 def _others(item: Installed, box_id: str, unfinished: dict[str, str]) -> bool:
     return any(u != box_id and u in unfinished for u in item.users)
+
+
+# ---- the tool log
+
+# the key in Session.notices once the log has been found unwritable
+LOG_NOTICE = "tool log"
+
+
+def log_tool(
+    session: Session,
+    event: str,
+    item: ToolRecord | Installed,
+    *,
+    kind: str = "tool",
+    when: datetime | None = None,
+) -> None:
+    """Adds a line for the session's box to the tool log. A log that cannot be written never
+    stops the install or removal; it is said once a session."""
+    try:
+        toollog.append(
+            session.paths,
+            when=session.clock() if when is None else when,
+            event=event,
+            box=session.box,
+            name=item.name,
+            version=item.version,
+            build=item.build,
+            sha256=item.sha256,
+            kind=kind,
+        )
+    except (OSError, ValueError) as exc:
+        if LOG_NOTICE not in session.notices:
+            session.notices.add(LOG_NOTICE)
+            session.console.warn(f"{session.paths.tool_log} could not be written: {exc}")
+
+
+def release_tool(
+    session: Session,
+    record: ToolRecord,
+    event: str,
+    *,
+    installed: dict[str, Installed],
+    unfinished: dict[str, str],
+) -> bool:
+    """Takes one of the box's tools off and logs it: at remove its row is marked removed, at
+    finish it stays current."""
+    when = session.clock()
+    box = session.box
+    try:
+        return toolinstall.release(
+            session.paths, box, record.name, installed=installed, unfinished=unfinished,
+            removed=when if event == "remove" else None,
+        )  # fmt: skip
+    finally:
+        # logged whenever the box let go, even when the files could not be deleted after
+        item = installed.get(record.name)
+        if item is None or box.id not in item.users:
+            log_tool(session, event, record, when=when)
 
 
 # ---- runtimes
@@ -74,7 +133,7 @@ def install_tool(
                 brought.append(item)
         runtime = installed.get(entry.requires[0]) if entry.requires else None
         zip_path = toolindex.fetch_zip(paths, session.settings, entry)
-        return toolinstall.install(
+        tool = toolinstall.install(
             paths,
             session.box,
             entry,
@@ -97,6 +156,11 @@ def install_tool(
             if removed:
                 console.ok(f"{item.name} {item.version} removed (runtime)")
         raise
+    # nothing is logged until the tool is in: a runtime taken away again was never the box's
+    for runtime_item in brought:
+        log_tool(session, "install", runtime_item, kind="runtime")
+    log_tool(session, "install", tool)
+    return tool
 
 
 def _unreadable_names(paths: AppPaths) -> str:
@@ -105,16 +169,20 @@ def _unreadable_names(paths: AppPaths) -> str:
 
 def remove_idle_runtimes(
     paths: AppPaths, installed: dict[str, Installed], console: Console
-) -> None:
-    """Removes the runtimes no installed tool requires. A failure is a warn line, never raised."""
+) -> list[Installed]:
+    """Removes the runtimes no installed tool requires, and returns those it removed.
+
+    A failure is a warn line, never raised.
+    """
     idle = toolstate.idle_runtimes(installed)
     if not idle:
-        return
+        return []
     # a box that cannot be read may have tools of its own, so nothing is judged unused
     unreadable = _unreadable_names(paths)
     if unreadable:
         console.warn(f"{', '.join(t.name for t in idle)} kept: {unreadable} cannot be read")
-        return
+        return []
+    gone = []
     for item in idle:
         try:
             removed = toolinstall.forget_runtime(paths, installed, item.name)
@@ -123,6 +191,8 @@ def remove_idle_runtimes(
             continue
         if removed:
             console.ok(f"{item.name} {item.version} removed (runtime)")
+            gone.append(item)
+    return gone
 
 
 def _freed_runtimes(
@@ -132,7 +202,7 @@ def _freed_runtimes(
     box = session.box
     if toolstate.unreadable_boxes(session.paths):
         return []
-    mine = {t.name for t in box.tools}
+    mine = {t.name for t in current_tools(box)}
     staying = {
         name: item
         for name, item in installed.items()
@@ -155,7 +225,7 @@ def block(
     alive: Callable[[int], bool] | None = None,
     started: Callable[[int], str | None] | None = None,
 ) -> str | None:
-    names = [t.name for t in session.box.tools]
+    names = [t.name for t in current_tools(session.box)]
     if not names:
         return None
     found = toolstate.running(session.paths, names, alive=alive, started=started)
@@ -170,13 +240,14 @@ def block(
 
 def summary(session: Session) -> list[str]:
     box = session.box
-    if not box.tools:
+    records = current_tools(box)
+    if not records:
         return []
     try:
         installed = load_installed(session.paths)
     except (ToolError, OSError):
         return []
-    names = ", ".join(f"{t.name} {t.version}" for t in box.tools)
+    names = ", ".join(f"{t.name} {t.version}" for t in records)
     shown = [f"tools     {names}   (will be removed)"]
     try:
         holding = toolstate.holding_boxes(session.paths, installed, excluding=box.id)
@@ -190,7 +261,7 @@ def summary(session: Session) -> list[str]:
     try:
         unfinished = unfinished_boxes(session.paths)
         homes = user_homes()
-        for record in box.tools:
+        for record in records:
             item = installed.get(record.name)
             if item is None:
                 continue
@@ -235,7 +306,8 @@ def home_to_delete(
 def pre_pack(session: Session) -> None:
     session.copied_in_full = set()
     box = session.box
-    if not box.tools:
+    records = current_tools(box)
+    if not records:
         return
     try:
         installed = load_installed(session.paths)
@@ -244,7 +316,7 @@ def pre_pack(session: Session) -> None:
         session.console.warn(f"tool data was not copied: {exc}")
         return
     homes = user_homes()
-    for record in box.tools:
+    for record in records:
         item = installed.get(record.name)
         if item is None:
             continue
@@ -264,36 +336,36 @@ def _undo_one(
     if item is not None:
         others = _others(item, box.id, unfinished)
         doomed = home_to_delete(session.console, item, homes, others, session.copied_in_full)
-    toolinstall.release(session.paths, box, name, installed=installed, unfinished=unfinished)
+    release_tool(session, record, "finish", installed=installed, unfinished=unfinished)
     tooldata.delete(doomed, homes)
 
 
 def undo(session: Session) -> None:
     box = session.box
-    if not box.tools:
+    records = current_tools(box)
+    if not records:
         return
     installed = load_installed(session.paths)
     # the box being finished is freed whatever its status reads at this moment
     unfinished = toolstate.holding_boxes(session.paths, installed, excluding=box.id)
     homes = user_homes()
     problems: list[str] = []
-    kept_records = list(box.tools)
     try:
-        for record in kept_records:
+        for record in records:
             try:
                 _undo_one(session, record, installed, unfinished, homes)
             except Exception as exc:  # one tool failing must not stop the rest
                 problems.append(f"{record.name}: {exc}")
     finally:
-        # release drops the records; the finished box keeps them so that reopening can offer the tools
-        box.tools = kept_records
+        # the rows stay current: the finished box keeps them so that reopening can offer the tools
         try:
             save_box(box)
         except (OSError, StoreError) as exc:
             problems.append(f"the box record could not be saved: {exc}")
     # a runtime left behind is only a warn: the launch check offers it again
     try:
-        remove_idle_runtimes(session.paths, installed, session.console)
+        for item in remove_idle_runtimes(session.paths, installed, session.console):
+            log_tool(session, "finish", item, kind="runtime")
     except Exception as exc:
         session.console.warn(f"runtimes could not be checked: {exc}")
     if problems:
@@ -323,10 +395,10 @@ def restore(session: Session) -> None:
 
 def _restore(session: Session) -> None:
     box, console = session.box, session.console
-    if not box.tools:
+    if not current_tools(box):
         return
     installed = load_installed(session.paths)
-    wanted = [r for r in box.tools if _needs_install(box.id, r, installed)]
+    wanted = [r for r in current_tools(box) if _needs_install(box.id, r, installed)]
     if not wanted:
         return
     console.info("tools     " + ", ".join(f"{r.name} {r.version}" for r in wanted))

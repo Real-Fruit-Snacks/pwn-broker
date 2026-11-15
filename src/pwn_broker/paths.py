@@ -95,6 +95,11 @@ class AppPaths:
     def wrapped(self) -> Path:
         return self.home / "wrapped"
 
+    @property
+    def tool_log(self) -> Path:
+        # beside the boxes, so reinstalling or removing the app does not lose it
+        return self.home / "tools.log"
+
 
 def safe_name(text: str) -> str:
     name = _UNSAFE.sub("-", text.lower()).strip("-.")

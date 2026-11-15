@@ -12,6 +12,7 @@ from prompt_toolkit.styles import Style
 
 from pwn_broker import boxlock, toolindex, toolstate
 from pwn_broker.boxes import TARGET_FOLDERS
+from pwn_broker.model import current_tools
 from pwn_broker.session import (
     Session, current_tunnel, mark_seen, recording_count, reload_if_changed, rescan,
 )  # fmt: skip
@@ -74,7 +75,7 @@ def _tool_names(session: Session, text: str) -> set[str]:
             match = _TOOL_BOX_ARG.fullmatch(text)
             if not match:
                 return set()
-            names = [t.name for t in session.box.tools]
+            names = [t.name for t in current_tools(session.box)]
         return {f"{match[1]} {n}" for n in names if n.startswith(match[2])}
     except Exception:
         return set()

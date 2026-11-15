@@ -3,12 +3,13 @@ import re
 import shutil
 import subprocess
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
 from pwn_broker import runtimearchive, tooldata
 from pwn_broker.console import Console
-from pwn_broker.model import Box, RuntimeRecord, ToolRecord
+from pwn_broker.model import Box, RuntimeRecord, ToolRecord, current_tools
 from pwn_broker.paths import AppPaths
 from pwn_broker.store import save_box, write_text
 from pwn_broker.toolindex import BuildEntry
@@ -221,7 +222,16 @@ def _sudo_lines(
 
 
 def _record(box: Box, record: ToolRecord) -> None:
-    box.tools = [t for t in box.tools if t.name != record.name] + [record]
+    # the tool's current row is replaced; the rows of earlier removals stay
+    box.tools = [t for t in box.tools if t.name != record.name or t.removed is not None]
+    box.tools.append(record)
+
+
+def _mark_removed(box: Box, name: str, when: datetime) -> None:
+    # a new row, not a change to the old one: a caller may hold the list from before
+    box.tools = [
+        replace(t, removed=when) if t.name == name and t.removed is None else t for t in box.tools
+    ]
 
 
 def _runtime_note(
@@ -247,7 +257,7 @@ def _runtime_note(
 
 def check_recorded(box: Box, entry: BuildEntry) -> None:
     wanted = build_id(entry.version, entry.build)
-    for record in box.tools:
+    for record in current_tools(box):
         if record.name == entry.name and build_id(record.version, record.build) != wanted:
             raise ToolError(
                 f"{box.name} already has {entry.name} {build_id(record.version, record.build)}; "
@@ -713,8 +723,15 @@ def release(
     *,
     installed: dict[str, Installed],
     unfinished: dict[str, str],
+    removed: datetime | None,
 ) -> bool:
-    box.tools = [t for t in box.tools if t.name != name]
+    """Takes a tool off the box, and deletes its files when no unfinished box still uses it.
+
+    With a time, as for tool remove, the box's row is kept and marked removed then. With None,
+    as at finish, the row stays current, so that reopening the box can offer the tool again.
+    """
+    if removed is not None:
+        _mark_removed(box, name, removed)
     item = installed.get(name)
     if item is None:
         save_box(box)

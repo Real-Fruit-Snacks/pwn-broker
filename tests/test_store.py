@@ -6,7 +6,9 @@ import pytest
 from helpers import NASTY, NOW, make_cred
 
 from pwn_broker import store
-from pwn_broker.model import FileRecord, Flag, RuntimeRecord, Target, ToolRecord, VpnRecord
+from pwn_broker.model import (
+    FileRecord, Flag, RuntimeRecord, Target, ToolRecord, VpnRecord, current_tools,
+)  # fmt: skip
 from pwn_broker.store import (
     StoreError,
     load_box,
@@ -289,10 +291,48 @@ def test_a_box_written_before_runtimes_loads_unchanged(tmp_path):
     box = load_box(folder)
     assert box.tools == [ToolRecord("certipy", "5.1.0", 2, "ef" * 32, box.tools[0].installed)]
     assert box.tools[0].runtime is None and box.extra == {}
+    assert box.tools[0].removed is None and current_tools(box) == box.tools
     save_box(box)
     again = read_toml(folder / "box.toml")
-    assert "runtime" not in again["tools"][0]
+    assert "runtime" not in again["tools"][0] and "removed" not in again["tools"][0]
     assert load_box(folder) == box
+
+
+def test_a_removed_tool_round_trips_beside_the_current_one(box):
+    gone = ToolRecord("chisel", "1.10.0", 1, "ab" * 32, NOW, removed=NOW + timedelta(hours=1))
+    again = ToolRecord("chisel", "1.10.0", 1, "ab" * 32, NOW + timedelta(hours=2))
+    box.tools = [gone, again]
+    save_box(box)
+    rows = read_toml(box.path / "box.toml")["tools"]
+    assert rows[0]["removed"] == NOW + timedelta(hours=1)
+    assert "removed" not in rows[1]
+    got = load_box(box.path)
+    assert got.tools == [gone, again]
+    assert current_tools(got) == [again]
+
+
+def test_tool_record_removed_defaults_to_none():
+    assert _tool().removed is None
+
+
+@pytest.mark.parametrize("value", ["yesterday", 3, True, NOW.date()])
+def test_tool_record_removed_wrong_type(box, value):
+    box.tools = [_tool()]
+    save_box(box)
+    path = box.path / "box.toml"
+    data = read_toml(path)
+    data["tools"][0]["removed"] = value
+    write_toml(path, data)
+    with pytest.raises(StoreError, match="box.toml"):
+        load_box(box.path)
+
+
+def test_current_tools_leaves_out_the_removed_rows(box):
+    kept = _tool("ligolo")
+    box.tools = [ToolRecord("chisel", "1.10.0", 1, "ab" * 32, NOW, removed=NOW), kept]
+    assert current_tools(box) == [kept]
+    box.tools = []
+    assert current_tools(box) == []
 
 
 @pytest.mark.parametrize(

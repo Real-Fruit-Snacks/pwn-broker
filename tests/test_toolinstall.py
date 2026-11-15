@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,7 +13,7 @@ import toolkit
 from helpers import NOW
 from pwn_broker import toolstate
 from pwn_broker.console import FakeConsole
-from pwn_broker.model import RuntimeRecord
+from pwn_broker.model import RuntimeRecord, ToolRecord, current_tools
 from pwn_broker.store import load_box
 from pwn_broker.toolindex import BuildEntry
 from pwn_broker.toolinstall import (
@@ -32,6 +33,7 @@ from pwn_broker.toolinstall import (
 from pwn_broker.toolpkg import Command, ToolError, machine_arch, unpack
 from pwn_broker.toolstate import Installed, load_installed
 
+LATER = NOW + timedelta(hours=3)
 posix_only = pytest.mark.skipif(sys.platform == "win32", reason="needs a Linux virtual environment")
 
 SCRIPT = b"#!/bin/sh\necho hello from tool \"$@\"\n"
@@ -939,9 +941,14 @@ def test_release_with_one_user_removes_everything(paths, box, tmp_path):
         upload=[{"path": "files/a", "as": "a"}],
     )  # fmt: skip
     _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path)
-    assert release(paths, box, "kerbrute", installed=installed, unfinished={box.id: box.name})
-    assert installed == {} and load_installed(paths) == {} and box.tools == []
-    assert load_box(box.path).tools == []
+    assert release(
+        paths, box, "kerbrute", installed=installed, unfinished={box.id: box.name}, removed=LATER
+    )
+    assert installed == {} and load_installed(paths) == {} and current_tools(box) == []
+    # the box keeps the tool on record, with the time it was removed
+    assert [(t.name, t.installed, t.removed) for t in load_box(box.path).tools] == [
+        ("kerbrute", NOW, LATER)
+    ]
     assert [p for p in snapshot(paths) if p != "tools/installed.toml"] == []
 
 
@@ -950,13 +957,18 @@ def test_release_with_two_users_keeps_the_tool(paths, box, other, tmp_path):
     unfinished = {box.id: box.name, other.id: other.name}
     _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path, unfinished=unfinished)
     do_install(paths, other, entry, zip_path, tmp_path, installed=installed, unfinished=unfinished)
-    assert not release(paths, box, "kerbrute", installed=installed, unfinished=unfinished)
+    assert not release(
+        paths, box, "kerbrute", installed=installed, unfinished=unfinished, removed=LATER
+    )
     assert installed["kerbrute"].users == [other.id]
     assert (paths.bin / "kerbrute").exists()
-    assert box.tools == [] and load_box(box.path).tools == []
-    assert [t.name for t in load_box(other.path).tools] == ["kerbrute"]
+    assert current_tools(box) == [] and current_tools(load_box(box.path)) == []
+    assert [t.removed for t in load_box(box.path).tools] == [LATER]
+    assert [t.name for t in current_tools(load_box(other.path))] == ["kerbrute"]
     # now the last one goes; the departing box counts as gone even while unfinished
-    assert release(paths, other, "kerbrute", installed=installed, unfinished=unfinished)
+    assert release(
+        paths, other, "kerbrute", installed=installed, unfinished=unfinished, removed=LATER
+    )
     assert not (paths.bin / "kerbrute").exists()
 
 
@@ -966,12 +978,68 @@ def test_release_ignores_finished_users(paths, box, other, tmp_path):
     _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path, unfinished=unfinished)
     do_install(paths, other, entry, zip_path, tmp_path, installed=installed, unfinished=unfinished)
     # box has since finished
-    assert release(paths, other, "kerbrute", installed=installed, unfinished={other.id: other.name})
+    assert release(
+        paths, other, "kerbrute", installed=installed, unfinished={other.id: other.name},
+        removed=LATER,
+    )  # fmt: skip
     assert installed == {}
 
 
 def test_release_of_unknown_tool_only_cleans_the_box(paths, box):
-    assert not release(paths, box, "nothing", installed={}, unfinished={})
+    box.tools = [ToolRecord("nothing", "1", 1, "ab" * 32, NOW)]
+    assert not release(paths, box, "nothing", installed={}, unfinished={}, removed=LATER)
+    assert load_box(box.path).tools == [
+        ToolRecord("nothing", "1", 1, "ab" * 32, NOW, removed=LATER)
+    ]
+
+
+def test_release_at_finish_leaves_the_row_current(paths, box, tmp_path):
+    zip_path, entry = build(tmp_path)
+    _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path)
+    before = list(box.tools)
+    assert release(
+        paths, box, "kerbrute", installed=installed, unfinished={box.id: box.name}, removed=None
+    )
+    assert installed == {}
+    assert box.tools == before and load_box(box.path).tools == before
+    assert before[0].removed is None
+
+
+def test_release_marks_only_the_current_row(paths, box, tmp_path):
+    earlier = ToolRecord("kerbrute", "1.0.2", 1, "cd" * 32, NOW, removed=NOW)
+    box.tools = [earlier]
+    zip_path, entry = build(tmp_path)
+    _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path)
+    release(paths, box, "kerbrute", installed=installed, unfinished={}, removed=LATER)
+    assert [(t.version, t.removed) for t in load_box(box.path).tools] == [
+        ("1.0.2", NOW), ("1.0.3", LATER),
+    ]  # fmt: skip
+
+
+def test_reinstalling_after_a_removal_adds_a_row_and_keeps_the_removed_one(paths, box, tmp_path):
+    zip_path, entry = build(tmp_path)
+    _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path)
+    release(paths, box, "kerbrute", installed=installed, unfinished={}, removed=LATER)
+    again = LATER + timedelta(hours=1)
+    install(
+        paths, box, entry, zip_path, installed=installed, unfinished={box.id: box.name},
+        home=tmp_path / "user", console=FakeConsole(), now=again, run=FakeRun(),
+        on_path=lambda name: None,
+    )  # fmt: skip
+    rows = load_box(box.path).tools
+    assert [(t.name, t.build, t.installed, t.removed) for t in rows] == [
+        ("kerbrute", 1, NOW, LATER), ("kerbrute", 1, again, None),
+    ]  # fmt: skip
+    assert box.id in load_installed(paths)["kerbrute"].users
+
+
+def test_a_removed_row_at_another_build_does_not_stop_an_install(paths, box, tmp_path):
+    box.tools = [ToolRecord("kerbrute", "1.0.2", 1, "cd" * 32, NOW, removed=NOW)]
+    zip_path, entry = build(tmp_path)
+    item, _c, _i = do_install(paths, box, entry, zip_path, tmp_path)
+    assert item.version == "1.0.3"
+    assert [t.version for t in current_tools(load_box(box.path))] == ["1.0.3"]
+    assert len(load_box(box.path).tools) == 2
 
 
 def item_for(paths, **overrides):
@@ -1055,9 +1123,12 @@ def test_failed_release_keeps_an_orphan_entry(paths, box, tmp_path):
     _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path)
     (paths.bin / "kerbrute").write_bytes(b"#!/bin/sh\n# pwn-broker tool: other\n")
     with pytest.raises(ToolError):
-        release(paths, box, "kerbrute", installed=installed, unfinished={box.id: box.name})
+        release(
+            paths, box, "kerbrute", installed=installed, unfinished={box.id: box.name},
+            removed=LATER,
+        )  # fmt: skip
     assert load_installed(paths)["kerbrute"].users == []
-    assert load_box(box.path).tools == []
+    assert current_tools(load_box(box.path)) == []
 
 
 # ---- real environment

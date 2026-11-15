@@ -97,7 +97,7 @@ def save_box(box: Box) -> None:
         "flags": {k: {"value": f.value, "at": f.at} for k, f in box.flags.items()},
     }
     if box.tools:
-        # a tool with no runtime is written as before this record existed
+        # a tool with no runtime and no removal time is written as before these existed
         data["tools"] = [_without_none(asdict(t)) for t in box.tools]
     if box.hosts:
         data["hosts"] = list(box.hosts)
@@ -129,6 +129,9 @@ def _tool(row: dict) -> ToolRecord:
     if "runtime" in row:
         # absent in boxes written before runtimes existed
         record.runtime = _runtime(row["runtime"])
+    if "removed" in row:
+        # absent in boxes written before removed tools were kept
+        record.removed = _checked(row, {"removed": datetime}, "tools")["removed"]
     return record
 
 

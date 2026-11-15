@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ from pwn_broker import shell  # noqa: F401  (fills the command registry)
 from pwn_broker import toolhooks, toolinstall, toolstate
 from pwn_broker.config import Settings
 from pwn_broker.console import FakeConsole
+from pwn_broker.model import ToolRecord, current_tools
 from pwn_broker.shell import cmd_tool
 from pwn_broker.shell.app import completions, toolbar_text
 from pwn_broker.vpn import Tunnel
@@ -18,6 +20,7 @@ from pwn_broker.store import load_box
 from pwn_broker.toolindex import BuildEntry
 from pwn_broker.toolpkg import ToolError, machine_arch
 
+LATER = NOW + timedelta(hours=1)  # the session's clock
 EXAMPLE = "kerbrute userenum -d {domain} --dc {ip} {hostname} {lhost} {nope} {0}"
 
 
@@ -78,7 +81,7 @@ def install_for(box, shop, entry, paths):
 def test_commands_are_registered_with_help():
     for name in (
         "tool list", "tool search", "tool info", "tool install", "tool remove",
-        "tool refresh", "tool cache clear",
+        "tool history", "tool refresh", "tool cache clear",
     ):  # fmt: skip
         assert COMMANDS[name][1]
 
@@ -335,7 +338,11 @@ def test_remove_deletes_the_files_when_no_other_box_uses_the_tool(session, shop)
     assert console.asked == ["remove kerbrute?"]
     assert lines(console, "ok") == ["kerbrute removed; its files are deleted"]
     assert not (session.paths.bin / "kerbrute").exists()
-    assert load_box(session.box.path).tools == []
+    # the box keeps the tool on record, with the time it was removed
+    assert [(t.name, t.installed, t.removed) for t in load_box(session.box.path).tools] == [
+        ("kerbrute", LATER, LATER)
+    ]
+    assert current_tools(session.box) == []
     assert toolstate.load_installed(session.paths) == {}
 
 
@@ -377,7 +384,7 @@ def test_remove_keeps_the_files_another_unfinished_box_uses(session, shop, other
         "kerbrute removed from forest; Cascade still uses it, so its files stay"
     ]
     assert (session.paths.bin / "kerbrute").exists()
-    assert load_box(session.box.path).tools == []
+    assert current_tools(load_box(session.box.path)) == []
     assert toolstate.load_installed(session.paths)["kerbrute"].users == [other.id]
 
 
@@ -1078,3 +1085,153 @@ def test_a_runtime_that_cannot_be_removed_is_a_warn(session, shop, pyshop, monke
     assert lines(console, "warn") == ["python-3.13 3.13.18   the folder is busy"]
     assert lines(console, "fail") == []
     assert runtime_row(session) is not None
+
+
+# ---- removed tools and history
+
+
+def test_a_removed_tool_is_not_listed_counted_completed_or_removed_again(session, shop):
+    start = session.box.started
+    run(session, "tool install kerbrute")
+    run(session, "tool remove kerbrute", "y")
+    assert lines(run(session, "tool list --installed"), "info") == ["no tools installed for forest"]
+    _columns, rows = table(run(session, "tool list"))
+    assert [r[3] for r in rows] == ["", ""]
+    assert toolbar_text(session, start).endswith("1 target   no vpn   00:00")
+    assert "tools      0" in lines(run(session, "status"), "info")
+    assert completions(session, "tool remove ") == []
+    console = run(session, "tool remove kerbrute", "y")
+    assert lines(console, "fail") == ["kerbrute is not installed for forest"]
+    assert console.asked == []
+    shown = lines(run(session, "tool info kerbrute"), "info")
+    assert not any(t.startswith("folder") for t in shown)
+
+
+def test_a_removed_tool_another_box_uses_is_not_counted(session, shop, other):
+    install_for(other, shop, shop.entries[1], session.paths)
+    run(session, "tool install kerbrute")
+    run(session, "tool remove kerbrute", "y")
+    assert "tools      0" in lines(run(session, "status"), "info")
+    _columns, rows = table(run(session, "tool list"))
+    assert [r[3] for r in rows if r[0] == "kerbrute"] == [""]
+
+
+def test_installing_again_after_a_removal_adds_a_row(session, shop):
+    run(session, "tool install kerbrute@1.0.2")
+    run(session, "tool remove kerbrute", "y")
+    again = LATER + timedelta(hours=1)
+    session.clock = lambda: again
+    # another build is no longer refused: the box no longer has the first
+    assert lines(run(session, "tool install kerbrute@1.0.3"), "ok") == ["kerbrute 1.0.3 installed"]
+    rows = load_box(session.box.path).tools
+    assert [(t.version, t.installed, t.removed) for t in rows] == [
+        ("1.0.2", LATER, LATER), ("1.0.3", again, None),
+    ]  # fmt: skip
+    console = run(session, "tool install kerbrute@1.0.3")
+    assert lines(console, "info") == ["kerbrute 1.0.3 is already installed for forest"]
+    assert len(load_box(session.box.path).tools) == 2
+
+
+def at(hours):
+    return NOW + timedelta(hours=hours)
+
+
+def test_history_lists_every_tool_the_box_had_in_install_order(session, shop, pyshop):
+    session.clock = lambda: at(1)
+    run(session, "tool install kerbrute@1.0.2")
+    session.clock = lambda: at(2)
+    run(session, "tool install certipy")
+    session.clock = lambda: at(3)
+    run(session, "tool remove kerbrute", "y")
+    session.clock = lambda: at(4)
+    run(session, "tool install kerbrute")
+    # a row written in another time zone is shown in the session's
+    utc = datetime(2026, 11, 14, 9, 30, tzinfo=timezone.utc)
+    session.box.tools.append(ToolRecord("ligolo-ng", "0.9.2", 1, "cd" * 32, utc, removed=utc))
+    columns, rows = table(run(session, "tool history"))
+    assert columns == ["tool", "version", "installed", "removed", "runtime"]
+    assert rows == [
+        ["ligolo-ng", "0.9.2-1", "2026-11-14 11:30", "2026-11-14 11:30", "-"],
+        ["kerbrute", "1.0.2-1", "2026-11-14 13:00", "2026-11-14 15:00", "-"],
+        ["certipy", "5.1.0-3", "2026-11-14 14:00", "-", "python-3.13 3.13.18-1"],
+        ["kerbrute", "1.0.3-1", "2026-11-14 16:00", "-", "-"],
+    ]
+
+
+def test_history_of_a_box_with_no_tools(session, shop):
+    console = run(session, "tool history")
+    assert lines(console, "info") == ["no tools were installed for forest"]
+    assert console.tables == []
+
+
+def test_history_takes_no_arguments(session, shop):
+    assert len(lines(run(session, "tool history kerbrute"), "fail")) == 1
+
+
+LOGGED_AT = LATER.isoformat()
+FOREST = "forest (2026-11-14_htb_forest)"
+
+
+def log_lines(session):
+    path = session.paths.tool_log
+    return path.read_bytes().decode("utf-8").splitlines() if path.exists() else []
+
+
+def logged(event, entry, box=FOREST, runtime=False):
+    line = f"{LOGGED_AT}  {event:<7}  {box}  {entry.name} {entry.version}-{entry.build}"
+    line += f"  sha256:{entry.sha256}"
+    return line + "  runtime" if runtime else line
+
+
+def test_install_and_remove_are_logged_with_the_runtime_beside_the_tool(session, shop, pyshop):
+    run(session, "tool install certipy")
+    run(session, "tool remove certipy", "y")
+    assert log_lines(session) == [
+        logged("install", pyshop.runtime, runtime=True),
+        logged("install", pyshop.certipy),
+        logged("remove", pyshop.certipy),
+        logged("remove", pyshop.runtime, runtime=True),
+    ]
+
+
+def test_a_remove_is_logged_for_this_box_while_another_keeps_the_tool(session, shop, other):
+    install_for(other, shop, shop.entries[1], session.paths)
+    run(session, "tool install kerbrute")
+    run(session, "tool remove kerbrute", "y")
+    assert log_lines(session) == [
+        logged("install", shop.entries[1]),
+        logged("remove", shop.entries[1]),
+    ]
+
+
+def test_a_refused_or_declined_command_logs_nothing(session, shop):
+    run(session, "tool install kerbrute@1.0.2")
+    run(session, "tool install kerbrute@1.0.3")
+    run(session, "tool install kerbrute@1.0.2")
+    run(session, "tool remove kerbrute", "n")
+    assert log_lines(session) == [logged("install", shop.entries[0])]
+
+
+def test_a_removal_whose_files_stay_is_still_logged(session, shop, monkeypatch):
+    run(session, "tool install kerbrute")
+
+    def stuck(paths, item):
+        raise ToolError("cannot remove it")
+
+    monkeypatch.setattr(cmd_tool.toolinstall, "remove_files", stuck)
+    console = run(session, "tool remove kerbrute", "y")
+    assert lines(console, "fail") == ["cannot remove it"]
+    assert log_lines(session)[-1] == logged("remove", shop.entries[1])
+    assert current_tools(load_box(session.box.path)) == []
+
+
+def test_a_log_that_cannot_be_written_warns_once_and_the_removal_goes_on(session, shop):
+    session.paths.tool_log.mkdir(parents=True)
+    console = run(session, "tool install kerbrute")
+    assert len(lines(console, "warn")) == 1
+    session.console = FakeConsole(["y", "y"])
+    dispatch(session, "tool remove kerbrute")
+    dispatch(session, "tool install ligolo-ng")
+    assert lines(session.console, "warn") == []
+    assert lines(session.console, "ok")[0] == "kerbrute removed; its files are deleted"
+    assert toolstate.load_installed(session.paths).keys() == {"ligolo-ng"}

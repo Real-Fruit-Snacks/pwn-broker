@@ -3,6 +3,7 @@ import shutil
 import sys
 import tarfile
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,7 +15,7 @@ from pwn_broker import lifecycle, toolhooks, toolindex, toolinstall, toolstate
 from pwn_broker.archive import archive_path
 from pwn_broker.console import FakeConsole
 from pwn_broker.lifecycle import export_box, finish_box, import_box
-from pwn_broker.model import ToolRecord
+from pwn_broker.model import ToolRecord, current_tools
 from pwn_broker.paths import AppPaths
 from pwn_broker.store import load_box, save_box
 from pwn_broker.toolpkg import ToolError, machine_arch
@@ -1056,7 +1057,7 @@ def test_summary_keeps_a_runtime_a_tool_of_another_unfinished_box_requires(toole
     put(tooled, pyshop.certipy, box=other)
     toolinstall.release(
         tooled.paths, other, "bloodhound",
-        installed=load_installed(tooled.paths), unfinished={other.id: other.name},
+        installed=load_installed(tooled.paths), unfinished={other.id: other.name}, removed=NOW,
     )  # fmt: skip
     assert RT_SUMMARY not in toolhooks.summary(say(tooled))
 
@@ -1277,7 +1278,7 @@ def test_leftovers_offer_no_runtime_while_a_box_cannot_be_read(tooled, pyshop, o
     put(tooled, pyshop.certipy)
     installed = load_installed(tooled.paths)
     toolinstall.release(
-        tooled.paths, tooled.box, "certipy", installed=installed, unfinished={}
+        tooled.paths, tooled.box, "certipy", installed=installed, unfinished={}, removed=NOW
     )
     break_box(other.path)
     console = FakeConsole(["y", "y"])
@@ -1295,3 +1296,204 @@ def test_a_runtime_folder_with_no_row_is_a_stray(tooled, pyshop):
     toolhooks.leftovers(tooled.paths, console)
     assert console.asked == [SWEEP_QUESTION]
     assert ("info", f"left      {tooled.paths.tools / 'python-3.13'}") in console.lines
+
+
+# ---- removed tools
+
+
+def remove_row(session, name="kerbrute"):
+    # the box took the tool off with tool remove; its row stays, with the time
+    session.box.tools = [
+        replace(t, removed=NOW) if t.name == name and t.removed is None else t
+        for t in session.box.tools
+    ]
+    save_box(session.box)
+
+
+def hand_to_other(session, other):
+    item = load_installed(session.paths)["kerbrute"]
+    item.users = [other.id]
+    toolstate.save_installed(session.paths, {"kerbrute": item})
+
+
+def test_a_removed_tool_does_not_block_finish(tooled, other):
+    hand_to_other(tooled, other)
+    remove_row(tooled)
+    mark(tooled)
+    assert toolhooks.block(tooled, alive=lambda pid: True, started=lambda pid: None) is None
+
+
+def test_a_removed_tool_is_left_out_of_the_summary_and_the_copy(tooled, other):
+    hand_to_other(tooled, other)
+    remove_row(tooled)
+    assert toolhooks.summary(tooled) == []
+    toolhooks.pre_pack(tooled)
+    assert not (tooled.box.path / "tooldata").exists()
+
+
+def test_finish_does_not_remove_a_removed_tool_again(tooled, other):
+    hand_to_other(tooled, other)
+    remove_row(tooled)
+    rows = list(tooled.box.tools)
+    toolhooks.undo(tooled)
+    assert load_installed(tooled.paths)["kerbrute"].users == [other.id]
+    assert load_box(tooled.box.path).tools == rows
+    assert log_lines(tooled.paths) == []
+
+
+def test_a_removed_tool_is_not_offered_again(tooled):
+    wipe(tooled)
+    remove_row(tooled)
+    say(tooled, "y")
+    toolhooks.restore(tooled)
+    assert tooled.console.asked == [] and tooled.console.lines == []
+    assert load_installed(tooled.paths) == {}
+
+
+def test_import_offers_only_the_tools_the_box_still_had(tooled, pyshop, tmp_path):
+    put(tooled, pyshop.certipy)
+    remove_row(tooled, "certipy")
+    archive = export_box(tooled, fix=lambda p: 0)
+    wipe_all(tooled)
+    paths = fresh_paths(tooled, tmp_path)
+    console = FakeConsole(["y"])
+    box = import_box(paths, tooled.settings, console, archive, lambda: NOW)
+    assert ("info", "tools     kerbrute 1.0.3") in console.lines
+    assert set(load_installed(paths)) == {"kerbrute"}
+    # the tool installed again has a new row, after the removed one
+    assert [(t.name, t.removed) for t in box.tools] == [("certipy", NOW), ("kerbrute", None)]
+
+
+def test_finish_keeps_removed_rows_removed_and_current_rows_current(tooled, user):
+    tooled.box.tools.insert(0, ToolRecord("ligolo-ng", "0.9.2", 1, "cd" * 32, NOW, removed=NOW))
+    save_box(tooled.box)
+    say(tooled, "y", "n")
+    assert finish_box(tooled, **SAVED) is not None
+    saved = load_box(tooled.box.path)
+    assert [(t.name, t.removed) for t in saved.tools] == [("ligolo-ng", NOW), ("kerbrute", None)]
+    assert [t.name for t in current_tools(saved)] == ["kerbrute"]
+
+
+# ---- the tool log
+
+LOGGED_AT = "2026-11-14T13:00:00+02:00"  # the session's clock, an hour after NOW
+FOREST = "forest (2026-11-14_htb_forest)"
+
+
+def log_lines(paths):
+    if not paths.tool_log.exists():
+        return []
+    return paths.tool_log.read_bytes().decode("utf-8").splitlines()
+
+
+def logged(event, entry, box=FOREST, at=LOGGED_AT, runtime=False):
+    line = f"{at}  {event:<7}  {box}  {entry.name} {entry.version}-{entry.build}"
+    line += f"  sha256:{entry.sha256}"
+    return line + "  runtime" if runtime else line
+
+
+def index_of(session):
+    return toolindex.load_index(session.paths, session.settings, now=NOW)
+
+
+def install_through_hooks(session, entry, unfinished=None, **kw):
+    return toolhooks.install_tool(
+        session, index_of(session), entry,
+        installed=load_installed(session.paths),
+        unfinished=unfinished or {session.box.id: session.box.name}, **kw,
+    )  # fmt: skip
+
+
+def test_an_install_logs_the_runtime_it_brought_then_the_tool(tooled, pyshop):
+    install_through_hooks(tooled, pyshop.certipy, on_path=lambda n: None)
+    assert log_lines(tooled.paths) == [
+        logged("install", pyshop.runtime, runtime=True),
+        logged("install", pyshop.certipy),
+    ]
+    # the next tool on the same runtime brings none
+    install_through_hooks(tooled, pyshop.bloodhound, on_path=lambda n: None)
+    assert log_lines(tooled.paths)[2:] == [logged("install", pyshop.bloodhound)]
+
+
+def test_a_failed_install_logs_nothing(tooled, pyshop, monkeypatch):
+    toolkit.no_real_venv(monkeypatch, fail="pip")
+    with pytest.raises(ToolError):
+        install_through_hooks(tooled, pyshop.certipy, on_path=lambda n: None)
+    assert log_lines(tooled.paths) == []
+
+
+def test_joining_a_tool_another_box_installed_logs_an_install_for_this_box(tooled, shop, other):
+    hand_to_other(tooled, other)
+    tooled.box.tools = []
+    save_box(tooled.box)
+    both = {tooled.box.id: tooled.box.name, other.id: other.name}
+    install_through_hooks(tooled, shop.entry, unfinished=both, on_path=lambda n: None)
+    assert load_installed(tooled.paths)["kerbrute"].users == [other.id, tooled.box.id]
+    assert log_lines(tooled.paths) == [logged("install", shop.entry)]
+
+
+def test_finish_logs_each_tool_and_the_runtime_taken_off(tooled, pyshop, shop):
+    put(tooled, pyshop.certipy)
+    say(tooled, "y", "y")
+    assert finish_box(tooled, **SAVED) is not None
+    assert log_lines(tooled.paths) == [
+        logged("finish", shop.entry),
+        logged("finish", pyshop.certipy),
+        logged("finish", pyshop.runtime, runtime=True),
+    ]
+
+
+def test_finish_logs_a_tool_another_box_keeps_but_not_its_runtime(tooled, pyshop, shop, other):
+    put(tooled, pyshop.certipy)
+    put(tooled, pyshop.certipy, box=other)
+    toolhooks.undo(tooled)
+    assert log_lines(tooled.paths) == [
+        logged("finish", shop.entry), logged("finish", pyshop.certipy),
+    ]  # fmt: skip
+
+
+def test_import_logs_each_tool_it_installs_again(tooled, pyshop, shop, tmp_path):
+    put(tooled, pyshop.certipy)
+    archive = export_box(tooled, fix=lambda p: 0)
+    wipe_all(tooled)
+    paths = fresh_paths(tooled, tmp_path)
+    box = import_box(paths, tooled.settings, FakeConsole(["y"]), archive, lambda: NOW)
+    at = NOW.isoformat()
+    named = f"{box.name} ({box.id})"
+    assert log_lines(paths) == [
+        logged("install", shop.entry, box=named, at=at),
+        logged("install", pyshop.runtime, box=named, at=at, runtime=True),
+        logged("install", pyshop.certipy, box=named, at=at),
+    ]
+    # the log follows the home setting: the first home's log has none of this
+    assert log_lines(tooled.paths) == []
+
+
+def test_a_log_that_cannot_be_written_warns_once_and_the_install_goes_on(tooled, pyshop):
+    tooled.paths.tool_log.mkdir(parents=True)  # a folder where the file should be
+    install_through_hooks(tooled, pyshop.certipy, on_path=lambda n: None)
+    install_through_hooks(tooled, pyshop.bloodhound, on_path=lambda n: None)
+    warned = lines(tooled, "warn")
+    assert len(warned) == 1
+    assert warned[0].startswith(f"{tooled.paths.tool_log} could not be written")
+    assert {"certipy", "bloodhound", "python-3.13"} <= set(load_installed(tooled.paths))
+    assert [t.name for t in current_tools(load_box(tooled.box.path))] == [
+        "kerbrute", "certipy", "bloodhound",
+    ]  # fmt: skip
+
+
+def test_a_log_that_cannot_be_written_does_not_stop_finish(tooled, user):
+    tooled.paths.tool_log.mkdir(parents=True)
+    say(tooled, "y", "n")
+    assert finish_box(tooled, **SAVED) is not None
+    assert load_installed(tooled.paths) == {}
+    assert sum("could not be written" in t for t in lines(tooled, "warn")) == 1
+    assert lines(tooled, "fail") == []
+
+
+def test_a_box_name_with_a_line_break_is_not_logged(tooled, pyshop):
+    tooled.box.name = "for\nest"
+    install_through_hooks(tooled, pyshop.certipy, on_path=lambda n: None)
+    assert not tooled.paths.tool_log.exists()
+    assert sum("line break" in t for t in lines(tooled, "warn")) == 1
+    assert "certipy" in load_installed(tooled.paths)

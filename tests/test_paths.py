@@ -37,3 +37,9 @@ def test_recording_and_vpn_paths(tmp_path):
     assert paths.box_lock == o / "run" / "box.lock"
     assert paths.asciinema == o / "app" / "bin" / "asciinema"
     assert paths.record_launcher == o / "bin" / "record"
+
+
+def test_the_tool_log_lives_with_the_boxes(tmp_path):
+    paths = AppPaths(opt=tmp_path / "o", home=tmp_path / "h")
+    assert paths.tool_log == tmp_path / "h" / "tools.log"
+    assert paths.tool_log.parent == paths.active.parent == paths.wrapped.parent

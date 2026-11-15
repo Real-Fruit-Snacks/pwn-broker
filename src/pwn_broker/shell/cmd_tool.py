@@ -1,9 +1,11 @@
 import os
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 from pwn_broker import tooldata, toolhooks, toolindex, toolinstall, toolstate
+from pwn_broker.model import current_tools
 from pwn_broker.session import Session, current_tunnel
 from pwn_broker.shell.commands import command, take_args
 from pwn_broker.toolindex import BuildEntry, Index, ToolEntry
@@ -53,18 +55,19 @@ def _on_kali(session: Session, commands: list[str]) -> str:
 
 
 def _have(session: Session) -> set[str]:
-    return {t.name for t in session.box.tools}
+    return {t.name for t in current_tools(session.box)}
 
 
 def _status(session: Session) -> dict[str, str]:
     # installed only when the machine has it for this box, not merely because the box records it
+    records = current_tools(session.box)
     try:
         here = toolstate.present(session.paths, session.box)
     except ToolError as exc:
         # the index can still be shown when the installed list cannot be read
         session.console.warn(str(exc))
-        return {t.name: "unknown" for t in session.box.tools}
-    return {t.name: "installed" if t.name in here else "not installed" for t in session.box.tools}
+        return {t.name: "unknown" for t in records}
+    return {t.name: "installed" if t.name in here else "not installed" for t in records}
 
 
 def _run_column(session: Session, item: Installed) -> str:
@@ -99,7 +102,8 @@ def tool_list(session: Session, args: list[str]) -> None:
         console.table(["name", "version", "kind", "status", "kali"], rows)
         return
 
-    if not session.box.tools:
+    records = current_tools(session.box)
+    if not records:
         console.info(f"no tools installed for {session.box.name}")
         return
     installed = toolstate.load_installed(session.paths)
@@ -109,7 +113,7 @@ def tool_list(session: Session, args: list[str]) -> None:
         # the box's own tools are listed even when the index cannot be reached
         known = {}
     rows = []
-    for record in sorted(session.box.tools, key=lambda r: r.name):
+    for record in sorted(records, key=lambda r: r.name):
         item = installed.get(record.name)
         entry = known.get(record.name)
         build = _latest(entry) if entry else None
@@ -255,7 +259,7 @@ def tool_install(session: Session, args: list[str]) -> None:
 
     wanted = build_id(build.version, build.build)
     current = installed.get(name)
-    for record in box.tools:
+    for record in current_tools(box):
         if (
             record.name == name
             and build_id(record.version, record.build) == wanted
@@ -310,14 +314,16 @@ def tool_remove(session: Session, args: list[str]) -> None:
     if not console.confirm(f"remove {name}?"):
         console.info("nothing removed")
         return
+    record = next(t for t in current_tools(box) if t.name == name)
     doomed: list[Path] = []
     if last:
         full: set[Path] = set()
         if named:
-            record = next(t for t in box.tools if t.name == name)
             full = toolhooks.collect_tool(box, item, record, homes, console)
         doomed = toolhooks.home_to_delete(console, item, homes, False, full)
-    gone = toolinstall.release(session.paths, box, name, installed=installed, unfinished=holding)
+    gone = toolhooks.release_tool(
+        session, record, "remove", installed=installed, unfinished=holding
+    )
     tooldata.delete(doomed, homes)
     item = installed.get(name)
     if gone or item is None or not item.users:
@@ -328,7 +334,35 @@ def tool_remove(session: Session, args: list[str]) -> None:
         console.ok(
             f"{name} removed from {box.name}; {', '.join(users)} {verb} it, so its files stay"
         )
-    toolhooks.remove_idle_runtimes(session.paths, installed, console)
+    for runtime in toolhooks.remove_idle_runtimes(session.paths, installed, console):
+        toolhooks.log_tool(session, "remove", runtime, kind="runtime")
+
+
+def _shown_time(session: Session, when: datetime) -> str:
+    return when.astimezone(session.clock().tzinfo).strftime("%Y-%m-%d %H:%M")
+
+
+@command("tool history", "list every tool this box has had, removed ones too")
+def tool_history(session: Session, args: list[str]) -> None:
+    take_args(args)
+    box = session.box
+    if not box.tools:
+        session.console.info(f"no tools were installed for {box.name}")
+        return
+    rows = []
+    # astimezone gives every time an offset, so a row written without one still sorts
+    for record in sorted(box.tools, key=lambda r: r.installed.astimezone()):
+        ran_on = record.runtime
+        rows.append(
+            [
+                record.name,
+                build_id(record.version, record.build),
+                _shown_time(session, record.installed),
+                _shown_time(session, record.removed) if record.removed else "-",
+                f"{ran_on.name} {build_id(ran_on.version, ran_on.build)}" if ran_on else "-",
+            ]
+        )
+    session.console.table(["tool", "version", "installed", "removed", "runtime"], rows)
 
 
 def _is_runtime_name(session: Session, name: str) -> bool:
