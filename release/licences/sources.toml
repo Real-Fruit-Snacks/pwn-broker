@@ -1,0 +1,51 @@
+# What a release carries, with its licence and where its exact source is. One table per thing,
+# keyed by normalised name: python, asciinema, pwn-broker and every name in
+# release/requirements.lock. The build refuses a release if this file and the release disagree.
+#
+# licence: an SPDX identifier, as the project declares it.
+# source:  the address of the exact source. {version} becomes the version in the release; a
+#          wheel's source must have it.
+
+[python]
+licence = "PSF-2.0 and others (see python.txt)"
+source = "https://github.com/astral-sh/python-build-standalone/releases/tag/20261110 (CPython: https://github.com/python/cpython/tree/v3.13.18)"
+
+[asciinema]
+licence = "GPL-3.0-or-later"
+source = "https://github.com/asciinema/asciinema/tree/v{version}"
+
+[pwn-broker]
+licence = "MIT"
+source = "https://github.com/Real-Fruit-Snacks/pwn-broker/tree/v{version}"
+
+[markdown-it-py]
+licence = "MIT"
+source = "https://pypi.org/project/markdown-it-py/{version}/"
+
+[mdurl]
+licence = "MIT"
+source = "https://pypi.org/project/mdurl/{version}/"
+
+[prompt-toolkit]
+licence = "BSD-3-Clause"
+source = "https://pypi.org/project/prompt-toolkit/{version}/"
+
+[pygments]
+licence = "BSD-2-Clause"
+source = "https://pypi.org/project/pygments/{version}/"
+
+[pyte]
+licence = "LGPL-3.0-only"
+source = "https://pypi.org/project/pyte/{version}/"
+
+[rich]
+licence = "MIT"
+source = "https://pypi.org/project/rich/{version}/"
+
+[tomli-w]
+licence = "MIT"
+source = "https://pypi.org/project/tomli-w/{version}/"
+
+[wcwidth]
+licence = "MIT"
+source = "https://pypi.org/project/wcwidth/{version}/"

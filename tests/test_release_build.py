@@ -16,6 +16,7 @@ import sys
 import tarfile
 import tempfile
 import tomllib
+import zipfile
 import zlib
 from pathlib import Path
 
@@ -72,8 +73,18 @@ WHEELS = {
 }
 
 
-def wheel_bytes(name: str) -> bytes:
-    return f"stand-in wheel {name}\n".encode()
+def wheel_bytes(name: str, members: dict[str, bytes] | None = None) -> bytes:
+    """A stand-in wheel (a zip with fixed times). By default it carries its licence under
+    .dist-info/licenses/, the layout of current build tools."""
+    dist, version = name.split("-")[:2]
+    info = f"{dist}-{version}.dist-info"
+    if members is None:
+        members = {f"{info}/licenses/LICENSE": f"licence of {norm(dist)}\n".encode()}
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+        for member, data in {f"{info}/METADATA": f"Name: {dist}\n".encode(), **members}.items():
+            zf.writestr(zipfile.ZipInfo(member, (1980, 1, 1, 0, 0, 0)), data)
+    return buf.getvalue()
 
 
 def lock_text(wheels: dict[str, tuple[str, str]]) -> str:
@@ -82,6 +93,31 @@ def lock_text(wheels: dict[str, tuple[str, str]]) -> str:
         for file, (dist, version) in wheels.items()
     ]
     return "".join(line + "\n" for line in sorted(lines, key=lambda ln: norm(ln.split("==")[0])))
+
+
+PYTHON_LICENCE = b"python licence stand-in\n"
+ASCIINEMA_LICENCE = b"asciinema licence stand-in\n"
+
+
+def stand_in_sources() -> dict[str, dict[str, str]]:
+    sources = {
+        "python": {
+            "licence": "PSF-2.0 and others (see python.txt)",
+            "source": "https://example.invalid/python/3.13.18",
+        },
+        "asciinema": {"licence": "GPL-3.0-or-later", "source": "https://example.invalid/asciinema/v{version}"},
+        "pwn-broker": {"licence": "MIT", "source": "https://example.invalid/pwn-broker/v{version}"},
+    }
+    for dist, _version in WHEELS.values():
+        sources[dist] = {"licence": "MIT", "source": f"https://example.invalid/pypi/{dist}/{{version}}/"}
+    return sources
+
+
+def sources_text(sources: dict[str, dict[str, str]]) -> str:
+    return "".join(
+        f'[{name}]\nlicence = "{table["licence"]}"\nsource = "{table["source"]}"\n\n'
+        for name, table in sources.items()
+    )
 
 
 class FakeNet:
@@ -171,10 +207,33 @@ class Kit:
             f'[project]\nname = "pwn-broker"\nversion = "{version}"\n', encoding="utf-8", newline="\n"
         )
         (self.repo / "LICENSE").write_bytes(LICENCE)
+        licences = release / "licences"
+        licences.mkdir()
+        (licences / "python.txt").write_bytes(PYTHON_LICENCE)
+        (licences / "asciinema.txt").write_bytes(ASCIINEMA_LICENCE)
+        self.sources = stand_in_sources()
+        self.write_sources()
         self.net = FakeNet()
         self.tools = FakeTools(version)
         self.out = tmp_path / f"{name}-out"
         self.cache = tmp_path / f"{name}-cache"
+
+    def write_sources(self) -> None:
+        path = self.repo / "release" / "licences" / "sources.toml"
+        path.write_text(sources_text(self.sources), encoding="utf-8", newline="\n")
+
+    def use_wheel(self, file: str, members: dict[str, bytes] | bytes) -> None:
+        """Replaces what pip download drops for a locked wheel (a stand-in wheel with these
+        members, or these bytes as they are), and that wheel's lock line."""
+        self.tools.wheels[file] = members if isinstance(members, bytes) else wheel_bytes(file, members)
+        lines = [
+            f"{dist}=={version} --hash=sha256:{digest(self.tools.wheels[name])}\n"
+            for name, (dist, version) in WHEELS.items()
+        ]
+        lock = self.repo / "release" / "requirements.lock"
+        lock.write_text(
+            "".join(sorted(lines, key=lambda ln: norm(ln.split("==")[0]))), encoding="utf-8", newline="\n"
+        )
 
     def build(self, **kwargs) -> Path:
         kwargs.setdefault("fetch", self.net)
@@ -209,6 +268,12 @@ def no_real_network_or_tools(monkeypatch, tmp_path):
 @pytest.fixture
 def kit(tmp_path):
     return Kit(tmp_path)
+
+
+WHEEL_LICENCE_MEMBERS = [
+    *(f"{TOP}/licences/wheels/{dist}-{version}" for dist, version in WHEELS.values()),
+    *(f"{TOP}/licences/wheels/{dist}-{version}/LICENSE" for dist, version in WHEELS.values()),
+]
 
 
 def members(path: Path) -> list[tarfile.TarInfo]:
@@ -364,16 +429,21 @@ def test_a_release_build_has_fixed_members_and_the_gzip_header(kit):
     found = members(path)
     listed = [m.name for m in found]
     assert listed == sorted(listed)
-    assert listed == [
+    assert listed == sorted([
         TOP,
         f"{TOP}/asciinema",
         f"{TOP}/licences",
+        f"{TOP}/licences/README.txt",
+        f"{TOP}/licences/asciinema.txt",
         f"{TOP}/licences/pwn-broker.txt",
+        f"{TOP}/licences/python.txt",
+        f"{TOP}/licences/wheels",
+        *WHEEL_LICENCE_MEMBERS,
         f"{TOP}/python.tar.gz",
         f"{TOP}/wheels",
         f"{TOP}/wheels.lock",
-        *(f"{TOP}/wheels/{name}" for name in sorted([*WHEELS, "pwn_broker-0.1.0-py3-none-any.whl"])),
-    ]
+        *(f"{TOP}/wheels/{name}" for name in [*WHEELS, "pwn_broker-0.1.0-py3-none-any.whl"]),
+    ])  # fmt: skip
     for m in found:
         assert m.mtime == build.EPOCH
         assert (m.uid, m.gid, m.uname, m.gname) == (0, 0, "", "")
@@ -520,6 +590,253 @@ def test_hatchling_must_make_exactly_the_apps_wheel(kit, app, words):
 def test_a_failed_command_is_refused_with_its_last_lines(kit):
     kit.tools.fail = "hatchling"
     kit.refused(r"cannot build the app's wheel: first line / ERROR: it went wrong")
+
+
+# ---- Review focus 3: the licence of everything in the release
+
+RICH = "rich-15.0.0-py3-none-any.whl"
+RICH_INFO = "rich-15.0.0.dist-info"
+
+
+def licence_files(path: Path) -> dict[str, bytes]:
+    prefix = f"{TOP}/licences/"
+    with tarfile.open(path, "r:gz") as tf:
+        return {
+            m.name.removeprefix(prefix): tf.extractfile(m).read()
+            for m in tf.getmembers()
+            if m.isfile() and m.name.startswith(prefix)
+        }
+
+
+def test_licences_hold_the_programs_and_each_wheels_own_files(kit):
+    found = licence_files(kit.build())
+    readme = found.pop("README.txt")
+    assert readme.startswith(b"Licences of everything in this release")
+    assert found == {
+        "python.txt": PYTHON_LICENCE,
+        "asciinema.txt": ASCIINEMA_LICENCE,
+        "pwn-broker.txt": LICENCE,
+        "wheels/prompt-toolkit-3.0.53/LICENSE": b"licence of prompt-toolkit\n",
+        "wheels/rich-15.0.0/LICENSE": b"licence of rich\n",
+        "wheels/tomli-w-1.2.0/LICENSE": b"licence of tomli-w\n",
+    }
+
+
+def test_wheel_licence_files_are_found_under_both_layouts(kit):
+    exact = b"line\r\nnot utf-8: \xff\xfe\n"
+    kit.use_wheel(
+        RICH,
+        {
+            # the layout of current build tools
+            f"{RICH_INFO}/licenses/LICENSE": exact,
+            f"{RICH_INFO}/licenses/AUTHORS.rst": b"authors\n",
+            f"{RICH_INFO}/licenses/vendored/LICENSE.markdown-it": b"vendored\n",
+            # the older layout, directly in .dist-info
+            f"{RICH_INFO}/LICENCE.txt": b"licence\n",
+            f"{RICH_INFO}/COPYING": b"copying\n",
+            f"{RICH_INFO}/NOTICE": b"notice\n",
+            f"{RICH_INFO}/AUTHORS": b"authors, old\n",
+            # not licence files
+            f"{RICH_INFO}/RECORD": b"record\n",
+            f"{RICH_INFO}/top_level.txt": b"rich\n",
+            f"{RICH_INFO}/other/LICENSE": b"in another folder\n",
+            "rich/LICENSE": b"package data\n",
+            "rich-15.0.0.data/LICENSE": b"data\n",
+        },
+    )
+    found = licence_files(kit.build())
+    ours = {k.removeprefix("wheels/rich-15.0.0/"): v for k, v in found.items() if "rich-15" in k}
+    assert ours == {
+        "LICENSE": exact,
+        "AUTHORS.rst": b"authors\n",
+        "LICENSE.markdown-it": b"vendored\n",
+        "LICENCE.txt": b"licence\n",
+        "COPYING": b"copying\n",
+        "NOTICE": b"notice\n",
+        "AUTHORS": b"authors, old\n",
+    }
+
+
+def test_two_licence_files_of_one_name_in_a_wheel_are_refused(kit):
+    kit.use_wheel(
+        RICH,
+        {f"{RICH_INFO}/licenses/LICENSE": b"one\n", f"{RICH_INFO}/licenses/other/LICENSE": b"two\n"},
+    )
+    kit.refused(r"rich 15\.0\.0 carries two licence files named LICENSE")
+
+
+def test_a_wheel_that_is_not_a_zip_is_refused_naming_it(kit):
+    kit.use_wheel(RICH, b"not a zip\n")
+    kit.refused(r"rich-15\.0\.0-py3-none-any\.whl cannot be read as a wheel")
+
+
+def test_a_wheel_with_no_licence_file_is_refused_naming_it(kit):
+    kit.use_wheel(RICH, {f"{RICH_INFO}/RECORD": b"record\n", "rich/LICENSE": b"package data\n"})
+    kit.refused(
+        r"rich 15\.0\.0 carries no licence file, and release/licences/extra/rich\.txt does not exist"
+    )
+
+
+def test_a_licence_kept_in_the_repository_stands_in_for_a_wheels_own(kit):
+    kit.use_wheel("tomli_w-1.2.0-py3-none-any.whl", {})
+    extra = kit.repo / "release" / "licences" / "extra"
+    extra.mkdir()
+    (extra / "tomli-w.txt").write_bytes(b"kept in the repository\n")
+    (extra / "rich.txt").write_bytes(b"not used: the wheel has its own\n")
+    found = licence_files(kit.build())
+    assert found["wheels/tomli-w-1.2.0/tomli-w.txt"] == b"kept in the repository\n"
+    assert [k for k in found if k.startswith("wheels/rich")] == ["wheels/rich-15.0.0/LICENSE"]
+    readme = found["README.txt"].decode()
+    assert "  licence files: wheels/tomli-w-1.2.0/tomli-w.txt\n" in readme
+
+
+@pytest.mark.parametrize("name", ["python", "asciinema", "pwn-broker", "rich"])
+def test_something_in_the_release_with_no_table_in_sources_is_refused(kit, name):
+    del kit.sources[name]
+    kit.write_sources()
+    kit.refused(rf"sources\.toml has no \[{name}\] table, and the release carries {name}")
+
+
+def test_a_table_for_something_the_release_does_not_carry_is_refused(kit):
+    kit.sources["zlib-ng"] = {"licence": "Zlib", "source": "https://example.invalid/zlib-ng/{version}"}
+    kit.write_sources()
+    kit.refused(r"sources\.toml has a \[zlib-ng\] table, but the release does not carry zlib-ng")
+
+
+def test_a_wheels_source_without_version_is_refused(kit):
+    kit.sources["rich"]["source"] = "https://example.invalid/pypi/rich/15.0.0/"
+    kit.write_sources()
+    kit.refused(r"sources\.toml: the source of rich has no \{version\}")
+
+
+@pytest.mark.parametrize(
+    "table, words",
+    [
+        ({"licence": "MIT"}, r"\[rich\] needs a licence and a source"),
+        ({"source": "https://example.invalid/{version}"}, r"\[rich\] needs a licence and a source"),
+        ({"licence": "", "source": "https://example.invalid/{version}"}, r"\[rich\] needs a licence"),
+        ({"licence": "MIT", "source": 3}, r"\[rich\] needs a licence and a source"),
+        ({"licence": "MIT", "source": "http://example.invalid/{version}"}, r"the source of rich must be an https"),
+    ],
+)
+def test_a_table_without_a_licence_or_a_source_is_refused(kit, table, words):
+    path = kit.repo / "release" / "licences" / "sources.toml"
+    text = sources_text({k: v for k, v in kit.sources.items() if k != "rich"})
+    body = "".join(f"{k} = {v!r}\n".replace("'", '"') for k, v in table.items())
+    path.write_text(text + f"[rich]\n{body}", encoding="utf-8", newline="\n")
+    kit.refused(words)
+
+
+def test_a_missing_sources_file_is_refused(kit):
+    (kit.repo / "release" / "licences" / "sources.toml").unlink()
+    kit.refused(r"cannot read .*sources\.toml")
+
+
+@pytest.mark.parametrize("name", ["python.txt", "asciinema.txt"])
+def test_a_missing_licence_text_is_refused_naming_it(kit, name):
+    (kit.repo / "release" / "licences" / name).unlink()
+    kit.refused(rf"cannot read .*{re.escape(name)}")
+
+
+def test_the_licence_readme_names_every_thing_once_in_name_order(kit):
+    kit.use_wheel(RICH, {f"{RICH_INFO}/licenses/LICENSE": b"a\n", f"{RICH_INFO}/licenses/AUTHORS": b"b\n"})
+    readme = licence_files(kit.build())["README.txt"].decode()
+    assert readme == (
+        "Licences of everything in this release, and where the source of each is.\n"
+        "\n"
+        f"asciinema {recorder.VERSION}\n"
+        "  licence: GPL-3.0-or-later\n"
+        f"  source: https://example.invalid/asciinema/v{recorder.VERSION}\n"
+        "  licence files: asciinema.txt\n"
+        "\n"
+        "prompt-toolkit 3.0.53\n"
+        "  licence: MIT\n"
+        "  source: https://example.invalid/pypi/prompt-toolkit/3.0.53/\n"
+        "  licence files: wheels/prompt-toolkit-3.0.53/LICENSE\n"
+        "\n"
+        "pwn-broker 0.1.0\n"
+        "  licence: MIT\n"
+        "  source: https://example.invalid/pwn-broker/v0.1.0\n"
+        "  licence files: pwn-broker.txt\n"
+        "\n"
+        "python 3.13.18\n"
+        "  licence: PSF-2.0 and others (see python.txt)\n"
+        "  source: https://example.invalid/python/3.13.18\n"
+        "  licence files: python.txt\n"
+        "\n"
+        "rich 15.0.0\n"
+        "  licence: MIT\n"
+        "  source: https://example.invalid/pypi/rich/15.0.0/\n"
+        "  licence files: wheels/rich-15.0.0/AUTHORS, wheels/rich-15.0.0/LICENSE\n"
+        "\n"
+        "tomli-w 1.2.0\n"
+        "  licence: MIT\n"
+        "  source: https://example.invalid/pypi/tomli-w/1.2.0/\n"
+        "  licence files: wheels/tomli-w-1.2.0/LICENSE\n"
+    )
+    headings = re.findall(r"^([a-z][a-z-]*) \S+$", readme, re.MULTILINE)
+    assert headings == sorted(headings) and len(headings) == len(set(headings)) == 6
+
+
+def test_the_licence_readme_is_the_same_on_a_second_build(tmp_path):
+    first = licence_files(Kit(tmp_path, "one").build())["README.txt"]
+    second = Kit(tmp_path, "two")
+    second.tools.reverse = True
+    assert licence_files(second.build())["README.txt"] == first
+    assert first.endswith(b"\n") and b"\r" not in first and not first.endswith(b"\n\n")
+
+
+# ---- the licences this repository commits
+
+SHA256_PYTHON_LICENCE = "8437a26ddbc0acc2cda69cfdf10f8b8e5b716b044b4c59464d6086438e587e41"
+SHA256_ASCIINEMA_LICENCE = "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+LICENCES = REPO / "release" / "licences"
+
+
+def test_python_txt_is_the_licence_file_of_pwn_shops_python_runtime():
+    data = (LICENCES / "python.txt").read_bytes()
+    assert digest(data) == SHA256_PYTHON_LICENCE
+    assert b"\r" not in data
+
+
+def test_asciinema_txt_is_the_gpl_3_text_at_the_pinned_tag():
+    data = (LICENCES / "asciinema.txt").read_bytes()
+    assert digest(data) == SHA256_ASCIINEMA_LICENCE
+    assert b"\r" not in data
+    assert data.startswith(b"                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007\n")
+
+
+def test_sources_toml_has_a_table_for_everything_a_release_carries():
+    sources = build.read_sources(LICENCES / "sources.toml")
+    locked = {norm(n) for n, _v, _h in build.read_lock(REPO / "release" / "requirements.lock")}
+    assert set(sources) == {"python", "asciinema", "pwn-broker"} | locked
+    assert locked == {
+        "markdown-it-py", "mdurl", "prompt-toolkit", "pygments", "pyte", "rich", "tomli-w", "wcwidth"
+    }  # fmt: skip
+    for name in locked:
+        assert "{version}" in sources[name]["source"]
+        assert sources[name]["source"].startswith("https://pypi.org/project/")
+    for table in sources.values():
+        assert table["licence"].strip() and table["source"].startswith("https://")
+
+
+def test_sources_toml_names_the_pinned_python_and_asciinema():
+    sources = build.read_sources(LICENCES / "sources.toml")
+    pin = build.load_pins(REPO / "release" / "pins.toml")
+    release_tag = re.search(r"/releases/download/([^/]+)/", pin.url).group(1)
+    assert f"/releases/tag/{release_tag}" in sources["python"]["source"]
+    assert f"/tree/v{pin.version}" in sources["python"]["source"]
+    assert sources["python"]["licence"] == "PSF-2.0 and others (see python.txt)"
+    assert sources["asciinema"]["source"] == "https://github.com/asciinema/asciinema/tree/v{version}"
+    assert sources["asciinema"]["licence"] == "GPL-3.0-or-later"
+    assert sources["pwn-broker"]["licence"] == "MIT"
+
+
+def test_every_licence_kept_in_the_repository_is_for_a_locked_wheel():
+    locked = {norm(n) for n, _v, _h in build.read_lock(REPO / "release" / "requirements.lock")}
+    extra = LICENCES / "extra"
+    kept = [p.stem for p in extra.iterdir()] if extra.is_dir() else []
+    assert set(kept) <= locked
 
 
 # ---- the commands

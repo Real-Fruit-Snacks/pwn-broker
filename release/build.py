@@ -27,6 +27,7 @@ import tempfile
 import time
 import tomllib
 import urllib.request
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +49,9 @@ _VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9.!+_-]*")
 _WHEEL = re.compile(
     r"(?P<name>[^-]+)-(?P<version>[^-]+)(?:-[0-9][^-]*)?-[^-]+-[^-]+-[^-]+\.whl"
 )
+# a file directly in a wheel's .dist-info is a licence file if its name starts with one of these
+_LICENCE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "AUTHORS")
+_LICENCE_MAX = 1024 * 1024
 # gzip: deflate, no flags, no time, no extra flags, unknown system
 _GZIP_HEADER = bytes.fromhex("1f8b08000000000000ff")
 _STORED_MAX = 65535
@@ -153,6 +157,18 @@ def read_lock(path: Path) -> list[tuple[str, str, str]]:
     except OSError as exc:
         raise BuildError(f"cannot read {path}: {exc}") from exc
     return _parse_lock(raw, path.name)
+
+
+def read_sources(path: Path) -> dict[str, dict[str, str]]:
+    """release/licences/sources.toml: for each thing a release carries, its licence and source."""
+    tables = _read_toml(path)
+    for name, table in tables.items():
+        values = [table.get("licence"), table.get("source")] if isinstance(table, dict) else []
+        if len(values) != 2 or not all(isinstance(v, str) and v.strip() for v in values):
+            raise BuildError(f"{path.name}: [{name}] needs a licence and a source, each as text")
+        if not table["source"].startswith("https://"):
+            raise BuildError(f"{path.name}: the source of {name} must be an https address")
+    return tables
 
 
 # ---- downloading
@@ -364,6 +380,115 @@ def check_tree(root: Path, version: str) -> None:
         raise BuildError(f"wheels.lock has no line for {APP} {version}")
 
 
+def _wheel_licences(wheel: Path, name: str, version: str) -> dict[str, bytes]:
+    """The licence files a wheel carries, by file name: anything under its .dist-info/licenses/
+    (the layout of current build tools) and any file directly in .dist-info whose name starts
+    with LICENSE, LICENCE, COPYING, NOTICE or AUTHORS (the older layout)."""
+    found: dict[str, bytes] = {}
+    try:
+        with zipfile.ZipFile(wheel) as zf:
+            for info in zf.infolist():
+                parts = info.filename.split("/")
+                if info.is_dir() or len(parts) < 2 or not parts[0].endswith(".dist-info"):
+                    continue
+                under = parts[1] == "licenses" and len(parts) >= 3
+                direct = len(parts) == 2 and parts[1].startswith(_LICENCE_PREFIXES)
+                if not (under or direct) or parts[-1] in ("", ".", ".."):
+                    continue
+                file = parts[-1]
+                if file in found:
+                    raise BuildError(f"{name} {version} carries two licence files named {file}")
+                if info.file_size > _LICENCE_MAX:
+                    raise BuildError(f"{name} {version}: the licence file {file} is larger than 1 MiB")
+                found[file] = zf.read(info)
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise BuildError(f"{wheel.name} cannot be read as a wheel ({exc})") from exc
+    return found
+
+
+def add_licences(root: Path, licences: Path) -> None:
+    """Puts into the tree's licences/ the licence texts of Python and asciinema, and the
+    licence files of each locked wheel (or, for a wheel with none, the text kept in
+    licences/extra/ for it). Run once the wheels are in place and checked."""
+    target = root / "licences"
+    for file in ("python.txt", "asciinema.txt"):
+        try:
+            shutil.copyfile(licences / file, target / file)
+        except OSError as exc:
+            raise BuildError(f"cannot read {licences / file}: {exc}") from exc
+    for path in sorted((root / "wheels").iterdir()):
+        wheel = _wheel_name(path.name)
+        if wheel is None or wheel[0] == APP:
+            continue
+        name, version = wheel
+        files = _wheel_licences(path, name, version)
+        if not files:
+            extra = licences / "extra" / f"{name}.txt"
+            if not extra.is_file():
+                raise BuildError(
+                    f"{name} {version} carries no licence file, and "
+                    f"release/licences/extra/{name}.txt does not exist"
+                )
+            files = {extra.name: extra.read_bytes()}
+        folder = target / "wheels" / f"{name}-{version}"
+        folder.mkdir(parents=True)
+        for file, data in files.items():
+            (folder / file).write_bytes(data)
+
+
+def _licence_files(root: Path, name: str, version: str, wheel: bool) -> list[str]:
+    """The files of licences/ that hold the licence of one thing, sorted."""
+    licences = root / "licences"
+    if not wheel:
+        return [f"{name}.txt"] if (licences / f"{name}.txt").is_file() else []
+    folder = licences / "wheels" / f"{name}-{version}"
+    if not folder.is_dir():
+        return []
+    return sorted(f"wheels/{name}-{version}/{p.name}" for p in folder.iterdir() if p.is_file())
+
+
+def check_licences(
+    root: Path, version: str, sources: dict[str, dict[str, str]], programs: dict[str, str]
+) -> dict[str, tuple[str, list[str]]]:
+    """Everything the release carries has a table in sources.toml and a licence text in
+    licences/, and sources.toml has no table for anything else. Returns each thing's version
+    and licence files."""
+    raw = (root / "wheels.lock").read_bytes()
+    wheels = {_norm(n): v for n, v, _sha in _parse_lock(raw, "wheels.lock") if _norm(n) != APP}
+    carried = {**programs, APP: version, **wheels}
+    for name in sorted(carried):
+        if name not in sources:
+            raise BuildError(f"sources.toml has no [{name}] table, and the release carries {name}")
+    for name in sorted(sources):
+        if name not in carried:
+            raise BuildError(f"sources.toml has a [{name}] table, but the release does not carry {name}")
+    found = {}
+    for name in sorted(carried):
+        if name in wheels and "{version}" not in sources[name]["source"]:
+            raise BuildError(f"sources.toml: the source of {name} has no {{version}}")
+        files = _licence_files(root, name, carried[name], name in wheels)
+        if not files:
+            raise BuildError(f"the release has no licence text for {name}")
+        found[name] = (carried[name], files)
+    return found
+
+
+def write_licence_readme(
+    root: Path, sources: dict[str, dict[str, str]], found: dict[str, tuple[str, list[str]]]
+) -> None:
+    blocks = []
+    for name in sorted(found):
+        version, files = found[name]
+        blocks.append(
+            f"{name} {version}\n"
+            f"  licence: {sources[name]['licence']}\n"
+            f"  source: {sources[name]['source'].replace('{version}', version)}\n"
+            f"  licence files: {', '.join(files)}\n"
+        )
+    head = "Licences of everything in this release, and where the source of each is.\n"
+    (root / "licences" / "README.txt").write_bytes("\n".join([head, *blocks]).encode("utf-8"))
+
+
 def _app_wheel(folder: Path, version: str) -> Path:
     files = sorted(folder.iterdir())
     if not files:
@@ -450,6 +575,7 @@ def build_release(
     requirements = release / "requirements.lock"
     build_requirements = release / "build-requirements.lock"
     locked = read_lock(requirements)
+    sources = read_sources(release / "licences" / "sources.toml")
     read_lock(build_requirements)
     top = f"{APP}-{version}"
     name = f"{top}-linux-x86_64.tar.gz"
@@ -517,6 +643,11 @@ def build_release(
         (root / "wheels.lock").write_bytes(_wheels_lock(locked, version, sha256_file(app_wheel)))
         check_tree(root, version)
         _ok("checked the release: every wheel is named by wheels.lock with its SHA-256")
+        add_licences(root, release / "licences")
+        programs = {"python": python_pin.version, "asciinema": asciinema_pin.version}
+        found = check_licences(root, version, sources, programs)
+        write_licence_readme(root, sources, found)
+        _ok(f"checked the licences: {len(found)} things, each with its licence text and source")
 
         out.mkdir(parents=True, exist_ok=True)
         final = out / name
