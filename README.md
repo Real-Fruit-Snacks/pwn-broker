@@ -73,6 +73,13 @@ Launch runs a few checks, then offers a new box, an import, any active box to re
 | `target rename` | Rename a target and its folder |
 | `target show` | Show one target |
 | `target use` | Switch to a target |
+| `tool cache clear` | Empty the download cache |
+| `tool info` | Show a tool's details, how to run it and its examples |
+| `tool install` | Install a tool; name@version picks a version |
+| `tool list` | List the tools in the index; --installed shows this box's |
+| `tool refresh` | Fetch the tool index now |
+| `tool remove` | Take a tool off this box |
+| `tool search` | Search the index by name, description or tag |
 
 A box lives in `~/pwn-broker/active/<date>_<platform>_<name>/`:
 
@@ -109,19 +116,53 @@ The app rebuilds the `lists/` folder from the credential record whenever a crede
 
 Edits made by hand to these files are overwritten at the next rebuild.
 
+## Tools
+
+`tool install <name>` puts a tool on the machine for this box, and `finish` takes it off again. A package is one zip for one build of one tool: a manifest, the upstream licence, the tool's own files exactly as upstream published them, and, for a Python tool, every dependency as a wheel with its SHA-256 recorded. A package holds no install script. A Python tool gets its own virtual environment, built from the bundled wheels with no network access, wheels only and hash checking on. Nothing else from a package runs during install. Every download and every cached zip is checked against the size and SHA-256 in the index before it is used, and the app refuses to delete anything outside `/opt/pwn-broker`, whatever a manifest says. x86_64 only.
+
+The packages come from a second repository, `Real-Fruit-Snacks/pwn-shop`, where the published index lives. The first set planned for it is kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng and peass-ng. None of them has been installed on Kali yet.
+
+```
+forest/dc01 > tool install ligolo-ng
+ok    ligolo-ng 0.9.2 installed
+run   ligolo-proxy   from any terminal
+      sudo /opt/pwn-broker/bin/ligolo-proxy
+files /opt/pwn-broker/upload/ligolo-ng   agent  agent.exe
+```
+
+That is the shape of the output, not a recorded run. `tool list`, `tool search` and `tool info` work from the cached index without a network.
+
+- **Kali's own copies are never touched.** An install writes a launcher for each command into `/opt/pwn-broker/bin`, and that folder decides which copy a bare command name runs. If Kali already has a command of the same name, install prints a `warn` line with its path and says the installed one wins. `tool list` has a `kali` column that says whether Kali already has a command of that name.
+- **`sudo` is never reconfigured.** `sudo` does not search your PATH, so a tool that needs root is run as `sudo <full path>`. The app prints that path after install and in `tool info`.
+- **One build of a tool per machine**, shared by every unfinished box that uses it. A box that already has another build has to `tool remove` first.
+- **At `finish`**, the tools this box installed are removed unless another unfinished box still uses them. For a tool that writes to your home folder, the manifest lists the paths. Before the archive is made, `finish` copies that data into the box, and it deletes it afterwards only if it did not exist before the install. `finish` refuses while one of the box's tools is running, and names it.
+- **`export`** copies tool data into the box and removes nothing. **`import`**, and reopening a finished box, offer to install the box's tools again, at the same builds and checked against the SHA-256 the box recorded.
+
+### The tools index
+
+`tools_index` in `config.toml` says where the index is. It is a URL, or a folder on disk. In a folder, the index is `index.toml` and each zip is looked for by the `file` name the index gives, in the same folder; the `url` field is not used. A leading `~` is expanded.
+
+```toml
+tools_index = "~/pwn-shop/dist"
+```
+
+The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshes it when it is more than a day old and the source answers within two seconds, and otherwise uses what it has. `tool refresh` fetches it now. With no index and no cached copy, every `tool` command prints one `fail` line that says where it looked and how to set `tools_index`.
+
 ## Tested on
 
-- The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13, and again as root on 3.13: 784 passed, 1 skipped.
-- The unit tests, on Windows 11 with Python 3.13: 770 passed, 15 skipped. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer).
+- The unit tests, on Windows 11 with Python 3.13: 1264 passed, 33 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer, virtual environments and launchers).
+- The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13. On Linux they include real tool installs into a virtual environment and the launchers. No Linux count is given here, because none has been recorded for this version.
 - `install.sh`, run twice from a checkout on Ubuntu 24.04 in CI: the first run builds the environment, installs the package and writes the launcher and the PATH line; the second reuses the environment and adds no second PATH line.
 - The vimrc, run by Vim 9.2 in headless mode on a note the app wrote: folds, fold text, `F8`, colours, settings, and the reload after the app changes the note. Timers and focus events do not fire in that mode, so the tests run the check by hand.
-- *Not* tested: Kali Linux. The app has not been run there.
+- *Not* tested: Kali Linux. The app has not been run there, and the checks in `docs/kali-checks.md`, the tool checks included, have not been run yet.
+- *Not* tested: any real tool package. None of the six planned for `pwn-shop` has been installed on Kali.
 - *Not* tested: the installer's download. No release exists, so fetching the wheel and checking its SHA-256 has not run.
 - *Not* tested: the note window and the prompt on a real terminal.
 
 ## Known issues
 
-- Recording and tool install are not in this release. They are later phases in `docs/design.md`.
+- Recording is not in this release. It is a later phase in `docs/design.md`.
+- The published tool index is private for now, because `pwn-shop` is. Until it is public, `tools_index` must point at a folder that holds `index.toml` and the zips it names. The first one to try needs `pwn-shop` to exist, and it does not yet.
 - No release has been published, so the `curl` install line does not work yet. Install from a clone.
 - `cred list` marks a secret it cannot show exactly (a tab, another control character, or a space at either end) with `*` after the number. `cred show` prints it unchanged.
 - Links and special files (named pipes, sockets, devices) in a box are not archived. `export` and `finish` list them, and `finish` says how many will go when the folder is removed.
@@ -137,6 +178,7 @@ Edits made by hand to these files are overwritten at the next rebuild.
 | `default_platform` | `htb` | Platform used when a box is created |
 | `terminal` | `x-terminal-emulator` | What opens the note window |
 | `check_updates` | `true` | Look for a newer release at launch |
+| `tools_index` | the published index in `pwn-shop` | A URL, or a folder that holds `index.toml` and the zips it names |
 
 ## License
 

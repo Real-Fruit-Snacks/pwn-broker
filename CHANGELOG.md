@@ -9,5 +9,7 @@
 - Credentials kept as typed, with the `lists/` folder rebuilt from them for other tools.
 - File records with SHA-256, kept in `files.toml`.
 - `finish` to archive and close a box, `export` for a snapshot, and `import` to unpack one.
-- Settings in `config.toml`: `home`, `copy_to`, `default_platform`, `terminal`, `check_updates`.
-- Not in this version: recording, `/etc/hosts` management and tool install.
+- Tool installs: `tool list`, `search`, `info`, `install`, `remove`, `refresh` and `cache clear`. A package is a zip checked against the size and SHA-256 in the index; a Python tool is installed into its own virtual environment from bundled wheels with no network and hash checking on. Nothing from a package runs during install, and Kali's own copies of a tool are never changed.
+- Tools are removed at `finish` unless another unfinished box still uses them. Tool data in the home folder is copied into the box first and deleted only if it did not exist before the install. `finish` refuses while one of the box's tools is running. `export` copies tool data and removes nothing, and `import` and reopening a box offer to install its tools again.
+- Settings in `config.toml`: `home`, `copy_to`, `default_platform`, `terminal`, `check_updates`, `tools_index`.
+- Not in this version: recording and `/etc/hosts` management. The published tool index is private for now, so `tools_index` must point at a folder.

@@ -141,6 +141,10 @@ sh install.sh --from .">Copy</button></div>
                 <h3>Finish, export, import</h3>
                 <p><code>finish</code> archives the box and closes it. <code>export</code> writes a snapshot and keeps working. Both write to <code>~/pwn-broker/wrapped/</code>, and <code>pwn-broker import &lt;file&gt;</code> unpacks one.</p>
             </div>
+            <div class="block">
+                <h3>Tools, installed and taken off again</h3>
+                <p><code>tool install &lt;name&gt;</code> installs a package from the index: size and SHA-256 checked, no install script, and a Python tool gets its own virtual environment from bundled wheels with no network. Kali's own copies are never touched. A tool that needs root is run as <code>sudo &lt;full path&gt;</code>, which the app prints. <code>finish</code> removes the box's tools unless another unfinished box still uses them. x86_64 only.</p>
+            </div>
         </div>
     </div>
 </section>
@@ -196,13 +200,14 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
         <h2 id="tested-h">Tested on</h2>
         <div class="tested-grid">
             <ul class="untested" aria-label="Not tested">
-                <li><b>Not tested: Kali Linux.</b> The app has not been run there.</li>
+                <li><b>Not tested: Kali Linux.</b> The app has not been run there, and the checks in <code>docs/kali-checks.md</code>, the tool checks included, have not been run yet.</li>
+                <li><b>Not tested: any real tool package.</b> None of the six planned for <code>pwn-shop</code> (kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng, peass-ng) has been installed on Kali.</li>
                 <li><b>Not tested: the installer's download.</b> No release exists, so fetching the wheel and checking its SHA-256 has not run.</li>
                 <li><b>Not tested: the note window and the prompt on a real terminal.</b></li>
             </ul>
             <ul aria-label="Tested">
-                <li><b>The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13, and again as root on 3.13:</b> 784 passed, 1 skipped.</li>
-                <li><b>The unit tests, on Windows 11 with Python 3.13:</b> 770 passed, 15 skipped. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer).</li>
+                <li><b>The unit tests, on Windows 11 with Python 3.13:</b> 1264 passed, 33 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer, virtual environments and launchers).</li>
+                <li><b>The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13:</b> on Linux they include real tool installs into a virtual environment and the launchers. No Linux count is given here, because none has been recorded for this version.</li>
                 <li><b><code>install.sh</code>, run twice from a checkout on Ubuntu 24.04 in CI:</b> the first run builds the environment, installs the package and writes the launcher and the PATH line; the second reuses the environment and adds no second PATH line.</li>
                 <li><b>The vimrc, run by Vim 9.2 in headless mode on a note the app wrote:</b> folds, fold text, <kbd>F8</kbd>, colours, settings, and the reload after the app changes the note. Timers and focus events do not fire in that mode, so the tests run the check by hand.</li>
             </ul>
@@ -214,7 +219,8 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
     <div class="wrap">
         <h2 id="issues-h">Known issues</h2>
         <ul>
-            <li>Recording and tool install are not in this release. They are later phases in <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/design.md">the design</a>.</li>
+            <li>Recording is not in this release. It is a later phase in <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/design.md">the design</a>.</li>
+            <li>The published tool index is private for now, because <code>pwn-shop</code> is. Until it is public, <code>tools_index</code> must point at a folder that holds <code>index.toml</code> and the zips it names. The first one to try needs <code>pwn-shop</code> to exist, and it does not yet.</li>
             <li>No release has been published, so the <code>curl</code> install line does not work yet. Install from a clone.</li>
             <li><code>cred list</code> marks a secret it cannot show exactly (a tab, another control character, or a space at either end) with <code>*</code> after the number. <code>cred show</code> prints it unchanged.</li>
             <li>Links and special files (named pipes, sockets, devices) in a box are not archived. <code>export</code> and <code>finish</code> list them, and <code>finish</code> says how many will go when the folder is removed.</li>
