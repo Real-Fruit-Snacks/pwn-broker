@@ -49,6 +49,11 @@ endfunction
 " F8: an empty open fold below the current line, cursor on its blank line in insert mode
 function! s:NewFold(insert) abort
   let l:row = foldclosedend('.') == -1 ? line('.') : foldclosedend('.')
+  " a fold marker inside the box would break it, so on a box line the fold goes below the box
+  let l:box = s:BoxEnd()
+  if l:row <= l:box
+    let l:row = l:box
+  endif
   call append(l:row, [g:pwn_fold_start, '', g:pwn_fold_end])
   call cursor(l:row + 2, 1)
   normal! zv
@@ -59,12 +64,15 @@ endfunction
 nnoremap <silent> <F8> <Cmd>call <SID>NewFold(0)<CR>
 inoremap <silent> <F8> <Cmd>call <SID>NewFold(1)<CR>
 
-syntax on
-filetype on
+" Defined before filetype detection is switched on, so it runs first and markdown is never set.
+" Detection goes on before syntax: ":syntax on" would otherwise run detection on the note's
+" buffer by itself, without this group.
 augroup pwn_broker_filetype
   autocmd!
-  autocmd BufNewFile,BufRead notes.md set filetype=pwnnote
+  autocmd BufNewFile,BufRead notes.md setfiletype pwnnote
 augroup END
+filetype on
+syntax on
 execute 'source ' . fnameescape(s:dir . '/nightshift.vim')
 
 let s:state = ''

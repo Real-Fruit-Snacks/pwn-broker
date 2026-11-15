@@ -104,8 +104,8 @@ Edits made by hand to these files are overwritten at the next rebuild.
 
 ## Tested on
 
-- The unit tests, on Windows 11 with Python 3.13: 752 passed, 15 skipped. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer).
-- The vimrc, run by Vim 9.2 in headless mode on a note the app wrote: folds, fold text, `F8`, colours, settings and the reload after the box changes. Timers and focus events do not fire in that mode, so the tests call them by hand.
+- The unit tests, on Windows 11 with Python 3.13: 770 passed, 15 skipped. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer).
+- The vimrc, run by Vim 9.2 in headless mode on a note the app wrote: folds, fold text, `F8`, colours, settings, and the reload after the app changes the note. Timers and focus events do not fire in that mode, so the tests run the check by hand.
 - *Not* tested: Kali Linux. The app has not been run there.
 - *Not* tested: `install.sh`. It passes `sh -n`, its help and option handling are tested, and so is how it treats an existing `app/` folder (with a stand-in for `python3`), but it has not been run end to end.
 - *Not* tested: the note window and the prompt on a real terminal.

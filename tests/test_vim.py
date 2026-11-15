@@ -416,3 +416,80 @@ call Put('state', readfile(expand('%:p:h') . '/.note-state'))
     assert got["state"] == ["0"]
     assert sorted(p.name for p in box.path.iterdir()) == before
     assert (box.path / "notes.md").read_text(encoding="utf-8").endswith("one more line\n")
+
+
+IP_YES = ["10.10.10.161", "10.10.10.0/24", "(10.10.10.161)", "10.10.10.161:445", "http://10.10.10.161/", "0.0.0.0/0", "255.255.255.255/32"]
+IP_NO = ["1.2.3.4.5", "999.999.999.999", "10.10.10.256", "1.2.3.4.5.6"]
+PLACEHOLDER_YES = ["<DomainUser>", "<IP>", "<Target Host>", "<Password_1>", "<Dc-01 Name>"]
+PLACEHOLDER_NO = ["cat <input >out", "<a href>", "<ports>", "</port>", "<!-- x -->", "<html>", "< User>", "<User >", "<Two  Spaces>"]
+
+
+def _spans(box, work, cases: list[str], group: str) -> dict:
+    """For each case, on a line of its own, the columns vim gives `group`."""
+    text = render_note(TEMPLATE, box, []) + "".join(f"seen {case} here\n" for case in cases)
+    (box.path / "notes.md").write_text(text, encoding="utf-8", newline="")
+    got = run_vim(box.path, work, r"""
+let found = {}
+for lnum in range(1, line('$'))
+  let line = getline(lnum)
+  if line !~# '^seen '
+    continue
+  endif
+  let cols = []
+  for col in range(1, len(line))
+    if index(map(synstack(lnum, col), 'synIDattr(v:val, "name")'), 'GROUP') >= 0
+      call add(cols, col)
+    endif
+  endfor
+  let found[line[5:-6]] = cols
+endfor
+call Put('found', found)
+""".replace("GROUP", group))
+    return got["found"]
+
+
+def _expected(case: str, part: str) -> list[int]:
+    start = len("seen ") + case.index(part) + 1
+    return list(range(start, start + len(part)))
+
+
+def test_ip_addresses_coloured_only_when_real(box, work):
+    found = _spans(box, work, IP_YES + IP_NO, "pwnnoteIP")
+    for case in IP_YES:
+        address = case.strip("()/").removeprefix("http://").split(":")[0]
+        assert found[case] == _expected(case, address), case
+    for case in IP_NO:
+        assert found[case] == [], case
+
+
+def test_placeholders_coloured_only_when_real(box, work):
+    found = _spans(box, work, PLACEHOLDER_YES + PLACEHOLDER_NO, "pwnnotePlaceholder")
+    for case in PLACEHOLDER_YES:
+        assert found[case] == _expected(case, case), case
+    for case in PLACEHOLDER_NO:
+        assert found[case] == [], case
+
+
+def test_f8_on_a_box_line_puts_the_fold_below_the_box(box, note, work, dc01, web):
+    got = run_vim(box.path, work, r"""
+call cursor(3, 5)
+execute "normal \<F8>"
+call Put('lines', getline(1, 15))
+call Put('cursor', line('.'))
+""")
+    box_lines = note.splitlines()[:11]
+    assert got["lines"][:11] == box_lines
+    assert got["lines"][11:14] == [FOLD_START, "", FOLD_END]
+    assert got["cursor"] == 13
+    edited = "\n".join(got["lines"]) + "\n" + "\n".join(note.splitlines()[11:]) + "\n"
+    assert update_box(edited, box, [dc01, web]) == edited
+
+
+def test_markdown_never_loads(box, note, work):
+    got = run_vim(box.path, work, r"""
+call Put('filetype', &filetype)
+call Put('markdown', map(getscriptinfo({'name': 'syntax/markdown'}), 'v:val.name'))
+call Put('syntax', b:current_syntax)
+""")
+    assert got["filetype"] == "pwnnote" and got["syntax"] == "pwnnote"
+    assert got["markdown"] == []
