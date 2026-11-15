@@ -239,7 +239,7 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
         <h2 id="issues-h">Known issues</h2>
         <ul>
             <li>The recording, <code>/etc/hosts</code>, VPN and ping part has run on Kali only as root, in a container, with a virtual display and an OpenVPN file with no server. The checks still to run by hand are in <code>docs/kali-checks.md</code>.</li>
-            <li>Kali now ships Python 3.14. The Python tool packages published so far, <code>certipy</code> and <code>targetedkerberoast</code>, are built for Python 3.12 and 3.13, so on Kali <code>tool install</code> refuses them until they are rebuilt. The other four tools are not affected.</li>
+            <li>Kali now ships Python 3.14. Build 1 of the two Python tool packages, <code>certipy</code> and <code>targetedkerberoast</code>, is built for Python 3.12 and 3.13 only and is refused there. Build 2 of each covers Python 3.12, 3.13 and 3.14, and pwn-shop's CI installed it under 3.14. It has not been installed inside the Kali image. The other four tools need no Python.</li>
             <li>After <code>finish</code> removes the working folder, the note window stays open on a file that no longer exists. Close it by hand.</li>
             <li>A window still recording has no text copy until it closes or the box is exported. A full-screen program appears only in the <code>.cast</code>.</li>
             <li>A password typed on a command line in a recorded window is recorded, and goes into the archive. The <code>[rec]</code> prefix is for zsh and bash only.</li>
