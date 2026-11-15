@@ -844,6 +844,8 @@ A command may carry `env` (a table of environment variables) and `args` (argumen
 
 In `examples`, `{ip}`, `{hostname}` and `{domain}` are filled from the current target and `{lhost}` from the VPN address when one is known. A placeholder with no value is shown as `<ip>`, `<hostname>` and so on.
 
+Section 8.12 replaces `[python].versions` with a required runtime, in schema 2.
+
 The app refuses a manifest or an index whose `schema` it does not know, and says to upgrade pwn-broker. A change to either format ships in the app first and in packages afterwards.
 
 ### 8.2 The pwn-shop repository
@@ -1034,6 +1036,131 @@ No package in the first batch needs a system package, so the manifest has no fie
 ### 8.11 Accepted trade
 
 `/opt/pwn-broker/bin` is writable by my user and first on my PATH, so anything running as me could place a command I later run. On a single-user lab VM that is acceptable. It would not be on a shared machine.
+
+### 8.12 Python runtimes
+
+Not built yet. This section is the design.
+
+**Why.** A Python tool runs on Kali's own `python3`, from wheels bundled for a fixed list of versions. That has two faults. A tool that needs a Python Kali does not have cannot be packaged. And every time Kali moves to a new Python, the Python tools are refused until I rebuild them: the Kali image went to 3.14 and refused both.
+
+**Approaches.**
+
+| Decision | Options | Chosen | Why |
+|---|---|---|---|
+| Where a tool's Python comes from | Kali's own · bundled inside each tool · a shared runtime package · fetched at install by `uv` or `apt` | A shared runtime package | A stripped Python build is about 36 MB. Inside each tool, twenty Python tools would carry 720 MB of the same files; shared, it is 36 MB per Python version in use, and a fix to Python is one rebuild. Fetching at install needs the network and is not pinned by my checksums, and `apt` changes Kali |
+| Which tools use one | Every Python tool · only those Kali's Python cannot run | Every Python tool | A Kali upgrade can then never break a tool, a tool carries wheels for one Python, and there is one way to build a Python tool |
+| What a tool may depend on | Runtimes only · other tools too · version ranges | Runtimes only, by name | Tool-to-tool dependencies and ranges are where package managers get complicated. A list leaves room for another kind of runtime later |
+| How the runtime is carried | The upstream archive as one file · its files unpacked into the zip | The upstream archive, byte for byte | The archive is 36 MB and holds 100 MB of files, a thousand of them links. Kept whole, the package stays small and its checksum is upstream's own |
+
+**A runtime package.** A package of kind `runtime`, named for its Python series:
+
+```
+manifest.toml
+LICENSE                     Python's licence
+files/python.tar.gz         the upstream build, byte for byte
+```
+
+```toml
+schema = 2
+name = "python-3.13"
+version = "3.13.18"                  # CPython's own version
+build = 1
+kind = "runtime"
+description = "CPython 3.13, for the tools that require it"
+upstream = "https://github.com/astral-sh/python-build-standalone"
+licence = "PSF-2.0"
+arch = "x86_64"
+
+[runtime]
+archive = "files/python.tar.gz"
+python = "python/bin/python3.13"     # the interpreter, inside the unpacked archive
+series = "3.13"                      # the Python the requiring tools' wheels are built for
+```
+
+- The source is the `install_only_stripped` build for `x86_64-unknown-linux-gnu` from `astral-sh/python-build-standalone`, pinned in the recipe by size and SHA-256. Upstream publishes its own checksums, so the pin has a second source.
+- A runtime has no `[[command]]`, no `[[upload]]`, no `[data]` and no `[python]`. A manifest with any of them is refused.
+- A runtime puts nothing in `/opt/pwn-broker/bin`. Kali's own `python3` is never shadowed, and the reserved command names do not change.
+- Package names may now hold a dot, so `python-3.13` is a name: letters, digits, hyphens and dots, starting with a letter or digit, with no two dots together and none at the end. Both repositories apply the same rule.
+
+**A tool that requires one.**
+
+```toml
+schema = 2
+requires = ["python-3.13"]
+
+[python]
+lock = "wheels.lock"
+wheels = "wheels"
+```
+
+- `requires` names runtime packages. A Python tool names exactly one. A tool that is not Python names none.
+- `[python].versions` is gone from schema 2: the bundled wheels cover the runtime's series and nothing else.
+- A package has schema 2 only if it is a runtime or requires one. Every other package stays schema 1, so the builds already published still rebuild byte for byte.
+- The index gains the same two things: an entry's kind may be `runtime`, and a build may carry `requires`. Its schema becomes 2.
+- The app reads both schemas. A schema 1 Python tool (builds 1 and 2 of `certipy` and `targetedkerberoast`) installs as before, on Kali's own Python, where that Python is one it lists.
+
+**Installing.** `tool install certipy`:
+
+```
+forest/dc01 > tool install certipy
+ok  python-3.13 3.13.18 installed (runtime, 36 MB)
+ok  certipy 5.1.0 installed
+```
+
+1. The app picks the tool's build and reads what it requires from the index.
+2. For each runtime it requires that is not on the machine, the app takes the latest build of that name from the index, downloads it, checks its size and SHA-256 as for any package, unpacks the zip into `tools/<runtime>/<version>-<build>/`, and unpacks the archive inside it under the rules below. A runtime that is already there, at any build, is used as it is.
+3. The tool's virtual environment is made by the runtime's interpreter, and `pip` installs the bundled wheels into it exactly as now: no index, binaries only, every hash required.
+4. If any step fails, everything the command created is removed, a runtime it installed for this tool included, and nothing is recorded.
+
+Making the environment runs the runtime's interpreter. That is the one new thing that runs during an install, and it is the pinned upstream Python.
+
+**Unpacking the archive.** The app does this itself, and refuses the whole runtime if any member breaks a rule:
+
+- Only regular files, folders and symbolic links. No hard links, devices or pipes.
+- A link's target is relative and stays inside the runtime's folder once resolved.
+- No absolute names, no name that leaves the folder, no backslash, colon or control character in a name.
+- At most 20,000 members and 1 GiB unpacked.
+- Modes become 644 or 755, and everything belongs to me.
+- It is unpacked beside its final place and renamed in, so a half-unpacked runtime is never used.
+
+**Sharing and removal.**
+
+- One build of a runtime is on the machine at a time, shared by every tool that requires it.
+- A runtime is needed while any installed tool requires it. The app works that out from the installed tools; a runtime has no list of users of its own.
+- At `finish` and at `tool remove`, after the tools are gone, any runtime no installed tool requires is removed. The check for files left behind at launch covers runtimes too.
+- `box.toml` records, with each tool, the runtime it was built on: name, version, build and SHA-256.
+- `import`, and reopening a finished box, install the tools again as now, and with them whatever runtime they require.
+- A newer build of a runtime in the index does not replace one that is installed. It is used the next time none is.
+
+**Commands.**
+
+- `tool list` and `tool search` show tools, not runtimes. `status` counts tools.
+- `tool info <tool>` gains a line: `requires  python-3.13 (36 MB, not installed)`.
+- `tool install` and `tool remove` refuse a runtime's name: `python-3.13 is a runtime; it is installed with the tools that need it`.
+- `finish`'s summary lists the runtimes it will remove beside the tools.
+
+**In pwn-shop.**
+
+- A recipe for each runtime, `recipes/python-3.13/`, with the source pin and the manifest. `build.py` builds kind `runtime`: no wheels, the archive carried as it is.
+- A Python tool's recipe names its runtime in its manifest. `build.py lock` resolves for that runtime's series alone, and the build refuses a wheel that does not fit it. The fixed list of Python versions goes away.
+- The first runtime is `python-3.13`, at CPython 3.13.18. `certipy` and `targetedkerberoast` become build 3, each requiring it.
+- CI builds the runtime with the other packages and installs every tool through pwn-broker's own code, which now installs the runtime from the built index first.
+- A new CI job installs every package inside the official Kali image and starts each command with `--help`, so the real tools are run on a real Kali.
+
+**Testing.**
+
+- The archive rules, one test per refusal, on every platform.
+- `requires` in a manifest and in the index; the install order and what is removed when a step fails; removal after the last tool; a runtime left behind; `import`.
+- On Linux, a stand-in runtime: a small archive whose `python3` is a script that runs the machine's own Python, so a real environment is made from it.
+- The real runtime runs in pwn-shop's CI, on Ubuntu and in the Kali image.
+
+**Accepted trades.**
+
+- The first Python tool on a machine costs a 36 MB download and about 100 MB of disk.
+- The runtime carries its own OpenSSL and other libraries. They are fixed when I publish a new build of the runtime, not when Kali updates.
+- The runtime's interpreter runs during an install.
+- x86_64 with glibc only, as for every other package.
+- A tool has one Python runtime. No tool depends on another tool.
 
 ## 9. What finish puts back
 
