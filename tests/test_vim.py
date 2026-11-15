@@ -1,7 +1,7 @@
 """The packaged vimrc run by a real vim, headless (-es), on a note the app rendered.
 
 Ex mode never reaches vim's main loop, so timers, focus events and TextChanged do not fire on their
-own: the scripts call the timer's function or fire the autocommand by hand.
+own: the scripts call the vimrc's check function or run :checktime by hand.
 """
 
 import json
@@ -13,7 +13,12 @@ from pathlib import Path
 
 import pytest
 
+from helpers import NOW
+from pwn_broker import shell  # noqa: F401  (fills the command registry)
+from pwn_broker.config import Settings
+from pwn_broker.console import FakeConsole
 from pwn_broker.note import FOLD_END, FOLD_START, render_note, title_text, update_box
+from pwn_broker.session import Session
 
 pytestmark = pytest.mark.skipif(shutil.which("vim") is None, reason="vim not installed")
 
@@ -29,8 +34,20 @@ endfunction
 function! Find(pattern) abort
   return search(a:pattern, 'nw')
 endfunction
-function! Script(name) abort
-  return call(function('<SNR>' . getscriptinfo({'name': 'data/vimrc$'})[0].sid . '_' . a:name), [0])
+" calls a function the vimrc keeps to itself
+function! Script(name, ...) abort
+  return call(function('<SNR>' . getscriptinfo({'name': 'data/vimrc$'})[0].sid . '_' . a:name), a:000)
+endfunction
+" every fold start in order: open, closed, or hidden inside a closed fold
+function! Folds() abort
+  let found = []
+  for n in range(1, line('$'))
+    if stridx(getline(n), g:pwn_fold_start) >= 0
+      let c = foldclosed(n)
+      call add(found, c == -1 ? 'open' : c == n ? 'closed' : 'hidden')
+    endif
+  endfor
+  return found
 endfunction
 """
 
@@ -38,6 +55,7 @@ endfunction
 def run_vim(folder: Path, work: Path, script: str) -> dict:
     """Opens folder/notes.md in vim with the packaged vimrc, runs script, returns what it Put."""
     out = work / "out.json"
+    out.unlink(missing_ok=True)
     source = work / "check.vim"
     source.write_text(
         PRELUDE + script + f"\ncall writefile([json_encode(g:out)], '{out.as_posix()}')\nqa!\n",
@@ -45,14 +63,15 @@ def run_vim(folder: Path, work: Path, script: str) -> dict:
     )
     argv = ["vim", "-u", VIMRC.as_posix(), "-N", "-es", "-S", source.as_posix(), (folder / "notes.md").as_posix()]
     proc = subprocess.Popen(
-        argv, cwd=folder, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        argv, cwd=folder, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
     )
     try:
-        proc.wait(timeout=30)
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
+        _, err = proc.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        _, err = proc.communicate()
+        pytest.fail(f"vim did not finish within 30 seconds: {err.decode(errors='replace')}")
+    assert out.exists(), f"vim wrote no results (exit {proc.returncode}): {err.decode(errors='replace')}"
     return json.loads(out.read_text(encoding="utf-8"))
 
 
@@ -103,7 +122,7 @@ call Put('normal_bg', synIDattr(hlID('Normal'), 'bg#', 'gui'))
 """)
     assert got["number"] == 0 and got["modeline"] == 0
     assert got["swapfile"] == 0 and got["backup"] == 0 and got["writebackup"] == 0
-    assert got["hlsearch"] == 0 and got["autoread"] == 1 and got["updatetime"] == 1000
+    assert got["hlsearch"] == 0 and got["autoread"] == 0 and got["updatetime"] == 1000
     assert got["mapleader"] == ","
     assert "No mapping found" in got["leader_maps"] and "<Leader>" not in got["leader_maps"].replace("No mapping found", "")
     assert got["foldmethod"] == "marker"
@@ -190,12 +209,10 @@ call Put('level', foldlevel('.'))
     assert got["level"] == 2
 
 
-def _reload_script(newer: Path, how: str) -> str:
-    reload = {
-        "timer": "call Script('Reload')",
-        "focus": "doautocmd FocusLost\nchecktime",
-    }[how]
-    return r"""
+RELOADS = {"check": "call Script('Check')", "checktime": "checktime"}
+
+# opens dc01's fold, and the fold inside web, then closes web again around it
+OPEN_FOLDS = r"""
 let dc01 = Find('^Target: dc01 ') - 1
 let web = Find('^Target: web ') - 1
 execute dc01 . 'foldopen'
@@ -204,47 +221,130 @@ call cursor(web + 1, 1)
 let web_inner = search('^nested title$', 'nW') - 1
 execute web_inner . 'foldopen'
 execute web . 'foldclose'
-let row = Find('^login as ')
-call cursor(row, 10)
-call Put('before', [line('.'), col('.'), getline('.'), line('$')])
-call Put('before_folds', [foldclosed(dc01), foldclosed(web)])
-call writefile(readfile('NEWER', 'b'), expand('%:p'), 'b')
-RELOAD
-let dc01 = Find('^Target: dc01 ') - 1
-let web = Find('^Target: web ') - 1
-let ws = Find('^Target: ws ')
+"""
+AT_LOGIN = "call cursor(Find('^login as '), 10)\n"
+
+AFTER = r"""
 call Put('after', [line('.'), col('.'), getline('.'), line('$')])
-call Put('after_folds', [foldclosed(dc01), foldclosed(web), dc01, web])
-call Put('box_has_ws', getline(1, 20))
-call Put('dc01_inner', foldclosed(search('^nested title$', 'nW')))
+call Put('after_folds', Folds())
+call Put('box', getline(1, 20))
+let web = Find('^Target: web ') - 1
 execute web . 'foldopen'
 call cursor(web + 1, 1)
 let web_inner = search('^nested title$', 'nW') - 1
-call Put('web_inner', [foldclosed(web_inner), web_inner])
+call Put('web_inner', foldclosed(web_inner))
 call Put('modified', &modified)
-""".replace("NEWER", newer.as_posix()).replace("RELOAD", reload)
+"""
+
+# dc01 open, the fold in it closed, web closed, the fold in web hidden, the two at the end closed
+BEFORE_FOLDS = ["open", "closed", "closed", "hidden", "closed", "closed"]
 
 
-@pytest.mark.parametrize("how", ["timer", "focus"])
-@pytest.mark.parametrize("extra", [1, 12])
-def test_reload_keeps_open_folds_and_the_cursor(box, note, work, dc01, web, how, extra):
-    more = [replace(web, name=f"ws{i}" if i else "ws", ips=[f"10.10.20.{i}"]) for i in range(extra)]
-    newer = work / "newer.md"
-    newer.write_text(update_box(note, box, [dc01, web, *more]), encoding="utf-8", newline="")
-    got = run_vim(box.path, work, _reload_script(newer, how))
-    line, col, text, count = got["before"]
-    assert got["before_folds"][0] == -1 and got["before_folds"][1] != -1
-    assert got["after"] == [line + extra, col, text, count + extra]
-    assert text.startswith("login as <DomainUser>")
-    dc01_closed, web_closed, dc01_start, web_start = got["after_folds"]
-    assert dc01_closed == -1
-    assert web_closed == web_start
-    assert any(row.startswith("#    ws ") for row in got["box_has_ws"])
-    # the fold inside web was opened before web was closed, and is still open inside it
-    assert got["web_inner"][0] == -1
-    # the one inside dc01 was never opened
-    assert got["dc01_inner"] != -1
+def reload_vim(box: Path, work: Path, newer: str, how: str = "check", place: str = AT_LOGIN) -> dict:
+    """Opens the note with folds set as in OPEN_FOLDS, writes newer over it from inside vim, and
+    makes vim check the file the way `how` names."""
+    source = work / "newer.md"
+    source.write_text(newer, encoding="utf-8", newline="")
+    script = (
+        OPEN_FOLDS
+        + place
+        + "call Put('before', [line('.'), col('.'), getline('.'), line('$')])\n"
+        + "call Put('before_folds', Folds())\n"
+        + f"call writefile(readfile('{source.as_posix()}', 'b'), expand('%:p'), 'b')\n"
+        + RELOADS[how]
+        + AFTER
+    )
+    got = run_vim(box, work, script)
+    assert got["before_folds"] == BEFORE_FOLDS
     assert got["modified"] == 0
+    return got
+
+
+def assert_same_text(got: dict, moved: int) -> None:
+    line, col, text, _ = got["before"]
+    assert got["after"][:3] == [line + moved, col, text]
+
+
+@pytest.mark.parametrize("how", ["check", "checktime"])
+@pytest.mark.parametrize("extra", [1, 2, 12])
+def test_reload_after_the_box_grows_keeps_folds_and_cursor(box, note, work, dc01, web, how, extra):
+    more = [replace(web, name=f"ws{i}", ips=[f"10.10.20.{i}"]) for i in range(extra)]
+    got = reload_vim(box.path, work, update_box(note, box, [dc01, web, *more]), how)
+    assert_same_text(got, extra)
+    assert got["before"][2].startswith("login as <DomainUser>")
+    assert got["after_folds"] == BEFORE_FOLDS
+    assert any(row.startswith("#    ws0 ") for row in got["box"])
+    # the fold inside web was opened before web was closed, and is still open inside it
+    assert got["web_inner"] == -1
+
+
+def test_reload_after_the_box_shrinks(box, note, work, dc01):
+    got = reload_vim(box.path, work, update_box(note, box, [dc01]))
+    assert_same_text(got, -1)
+    assert got["after_folds"] == BEFORE_FOLDS
+
+
+def test_reload_after_target_add_by_the_app(box, note, work, paths, dc01, web):
+    from pwn_broker.shell.commands import dispatch
+
+    session = Session(paths, Settings(), FakeConsole(["10.10.10.50", "", "", "web01"]), box, [dc01, web], [], dc01, lambda: NOW)
+    dispatch(session, "target add")
+    assert ("ok", "target web01 created") in session.console.lines
+    path = box.path / "notes.md"
+    added = path.read_text(encoding="utf-8")
+    path.write_text(note, encoding="utf-8", newline="")
+    got = reload_vim(box.path, work, added)
+    assert_same_text(got, 1)
+    assert got["after_folds"] == [*BEFORE_FOLDS, "closed"]
+    assert got["after"][3] > got["before"][3] + 10
+    assert got["web_inner"] == -1
+
+
+def test_reload_after_an_append_at_the_end(box, note, work):
+    got = reload_vim(box.path, work, note + "x\n\nmore\n")
+    assert_same_text(got, 0)
+    assert got["after"][3] == got["before"][3] + 3
+    assert got["after_folds"] == BEFORE_FOLDS
+
+
+def test_reload_with_the_cursor_in_the_box(box, note, work, dc01, web):
+    more = [replace(web, name=f"ws{i}", ips=[f"10.10.20.{i}"]) for i in range(2)]
+    got = reload_vim(box.path, work, update_box(note, box, [dc01, web, *more]), place="call cursor(3, 6)\n")
+    assert got["before"][:2] == [3, 6]
+    assert got["after"][:2] == [3, 6]
+    assert got["after_folds"] == BEFORE_FOLDS
+
+
+def test_unsaved_changes_are_not_reloaded_over(box, note, work, dc01, web):
+    newer = work / "newer.md"
+    newer.write_text(update_box(note, box, [dc01]), encoding="utf-8", newline="")
+    got = run_vim(box.path, work, f"""
+normal! Gotyped
+let v:errmsg = ''
+call writefile(readfile('{newer.as_posix()}', 'b'), expand('%:p'), 'b')
+silent! call Script('Check')
+call Put('last', getline('$'))
+call Put('modified', &modified)
+""")
+    assert got["last"] == "typed" and got["modified"] == 1
+
+
+def test_check_on_an_unchanged_note_is_cheap(box, work, dc01):
+    text = render_note(TEMPLATE, box, [dc01])
+    body = "".join(f"line {n} with 10.10.10.{n % 250} and <DomainUser>\n" for n in range(168))
+    text += "".join(f"\n{FOLD_START}\nTarget: t{i}\n{body}{FOLD_END}\n" for i in range(29))
+    (box.path / "notes.md").write_text(text, encoding="utf-8", newline="")
+    got = run_vim(box.path, work, r"""
+call Put('lines', line('$'))
+call Put('folds', len(Folds()))
+let start = reltime()
+for i in range(200)
+  call Script('Check')
+endfor
+call Put('ms', reltimefloat(reltime(start)) * 1000.0 / 200)
+""")
+    assert got["lines"] > 4900 and got["folds"] == 30
+    assert got["ms"] < 5, got["ms"]
 
 
 def test_highlighting(box, note, work):

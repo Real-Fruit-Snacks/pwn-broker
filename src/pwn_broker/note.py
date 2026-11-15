@@ -108,9 +108,12 @@ def update_box(text: str, box: Box, targets: list[Target]) -> str:
     lines = _lines(text)
     if not _is_rule(lines[0]):
         raise NoteError(_DAMAGED)
+    # the closing rule is as wide as the opening one, so a rule of my own below a box whose
+    # closing line I deleted is not taken for it
+    width = len(lines[0].rstrip())
     for end in range(1, len(lines)):
         line = lines[end]
-        if _is_rule(line):
+        if _is_rule(line) and len(line.rstrip()) == width:
             break
         if not line.startswith("#") or FOLD_START in line:
             raise NoteError(_DAMAGED)

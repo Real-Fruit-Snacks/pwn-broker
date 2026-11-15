@@ -69,6 +69,15 @@ def test_refresh_warns_when_markers_are_damaged(session):
     assert "left alone" in session.console.lines[0][1]
 
 
+def test_refresh_warns_about_a_missing_box_once(session):
+    note = session.box.path / NOTE_NAME
+    note.write_text("no box here\n", encoding="utf-8", newline="")
+    for _ in range(3):
+        refresh(session)
+    assert [k for k, _ in session.console.lines] == ["warn"]
+    assert note.read_text(encoding="utf-8") == "no box here\n"
+
+
 def test_refresh_without_a_target_change_does_not_rewrite_the_note(session):
     note = session.box.path / NOTE_NAME
     refresh(session)

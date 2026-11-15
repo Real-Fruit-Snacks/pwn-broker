@@ -178,6 +178,11 @@ def test_update_box_on_empty_text_returns_the_box(box, dc01):
     assert update_box("", box, [dc01]) == _box_text(box, [dc01])
 
 
+def test_update_box_closing_rule_has_the_opening_rule_width(box, dc01):
+    before = "#" * 64 + "\n# a\n" + "#" * 30 + "\n# mine\n" + "#" * 64 + "\nafter\n"
+    assert update_box(before, box, [dc01]) == _box_text(box, [dc01]) + "after\n"
+
+
 def test_update_box_ends_at_the_first_closing_rule(box, dc01):
     rule = "#" * 40
     before = f"{rule}\n# a\n{rule}\nmine\n{rule}\n"
@@ -190,6 +195,8 @@ def test_update_box_ends_at_the_first_closing_rule(box, dc01):
         "free text first\n" + "#" * 64 + "\n",
         "#" * 19 + "\n# a\n" + "#" * 19 + "\n",
         "#" * 64 + "\n# a\n# b\n",
+        "#" * 64 + "\n# a\n" + "#" * 40 + "\n## my heading\n",
+        "#" * 64 + "\n# a\n" + "#" * 65 + "\n",
         "#" * 64 + "\n# a\nnot a box line\n" + "#" * 64 + "\n",
         "#" * 64 + "\n# a\n" + FOLD_START + "\nTarget: x\n" + FOLD_END + "\n" + "#" * 64 + "\n",
         " " + "#" * 64 + "\n# a\n" + "#" * 64 + "\n",

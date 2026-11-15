@@ -13,6 +13,10 @@ from pwn_broker.setup import load_template
 from pwn_broker.store import load_creds, load_files, load_targets, save_box, save_creds, save_files
 
 
+# the key in Session.warned for a note that could not be updated; no file path holds a NUL
+NOTE_WARNED = "\0note"
+
+
 @dataclass
 class Session:
     paths: AppPaths
@@ -62,8 +66,12 @@ def refresh(session: Session) -> ListSummary:
             # an unchanged note is not written, so vim has nothing to reload
             if drawn != text:
                 write_note(box, drawn)
+            session.warned.discard(NOTE_WARNED)
         except NoteError as exc:
-            session.console.warn(str(exc))
+            # every cred command refreshes, so a broken box is reported once, not each time
+            if NOTE_WARNED not in session.warned:
+                session.warned.add(NOTE_WARNED)
+                session.console.warn(str(exc))
     return summary
 
 

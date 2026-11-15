@@ -299,7 +299,7 @@ Target: dc01   10.10.10.161   forest.htb.local   external
 - Apart from the box and those title lines, the app never changes anything in the note.
 - The folds use the markers `##########@@@@@@@@@@` and `@@@@@@@@@@##########` and can nest. The note opens with every fold closed. A closed fold shows only the line under its start marker, or `(empty fold)` when that line is blank.
 - `F8`, in normal or insert mode, adds an empty fold below the current line, open, with the cursor inside it in insert mode.
-- The vimrc saves the note when I leave the window and reloads it when I come back, so the app and vim never overwrite each other. When the app redraws the box, open folds stay open and the cursor stays on the same text. Vim writes no swap or backup file into the box folder.
+- The vimrc saves the note when I leave the window and reloads it when I come back, so the app and vim never overwrite each other. Vim checks the file every second and when I come back to the window, and reloads it only when it changed on disk; if I have unsaved changes too, it asks, as vim always does. Across a reload, open folds stay open, a fold the app just added starts closed, and the cursor stays on the same text. The check waits while I am partway through something: a selection, a command line, an operator or a count. Vim writes no swap or backup file into the box folder.
 - `note` in the prompt reopens the window if I closed it.
 
 ### 6.7 The prompt

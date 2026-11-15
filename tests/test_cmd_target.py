@@ -99,6 +99,33 @@ def test_target_add_updates_everything(session):
     assert ("ok", "target web01 created") in session.console.lines
 
 
+def test_target_add_writes_the_note_once(session, monkeypatch):
+    from pwn_broker import session as session_module
+
+    writes = []
+    real = note.write_note
+
+    def counted(box, text):
+        writes.append(text)
+        real(box, text)
+
+    monkeypatch.setattr(note, "write_note", counted)
+    monkeypatch.setattr(session_module, "write_note", counted)
+    session.console = FakeConsole(["10.10.10.50", "", "", "web01"])
+    dispatch(session, "target add")
+    assert len(writes) == 1
+    assert "#    web01 " in writes[0] and "Target: web01   10.10.10.50" in writes[0]
+
+
+def test_target_add_with_a_damaged_box_still_appends_the_section(session):
+    path = session.box.path / "notes.md"
+    path.write_text("mine\n", encoding="utf-8", newline="")
+    session.console = FakeConsole(["10.10.10.50", "", "", "web01"])
+    dispatch(session, "target add")
+    assert path.read_text(encoding="utf-8").startswith(f"mine\n\n{FOLD_START}\nTarget: web01 ")
+    assert [kind for kind, _ in session.console.lines].count("warn") == 1
+
+
 def test_target_add_section_template_can_use_box_fields(session):
     session.paths.templates.mkdir(parents=True)
     template = f"# $name\n{note.SECTION_MARK}\n## $target on $name ($platform)\n"

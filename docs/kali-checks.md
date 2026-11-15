@@ -21,6 +21,7 @@ Then `sh install.sh --from .`, open a new terminal, and work one box end to end.
 - [ ] IP addresses are Amber and `<Placeholder>` text is Ember, inside the box at the top as well as below it.
 - [ ] `F8`, in normal mode and in insert mode, adds an empty fold below the line, open, with the cursor on its blank line in insert mode.
 - [ ] Open a fold, put the cursor inside it, then run `target add` in the prompt. After vim reloads, that fold is still open, the others are still closed, and the cursor is on the same text.
+- [ ] Select some lines in visual mode in the note, then run `target add` in the prompt. The selection stays until you leave visual mode, and the note reloads after that.
 - [ ] While the note is open, no `.swp`, `~` or other backup file appears in the box folder.
 - [ ] The status bar is muted text on the normal background, not reverse video, and its clock moves while the prompt is idle.
 - [ ] The completion menu opens while typing a command, and Tab completes target names.

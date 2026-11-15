@@ -40,8 +40,14 @@ def target_add(session: Session, args: list[str]) -> None:
     )
 
     def add_section(text: str) -> str:
+        # the section and the redrawn box go into one write, so vim reloads once
         _, section = note.split_template(setup.load_template(session.paths))
-        return note.append_section(text, section, target, session.box)
+        text = note.append_section(text, section, target, session.box)
+        try:
+            return note.update_box(text, session.box, session.targets)
+        except NoteError:
+            # refresh says what is wrong with the box
+            return text
 
     _update_note(session, add_section)
     set_current(session, target)

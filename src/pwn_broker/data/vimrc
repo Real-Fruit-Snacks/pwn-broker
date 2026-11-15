@@ -23,7 +23,7 @@ set laststatus=2
 set statusline=\ %f\ %m%=%l:%c\
 set belloff=all
 set shortmess+=I
-set autoread
+set noautoread
 set updatetime=1000
 set termguicolors
 
@@ -79,22 +79,28 @@ function! s:Mark(value) abort
   endif
 endfunction
 
-" When the app redraws the box at the top, Vim's own reload neither keeps the cursor on the same
-" text nor every fold's state. Reloads come from the timer below and also from Vim itself, for
-" example when the window gets focus, so the state is saved before each check and when the
-" window loses focus, and put back after any reload.
-let s:rule = '^#\{20,}\s*$'
+" Reloading. 'autoread' is off so that every change on disk goes through FileChangedShell: when
+" the buffer has no unsaved changes the note is reloaded there, and the cursor and folds are saved
+" just before and put back just after. With unsaved changes Vim asks, as it always has.
+let s:rule = '^#\{20,}[[:space:]]*$'
 let s:saved = {}
-let s:reloaded = 0
 
-" the last line of the box, 0 when the note does not start with one
+" the last line of the box, 0 when the note does not start with a whole one: the closing rule has
+" as many # as the opening one, every line between starts with # and holds no fold marker
 function! s:BoxEnd() abort
-  if getline(1) !~# s:rule
+  let l:first = getline(1)
+  if l:first !~# s:rule
     return 0
   endif
+  let l:width = len(matchstr(l:first, '^#*'))
+  let l:last = line('$')
   let l:n = 2
-  while l:n <= line('$') && getline(l:n) =~# '^#'
-    if getline(l:n) =~# s:rule
+  while l:n <= l:last
+    let l:line = getline(l:n)
+    if l:line !~# '^#' || stridx(l:line, g:pwn_fold_start) >= 0
+      return 0
+    endif
+    if l:line =~# s:rule && len(matchstr(l:line, '^#*')) == l:width
       return l:n
     endif
     let l:n += 1
@@ -103,20 +109,34 @@ function! s:BoxEnd() abort
 endfunction
 
 function! s:FoldStarts() abort
-  return filter(range(1, line('$')), 'stridx(getline(v:val), g:pwn_fold_start) >= 0')
+  let l:view = winsaveview()
+  let l:starts = []
+  call cursor(1, 1)
+  while 1
+    let l:n = search('\V' . g:pwn_fold_start, 'cW')
+    if l:n == 0
+      break
+    endif
+    call add(l:starts, l:n)
+    if l:n >= line('$')
+      break
+    endif
+    call cursor(l:n + 1, 1)
+  endwhile
+  call winrestview(l:view)
+  return l:starts
 endfunction
 
 " 1 for an open fold and 0 for a closed one, in the order the folds start. A fold inside a closed
 " fold cannot be seen, so a closed fold holding others is opened to look and closed again.
-function! s:FoldStates() abort
-  let l:starts = s:FoldStarts()
+function! s:FoldStates(starts) abort
   let l:states = []
   let l:opened = []
-  for l:i in range(len(l:starts))
-    let l:n = l:starts[l:i]
+  for l:i in range(len(a:starts))
+    let l:n = a:starts[l:i]
     let l:closed = foldclosed(l:n)
     call add(l:states, l:closed == -1)
-    if l:closed == l:n && l:i + 1 < len(l:starts) && l:starts[l:i + 1] <= foldclosedend(l:n)
+    if l:closed == l:n && l:i + 1 < len(a:starts) && a:starts[l:i + 1] <= foldclosedend(l:n)
       execute l:n . 'foldopen'
       call add(l:opened, l:n)
     endif
@@ -128,45 +148,64 @@ function! s:FoldStates() abort
 endfunction
 
 function! s:Snapshot() abort
-  if expand('%:t') !=# 'notes.md'
-    return
-  endif
   let l:view = winsaveview()
-  let s:saved = {'buf': bufnr('%'), 'view': l:view, 'lines': line('$'), 'box': s:BoxEnd(), 'folds': s:FoldStates()}
+  let s:saved = {'buf': bufnr('%'), 'view': l:view, 'box': s:BoxEnd(), 'folds': s:FoldStates(s:FoldStarts())}
   call winrestview(l:view)
-  let s:reloaded = 0
+endfunction
+
+function! s:Changed() abort
+  if v:fcs_reason ==# 'changed'
+    let s:saved = {}
+    if str2nr(expand('<abuf>')) == bufnr('%')
+      call s:Snapshot()
+    endif
+    let v:fcs_choice = 'reload'
+  elseif v:fcs_reason ==# 'conflict'
+    let v:fcs_choice = 'ask'
+  endif
 endfunction
 
 function! s:Restore() abort
-  if !s:reloaded || empty(s:saved) || bufnr('%') != s:saved.buf
+  if empty(s:saved) || bufnr('%') != s:saved.buf
     return
   endif
-  let s:reloaded = 0
+  let l:saved = s:saved
+  let s:saved = {}
+  " folds by position; a fold that was not there before, such as a new target's, starts closed
   let l:starts = s:FoldStarts()
-  if len(l:starts) == len(s:saved.folds)
-    silent! %foldopen!
-    for l:i in reverse(range(len(l:starts)))
-      if !s:saved.folds[l:i]
-        silent! execute l:starts[l:i] . 'foldclose'
-      endif
-    endfor
-  endif
-  " the app only redraws the box, so the text below it moved by the change in length
-  let l:delta = line('$') - s:saved.lines
-  let l:view = copy(s:saved.view)
+  silent! %foldopen!
+  for l:i in reverse(range(len(l:starts)))
+    if l:i >= len(l:saved.folds) || !l:saved.folds[l:i]
+      silent! execute l:starts[l:i] . 'foldclose'
+    endif
+  endfor
+  " the box is the part the app redraws: lines in it keep their number, lines below it move with
+  " its end, and anything added further down moves nothing above it
+  let l:delta = s:BoxEnd() - l:saved.box
+  let l:view = copy(l:saved.view)
   for l:key in ['lnum', 'topline']
-    if l:view[l:key] > s:saved.box
+    if l:view[l:key] > l:saved.box
       let l:view[l:key] += l:delta
     endif
     let l:view[l:key] = max([1, min([l:view[l:key], line('$')])])
   endfor
   call winrestview(l:view)
-  call s:Snapshot()
+endfunction
+
+function! s:Check() abort
+  silent! checktime
+endfunction
+
+" the timer leaves the note alone while I am partway through something: a mapping, a count or an
+" operator, insert-mode completion, a selection or a command line
+function! s:Busy() abort
+  return state('moa') !=# '' || mode(1) =~# '^[vVsSc]' || mode(1) =~# "^[\<C-v>\<C-s>]"
 endfunction
 
 function! s:Reload(timer) abort
-  call s:Snapshot()
-  silent! checktime
+  if !s:Busy()
+    call s:Check()
+  endif
 endfunction
 
 augroup pwn_broker
@@ -174,9 +213,8 @@ augroup pwn_broker
   autocmd TextChanged,TextChangedI notes.md call s:Mark(1)
   autocmd BufWritePost notes.md call s:Mark(0)
   autocmd FocusLost,CursorHold,CursorHoldI * silent! update
-  autocmd FocusLost * call s:Snapshot()
   autocmd FocusGained * silent! checktime
-  autocmd BufReadPost notes.md if !empty(s:saved) | let s:reloaded = 1 | endif
+  autocmd FileChangedShell notes.md call s:Changed()
   autocmd FileChangedShellPost notes.md call s:Restore()
   autocmd VimEnter * call s:Mark(0)
   autocmd VimLeave * if s:state !=# '' | silent! call delete(s:state) | endif
