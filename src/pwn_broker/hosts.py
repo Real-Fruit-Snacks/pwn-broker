@@ -60,6 +60,15 @@ def _parse_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
     raise HostsError(f"not an IP address: {value!r}")
 
 
+def valid_ip(value: str) -> bool:
+    """Whether the address can start a line: a scoped IPv6 address such as fe80::1%eth0 cannot."""
+    try:
+        _parse_ip(value)
+    except HostsError:
+        return False
+    return True
+
+
 def _check(wanted: Wanted) -> None:
     _parse_ip(wanted.ip)
     for name in wanted.names:

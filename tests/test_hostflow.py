@@ -42,6 +42,47 @@ def test_wanted_takes_the_first_ip_and_the_valid_hostnames(session):
     ]
 
 
+SCOPED = "fe80::1%eth0"
+SCOPED_WARNING = f"{SCOPED} cannot be written to /etc/hosts, so web was left out of it"
+
+
+def test_a_target_whose_address_cannot_be_written_is_left_out_and_the_rest_sync(session):
+    _add(session, "web", [SCOPED], ["web.htb"])
+    session.box.hosts = ["dc01", "web"]
+    assert hostflow.wanted(session) == [Wanted("dc01", "10.10.10.161", ["forest.htb.local"])]
+    assert session.console.lines == [("warn", SCOPED_WARNING)]
+    session.console = FakeConsole()
+    assert hostflow.sync(session) is True
+    assert _text(session) == "127.0.0.1 localhost\n" + _line(session, "10.10.10.161 forest.htb.local") + "\n"
+    # said once per session
+    assert ("warn", SCOPED_WARNING) not in session.console.lines
+    assert session.console.lines[0] == ("ok", "/etc/hosts updated")
+
+
+def test_offer_does_not_ask_for_a_target_whose_address_cannot_be_written(session):
+    web = _add(session, "web", [SCOPED, "10.10.10.5"], ["web.htb"])
+    session.console = FakeConsole([])
+    hostflow.offer(session, web)
+    assert session.console.asked == [] and session.box.hosts == []
+    assert session.console.lines == [
+        ("warn", f"{SCOPED} cannot be written to /etc/hosts, so web cannot have a line there")
+    ]
+
+
+def test_file_on_refuses_an_address_that_cannot_be_written(session):
+    web = _add(session, "web", [SCOPED], ["web.htb"])
+    with pytest.raises(ValueError, match=f"^{SCOPED} cannot be written to /etc/hosts$"):
+        hostflow.file_on(session, web)
+    assert session.box.hosts == [] and _recorded(session) == []
+
+
+def test_a_recorded_target_given_an_address_that_cannot_be_written_is_forgotten(session):
+    session.box.hosts = ["dc01"]
+    session.targets[0].ips = [SCOPED]
+    hostflow.forget_if_unwanted(session, session.targets[0])
+    assert session.box.hosts == [] and _recorded(session) == []
+
+
 def test_offer_asks_with_yes_as_the_default_and_records_the_target(session):
     session.console = FakeConsole([""])
     hostflow.offer(session, session.targets[0])

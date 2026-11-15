@@ -18,12 +18,23 @@ def _names(target: Target) -> list[str]:
     return [name for name in target.hostnames if hosts.valid_hostname(name)]
 
 
+def _address_warning(target: Target) -> str:
+    return f"{target.ips[0]} cannot be written to {FILE}"
+
+
 def wanted(session: Session) -> list[hosts.Wanted]:
     by_name = {t.name: t for t in session.targets}
     found = []
     for name in session.box.hosts:
         target = by_name.get(name)
         if target is None or not target.ips:
+            continue
+        if not hosts.valid_ip(target.ips[0]):
+            # one target's address must not stop the box's other lines
+            notice = f"left out {target.name} address {target.ips[0]}"
+            if notice not in session.notices:
+                session.notices.add(notice)
+                session.console.warn(f"{_address_warning(target)}, so {target.name} was left out of it")
             continue
         names = _names(target)
         if names:
@@ -114,7 +125,8 @@ def _left_out(session: Session, want: list[hosts.Wanted]) -> None:
 def forget_if_unwanted(session: Session, target: Target) -> None:
     """Take a target off box.hosts once it can no longer have a line, so the record stays true."""
     box = session.box
-    if target.name in box.hosts and not (target.ips and _names(target)):
+    can_have = target.ips and hosts.valid_ip(target.ips[0]) and _names(target)
+    if target.name in box.hosts and not can_have:
         box.hosts.remove(target.name)
         save_box(box)
 
@@ -193,6 +205,9 @@ def _record(session: Session, target: Target) -> None:
 def offer(session: Session, target: Target) -> None:
     if target.name in session.box.hosts or not target.ips or not target.hostnames:
         return
+    if not hosts.valid_ip(target.ips[0]):
+        session.console.warn(f"{_address_warning(target)}, so {target.name} cannot have a line there")
+        return
     bad = _first_bad(target)
     if bad is not None:
         session.console.warn(
@@ -205,6 +220,8 @@ def offer(session: Session, target: Target) -> None:
 
 def file_on(session: Session, target: Target) -> None:
     _check(target)
+    if not hosts.valid_ip(target.ips[0]):
+        raise ValueError(_address_warning(target))
     bad = _first_bad(target)
     if bad is not None:
         raise ValueError(f"not a plain hostname: {bad}")
