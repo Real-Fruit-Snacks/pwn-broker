@@ -68,7 +68,9 @@ def log_tool(
     except (OSError, ValueError) as exc:
         if LOG_NOTICE not in session.notices:
             session.notices.add(LOG_NOTICE)
-            session.console.warn(f"{session.paths.tool_log} could not be written: {exc}")
+            # an OSError's own text names the path again
+            reason = exc.strerror if isinstance(exc, OSError) and exc.strerror else exc
+            session.console.warn(f"{session.paths.tool_log} could not be written: {reason}")
 
 
 def release_tool(
@@ -83,15 +85,24 @@ def release_tool(
     finish it stays current."""
     when = session.clock()
     box = session.box
+    before = installed.get(record.name)
+    held = before is not None and box.id in before.users
     try:
         return toolinstall.release(
             session.paths, box, record.name, installed=installed, unfinished=unfinished,
             removed=when if event == "remove" else None,
         )  # fmt: skip
     finally:
-        # logged whenever the box let go, even when the files could not be deleted after
-        item = installed.get(record.name)
-        if item is None or box.id not in item.users:
+        # logged even when the files could not be deleted after
+        if event == "remove":
+            # the user took it off the box, whether or not the machine still had it
+            done = all(t.name != record.name for t in current_tools(box))
+        else:
+            # a finish only takes off what the box held: not a tool a declined reopen left
+            # uninstalled, nor one a finish before this already took off
+            after = installed.get(record.name)
+            done = held and (after is None or box.id not in after.users)
+        if done:
             log_tool(session, event, record, when=when)
 
 

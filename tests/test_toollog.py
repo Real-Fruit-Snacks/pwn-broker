@@ -67,17 +67,26 @@ def test_the_folder_is_made_when_missing(box, tmp_path):
     assert paths.tool_log.is_file()
 
 
-@pytest.mark.parametrize("field", ["box", "name", "version", "sha256"])
-@pytest.mark.parametrize("brk", ["\n", "\r", " "])
+@pytest.mark.parametrize("field", ["box id", "name", "version", "sha256"])
+@pytest.mark.parametrize("brk", ["\n", "\r", "\u2028"])
 def test_a_value_with_a_line_break_is_refused(paths, box, field, brk):
-    if field == "box":
-        box.name = f"for{brk}est"
+    if field == "box id":
+        box.id = f"id{brk}x"
         overrides = {}
     else:
         overrides = {field: f"x{brk}y"}
     with pytest.raises(ValueError, match="line break"):
         append(paths, box, **overrides)
     assert not paths.tool_log.exists()
+
+
+def test_a_box_name_cannot_break_the_columns_or_reach_the_terminal(paths, box):
+    # the name may come from someone else's archive
+    box.name = "x (id)  evil\t1-1\x1b[31m  sha256:ab\nnext\u2028line"
+    append(paths, box)
+    [line] = read(paths).splitlines()
+    assert "  x (id) evil?1-1?[31m sha256:ab?next line (2026-11-14_htb_forest)  " in line
+    assert line.split("  ")[2] == "x (id) evil?1-1?[31m sha256:ab?next line (2026-11-14_htb_forest)"
 
 
 def test_an_event_that_is_not_known_is_refused(paths, box):
@@ -116,6 +125,15 @@ def test_each_line_is_one_write_to_a_file_opened_for_append(paths, box, monkeypa
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX file modes")
+def test_a_log_made_readable_by_others_is_made_private_again(paths, box):
+    paths.tool_log.write_bytes(b"an earlier line\n")
+    paths.tool_log.chmod(0o644)
+    append(paths, box)
+    assert paths.tool_log.stat().st_mode & 0o777 == 0o600
+    assert read(paths).startswith("an earlier line\n")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX file modes")
 def test_the_log_is_readable_only_by_its_owner(paths, box):
     old = os.umask(0)
     try:
@@ -127,5 +145,12 @@ def test_the_log_is_readable_only_by_its_owner(paths, box):
 
 def test_a_log_that_cannot_be_opened_raises_os_error(paths, box):
     paths.tool_log.mkdir(parents=True)  # a folder where the file should be
+    with pytest.raises(OSError):
+        append(paths, box)
+
+
+def test_a_log_whose_folder_cannot_be_made_raises_os_error(box, tmp_path):
+    (tmp_path / "taken").write_text("a file where the folder should be")
+    paths = AppPaths(opt=tmp_path / "opt", home=tmp_path / "taken" / "home")
     with pytest.raises(OSError):
         append(paths, box)

@@ -222,7 +222,18 @@ def _sudo_lines(
 
 
 def _record(box: Box, record: ToolRecord) -> None:
-    # the tool's current row is replaced; the rows of earlier removals stay
+    # the same build installed again (reopen, import) keeps its row and when it was first
+    # installed, with a new note of its runtime; otherwise the tool gets a new row. The rows
+    # of earlier removals stay either way.
+    same = (record.name, record.version, record.build)
+    if any(t.removed is None and (t.name, t.version, t.build) == same for t in box.tools):
+        box.tools = [
+            replace(t, runtime=record.runtime)
+            if t.removed is None and (t.name, t.version, t.build) == same
+            else t
+            for t in box.tools
+        ]
+        return
     box.tools = [t for t in box.tools if t.name != record.name or t.removed is not None]
     box.tools.append(record)
 

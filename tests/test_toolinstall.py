@@ -1033,6 +1033,20 @@ def test_reinstalling_after_a_removal_adds_a_row_and_keeps_the_removed_one(paths
     assert box.id in load_installed(paths)["kerbrute"].users
 
 
+def test_the_same_build_installed_again_keeps_its_row_and_first_install_time(
+    paths, box, tmp_path
+):
+    zip_path, entry = build(tmp_path)
+    # the box recorded the build; this machine does not have it (reopen, import)
+    box.tools = [ToolRecord("kerbrute", "1.0.3", 1, entry.sha256, NOW)]
+    install(
+        paths, box, entry, zip_path, installed={}, unfinished={box.id: box.name},
+        home=tmp_path / "user", console=FakeConsole(), now=LATER, run=FakeRun(),
+        on_path=lambda name: None,
+    )  # fmt: skip
+    assert load_box(box.path).tools == [ToolRecord("kerbrute", "1.0.3", 1, entry.sha256, NOW)]
+
+
 def test_a_removed_row_at_another_build_does_not_stop_an_install(paths, box, tmp_path):
     box.tools = [ToolRecord("kerbrute", "1.0.2", 1, "cd" * 32, NOW, removed=NOW)]
     zip_path, entry = build(tmp_path)

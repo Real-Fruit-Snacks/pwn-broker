@@ -1360,8 +1360,8 @@ def test_import_offers_only_the_tools_the_box_still_had(tooled, pyshop, tmp_path
     box = import_box(paths, tooled.settings, console, archive, lambda: NOW)
     assert ("info", "tools     kerbrute 1.0.3") in console.lines
     assert set(load_installed(paths)) == {"kerbrute"}
-    # the tool installed again has a new row, after the removed one
-    assert [(t.name, t.removed) for t in box.tools] == [("certipy", NOW), ("kerbrute", None)]
+    # the tool installed again keeps its row; the removed one stays removed
+    assert [(t.name, t.removed) for t in box.tools] == [("kerbrute", None), ("certipy", NOW)]
 
 
 def test_finish_keeps_removed_rows_removed_and_current_rows_current(tooled, user):
@@ -1445,8 +1445,12 @@ def test_finish_logs_each_tool_and_the_runtime_taken_off(tooled, pyshop, shop):
 
 def test_finish_logs_a_tool_another_box_keeps_but_not_its_runtime(tooled, pyshop, shop, other):
     put(tooled, pyshop.certipy)
-    put(tooled, pyshop.certipy, box=other)
+    installed = load_installed(tooled.paths)
+    installed["certipy"].users.append(other.id)  # both boxes use it
+    toolstate.save_installed(tooled.paths, installed)
     toolhooks.undo(tooled)
+    assert load_installed(tooled.paths)["certipy"].users == [other.id]
+    assert runtime_row(tooled.paths) is not None
     assert log_lines(tooled.paths) == [
         logged("finish", shop.entry), logged("finish", pyshop.certipy),
     ]  # fmt: skip
@@ -1469,13 +1473,41 @@ def test_import_logs_each_tool_it_installs_again(tooled, pyshop, shop, tmp_path)
     assert log_lines(tooled.paths) == []
 
 
-def test_a_log_that_cannot_be_written_warns_once_and_the_install_goes_on(tooled, pyshop):
-    tooled.paths.tool_log.mkdir(parents=True)  # a folder where the file should be
+def make_log_unwritable(session, how):
+    log = session.paths.tool_log
+    if how == "a folder in its place":
+        log.mkdir(parents=True)
+    elif how == "a read-only file":
+        log.write_bytes(b"")
+        log.chmod(0o400)
+    else:  # a file where its folder should be; the install itself only uses the app's folder
+        taken = session.paths.opt.parent / "taken"
+        taken.write_text("not a folder")
+        session.paths = AppPaths(opt=session.paths.opt, home=taken / "home")
+
+
+UNWRITABLE = [
+    "a folder in its place",
+    pytest.param(
+        "a read-only file",
+        marks=pytest.mark.skipif(
+            sys.platform == "win32" or os.geteuid() == 0, reason="needs POSIX modes, not root"
+        ),
+    ),
+    "no folder for it",
+]
+
+
+@pytest.mark.parametrize("how", UNWRITABLE)
+def test_a_log_that_cannot_be_written_warns_once_and_the_install_goes_on(tooled, pyshop, how):
+    make_log_unwritable(tooled, how)
     install_through_hooks(tooled, pyshop.certipy, on_path=lambda n: None)
     install_through_hooks(tooled, pyshop.bloodhound, on_path=lambda n: None)
     warned = lines(tooled, "warn")
     assert len(warned) == 1
-    assert warned[0].startswith(f"{tooled.paths.tool_log} could not be written")
+    log = str(tooled.paths.tool_log)
+    assert warned[0].startswith(f"{log} could not be written: ")
+    assert warned[0].count(log) == 1  # the path is named once
     assert {"certipy", "bloodhound", "python-3.13"} <= set(load_installed(tooled.paths))
     assert [t.name for t in current_tools(load_box(tooled.box.path))] == [
         "kerbrute", "certipy", "bloodhound",
@@ -1491,9 +1523,47 @@ def test_a_log_that_cannot_be_written_does_not_stop_finish(tooled, user):
     assert lines(tooled, "fail") == []
 
 
-def test_a_box_name_with_a_line_break_is_not_logged(tooled, pyshop):
-    tooled.box.name = "for\nest"
-    install_through_hooks(tooled, pyshop.certipy, on_path=lambda n: None)
+def test_a_value_with_a_line_break_is_not_logged(tooled, pyshop):
+    entry = replace(pyshop.certipy, sha256="ab\ncd")
+    tool = load_installed(tooled.paths)["kerbrute"]
+    toolhooks.log_tool(tooled, "install", replace(tool, sha256="ab\ncd"))
+    toolhooks.log_tool(tooled, "install", entry)
     assert not tooled.paths.tool_log.exists()
-    assert sum("line break" in t for t in lines(tooled, "warn")) == 1
-    assert "certipy" in load_installed(tooled.paths)
+    [warned] = lines(tooled, "warn")
+    assert warned == f"{tooled.paths.tool_log} could not be written: 'ab\\ncd' holds a line break"
+
+
+def test_finish_after_a_declined_reopen_logs_nothing(tooled):
+    wipe(tooled)  # reopened, and the offer to install the tools again declined
+    say(tooled, "y", "n")
+    assert finish_box(tooled, **SAVED) is not None
+    assert log_lines(tooled.paths) == []
+
+
+def test_a_retried_finish_logs_each_tool_once(tooled, shop):
+    toolhooks.undo(tooled)
+    toolhooks.undo(tooled)
+    assert log_lines(tooled.paths) == [logged("finish", shop.entry)]
+
+
+def test_finish_logs_nothing_for_a_tool_only_another_box_holds(tooled, other):
+    hand_to_other(tooled, other)
+    toolhooks.undo(tooled)
+    assert log_lines(tooled.paths) == []
+    assert load_installed(tooled.paths)["kerbrute"].users == [other.id]
+
+
+def test_reopening_keeps_when_the_tool_was_first_installed(tooled, pyshop):
+    put(tooled, pyshop.certipy)
+    first = {t.name: t.installed for t in tooled.box.tools}
+    wipe_all(tooled)
+    _z, newer = toolkit.make_runtime(pyshop_folder(tooled), build=2)
+    toolkit.write_index(pyshop_folder(tooled), [*pyshop.entries, newer])
+    tooled.clock = lambda: NOW + timedelta(days=2)
+    say(tooled, "y")
+    toolhooks.restore(tooled)
+    rows = load_box(tooled.box.path).tools
+    assert {t.name: t.installed for t in rows} == first
+    [certipy] = [t for t in rows if t.name == "certipy"]
+    assert certipy.runtime.build == 2  # the note says what it runs on now
+    assert [line.split()[1] for line in log_lines(tooled.paths)] == ["install"] * 3

@@ -1,6 +1,7 @@
 """The tool log: one line for each tool a box installed or took off, across every box."""
 
 import os
+import unicodedata
 from datetime import datetime
 
 from pwn_broker.model import Box
@@ -15,11 +16,18 @@ _WIDTH = max(len(e) for e in EVENTS)
 _FLAGS = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
 
 
-def _one_line(value: str, path) -> str:
-    # splitlines knows every line break, not only \n
+def _one_line(value: str) -> str:
+    # for the values the app checks itself; splitlines knows every line break, not only \n
     if len(f"{value}.".splitlines()) != 1:
-        raise ValueError(f"{value!r} holds a line break and cannot go in {path}")
+        raise ValueError(f"{value!r} holds a line break")
     return value
+
+
+def _plain(text: str) -> str:
+    # free text, which may come from someone else's archive: no control character reaches the
+    # terminal that reads the log, and no run of spaces looks like the gap between two fields
+    shown = "".join("?" if unicodedata.category(c) == "Cc" else c for c in text)
+    return " ".join(shown.split())
 
 
 def append(
@@ -35,7 +43,6 @@ def append(
     kind: str = "tool",
 ) -> None:
     """Adds one line to the log. It is only ever added to: never read back, replaced or trimmed."""
-    path = paths.tool_log
     if event not in EVENTS:
         raise ValueError(f"{event!r} is not a tool log event")
     if kind not in KINDS:
@@ -45,17 +52,21 @@ def append(
     fields = [
         when.isoformat(timespec="seconds"),
         f"{event:<{_WIDTH}}",
-        f"{_one_line(box.name, path)} ({_one_line(box.id, path)})",
-        f"{_one_line(name, path)} {_one_line(build_id(version, build), path)}",
-        f"sha256:{_one_line(sha256, path)}",
+        f"{_plain(box.name)} ({_one_line(box.id)})",
+        f"{_one_line(name)} {_one_line(build_id(version, build))}",
+        f"sha256:{_one_line(sha256)}",
     ]
     if kind == "runtime":
         fields.append("runtime")
     line = ("  ".join(fields) + "\n").encode("utf-8")
+    path = paths.tool_log
     path.parent.mkdir(parents=True, exist_ok=True)
     # appended in one write, readable only by its owner; not store.write_text, which replaces
     fd = os.open(path, _FLAGS, 0o600)
     try:
+        if hasattr(os, "fchmod"):
+            # the mode given to open only applies to a new file
+            os.fchmod(fd, 0o600)
         os.write(fd, line)
     finally:
         os.close(fd)

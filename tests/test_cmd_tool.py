@@ -1212,6 +1212,14 @@ def test_a_refused_or_declined_command_logs_nothing(session, shop):
     assert log_lines(session) == [logged("install", shop.entries[0])]
 
 
+def test_removing_a_tool_the_machine_no_longer_has_is_logged(session, shop):
+    run(session, "tool install kerbrute")
+    toolstate.save_installed(session.paths, {})
+    run(session, "tool remove kerbrute", "y")
+    assert log_lines(session)[-1] == logged("remove", shop.entries[1])
+    assert current_tools(load_box(session.box.path)) == []
+
+
 def test_a_removal_whose_files_stay_is_still_logged(session, shop, monkeypatch):
     run(session, "tool install kerbrute")
 
