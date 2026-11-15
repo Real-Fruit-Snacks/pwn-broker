@@ -59,3 +59,19 @@ def dc01(box):
         box, [], ips=["10.10.10.161"], hostnames=["forest.htb.local"],
         scope="external", name="dc01", now=NOW,
     )  # fmt: skip
+
+
+@pytest.fixture
+def session(paths, box, dc01):
+    from datetime import timedelta
+    from importlib import resources
+
+    from pwn_broker.config import Settings
+    from pwn_broker.console import FakeConsole
+    from pwn_broker.note import render_note, write_note
+    from pwn_broker.session import Session
+
+    template = resources.files("pwn_broker.data").joinpath("notes.md").read_text(encoding="utf-8")
+    write_note(box, render_note(template, box, [dc01]))
+    later = NOW + timedelta(hours=1)
+    return Session(paths, Settings(), FakeConsole(), box, [dc01], [], dc01, lambda: later)
