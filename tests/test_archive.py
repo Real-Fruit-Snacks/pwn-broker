@@ -809,3 +809,18 @@ def test_a_file_name_with_a_backslash_survives_pack_verify_and_unpack(box, tmp_p
     verify(dest)
     folder = unpack(dest, tmp_path / "elsewhere")
     assert (folder / "targets/dc01/loot/a\\b.txt").read_bytes() == data
+
+
+def test_pack_leaves_out_the_vpn_folder_silently(filled, tmp_path):
+    (filled.path / "vpn" / "a").mkdir(parents=True)
+    (filled.path / "vpn" / "lab.ovpn").write_text("secret")
+    (filled.path / "vpn" / "a" / "b").write_text("secret")
+    (filled.path / "targets/dc01/vpn").mkdir()
+    (filled.path / "targets/dc01/vpn/x").write_text("x")
+    (filled.path / "vpn.txt").write_text("x")
+    dest = tmp_path / "out" / "b.tar.gz"
+    assert pack(filled, dest) == []
+    names = member_names(dest)
+    top = filled.path.name
+    assert f"{top}/targets/dc01/vpn/x" in names and f"{top}/vpn.txt" in names
+    assert not any(n == f"{top}/vpn" or n.startswith(f"{top}/vpn/") for n in names)

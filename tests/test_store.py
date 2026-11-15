@@ -6,7 +6,7 @@ import pytest
 from helpers import NASTY, NOW, make_cred
 
 from pwn_broker import store
-from pwn_broker.model import FileRecord, Flag, Target, ToolRecord
+from pwn_broker.model import FileRecord, Flag, Target, ToolRecord, VpnRecord
 from pwn_broker.store import (
     StoreError,
     load_box,
@@ -36,13 +36,13 @@ def test_box_round_trip(box):
 
 def test_box_keeps_unknown_tables(box):
     (box.path / "box.toml").write_text(
-        (box.path / "box.toml").read_text(encoding="utf-8") + '\n[hosts]\nfoo = "bar"\n',
+        (box.path / "box.toml").read_text(encoding="utf-8") + '\n[mystery]\nfoo = "bar"\n',
         encoding="utf-8",
     )
     loaded = load_box(box.path)
-    assert loaded.extra == {"hosts": {"foo": "bar"}}
+    assert loaded.extra == {"mystery": {"foo": "bar"}}
     save_box(loaded)
-    assert read_toml(box.path / "box.toml")["hosts"] == {"foo": "bar"}
+    assert read_toml(box.path / "box.toml")["mystery"] == {"foo": "bar"}
 
 
 def test_target_round_trip(box):
@@ -215,12 +215,12 @@ def test_old_box_keeps_unknown_tables_beside_tools(box):
     box.tools = [_tool()]
     save_box(box)
     path = box.path / "box.toml"
-    path.write_text(path.read_text(encoding="utf-8") + '\n[hosts]\nfoo = "bar"\n', encoding="utf-8")
+    path.write_text(path.read_text(encoding="utf-8") + '\n[mystery]\nfoo = "bar"\n', encoding="utf-8")
     loaded = load_box(box.path)
-    assert loaded.extra == {"hosts": {"foo": "bar"}}
+    assert loaded.extra == {"mystery": {"foo": "bar"}}
     save_box(loaded)
     data = read_toml(path)
-    assert data["hosts"] == {"foo": "bar"} and len(data["tools"]) == 1
+    assert data["mystery"] == {"foo": "bar"} and len(data["tools"]) == 1
 
 
 @pytest.mark.parametrize("drop", ["name", "version", "build", "sha256", "installed"])
@@ -242,6 +242,74 @@ def test_tool_entry_wrong_type(box, key, value):
     path = box.path / "box.toml"
     data = read_toml(path)
     data["tools"][0][key] = value
+    write_toml(path, data)
+    with pytest.raises(StoreError, match="box.toml"):
+        load_box(box.path)
+
+
+def _vpn(file="lab.ovpn"):
+    return VpnRecord(file, "cd" * 32, NOW)
+
+
+def test_hosts_and_vpn_round_trip(box):
+    box.hosts = ["dc01", "web"]
+    box.vpn = [_vpn(), _vpn("other.ovpn")]
+    save_box(box)
+    data = read_toml(box.path / "box.toml")
+    assert data["hosts"] == ["dc01", "web"] and data["vpn"][0]["file"] == "lab.ovpn"
+    got = load_box(box.path)
+    assert got == box and got.hosts == box.hosts and got.vpn == box.vpn
+    assert "hosts" not in got.extra and "vpn" not in got.extra
+
+
+def test_box_without_hosts_or_vpn_loads_empty(box):
+    save_box(box)
+    data = read_toml(box.path / "box.toml")
+    assert "hosts" not in data and "vpn" not in data
+    got = load_box(box.path)
+    assert got.hosts == [] and got.vpn == []
+
+
+def test_unknown_tables_still_land_in_extra_beside_hosts_and_vpn(box):
+    box.hosts = ["dc01"]
+    box.vpn = [_vpn()]
+    save_box(box)
+    path = box.path / "box.toml"
+    path.write_text(path.read_text(encoding="utf-8") + '\n[mystery]\nfoo = "bar"\n', encoding="utf-8")
+    loaded = load_box(box.path)
+    assert loaded.extra == {"mystery": {"foo": "bar"}}
+
+
+@pytest.mark.parametrize("key,value", [("file", 3), ("sha256", 3), ("started", "soon")])
+def test_vpn_entry_wrong_type(box, key, value):
+    box.vpn = [_vpn()]
+    save_box(box)
+    path = box.path / "box.toml"
+    data = read_toml(path)
+    data["vpn"][0][key] = value
+    write_toml(path, data)
+    with pytest.raises(StoreError, match="box.toml"):
+        load_box(box.path)
+
+
+@pytest.mark.parametrize("drop", ["file", "sha256", "started"])
+def test_vpn_entry_missing_field(box, drop):
+    box.vpn = [_vpn()]
+    save_box(box)
+    path = box.path / "box.toml"
+    data = read_toml(path)
+    del data["vpn"][0][drop]
+    write_toml(path, data)
+    with pytest.raises(StoreError, match="box.toml"):
+        load_box(box.path)
+
+
+@pytest.mark.parametrize("value", ["dc01", [1], {"a": "b"}])
+def test_hosts_wrong_type(box, value):
+    save_box(box)
+    path = box.path / "box.toml"
+    data = read_toml(path)
+    data["hosts"] = value
     write_toml(path, data)
     with pytest.raises(StoreError, match="box.toml"):
         load_box(box.path)

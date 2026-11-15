@@ -29,6 +29,7 @@ class Settings:
 @dataclass(frozen=True)
 class State:
     last_platform: str | None = None
+    last_vpn_file: str | None = None
 
 
 def _expand(text: str, home_dir: Path) -> Path:
@@ -101,13 +102,19 @@ def load_state(state_file: Path) -> State:
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return State()
     last = data.get("last_platform")
-    return State(last_platform=last if isinstance(last, str) else None)
+    vpn = data.get("last_vpn_file")
+    return State(
+        last_platform=last if isinstance(last, str) else None,
+        last_vpn_file=vpn if isinstance(vpn, str) else None,
+    )
 
 
 def save_state(state_file: Path, state: State) -> None:
     data: dict = {"schema": 1}
     if state.last_platform is not None:
         data["last_platform"] = state.last_platform
+    if state.last_vpn_file is not None:
+        data["last_vpn_file"] = state.last_vpn_file
     write_toml(state_file, data)
 
 

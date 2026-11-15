@@ -258,3 +258,10 @@ def test_install_data_creates_tool_folders_and_can_run_again(paths):
         install_data(paths)
         for folder in (paths.tools, paths.upload, paths.cache, paths.run_tools):
             assert folder.is_dir(), folder
+
+
+def test_install_data_creates_recording_folders_and_can_run_twice(paths):
+    for _ in range(2):
+        install_data(paths)
+        for folder in (paths.run_recordings, paths.run_vpn, paths.run_shell, paths.run_asciinema):
+            assert folder.is_dir()

@@ -326,3 +326,24 @@ def test_target_contents_lists_files_but_not_target_toml(box, dc01):
     assert target_contents(box, "dc01") == ["loot/a.txt"]
     with pytest.raises(BoxError, match="still has 1 file"):
         ensure_removable(box, "dc01")
+
+
+def test_rename_target_renames_its_hosts_entry(box, dc01):
+    box.hosts = ["dc01", "web"]
+    save_box(box)
+    rename_target(box, [dc01], "dc01", "dc")
+    assert box.hosts == ["dc", "web"] and load_box(box.path).hosts == ["dc", "web"]
+
+
+def test_rename_target_without_a_hosts_entry_leaves_hosts(box, dc01):
+    box.hosts = ["web"]
+    save_box(box)
+    rename_target(box, [dc01], "dc01", "dc")
+    assert load_box(box.path).hosts == ["web"]
+
+
+def test_remove_target_drops_its_hosts_entry(box, dc01):
+    box.hosts = ["dc01", "web"]
+    save_box(box)
+    remove_target(box, [dc01], "dc01")
+    assert box.hosts == ["web"] and load_box(box.path).hosts == ["web"]

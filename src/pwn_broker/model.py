@@ -19,6 +19,13 @@ class ToolRecord:
 
 
 @dataclass
+class VpnRecord:
+    file: str
+    sha256: str
+    started: datetime
+
+
+@dataclass
 class Box:
     id: str
     name: str
@@ -31,6 +38,8 @@ class Box:
     last_target: str | None
     flags: dict[str, Flag]
     tools: list[ToolRecord] = field(default_factory=list)
+    hosts: list[str] = field(default_factory=list)
+    vpn: list[VpnRecord] = field(default_factory=list)
     extra: dict = field(default_factory=dict)
     path: Path = Path()
 

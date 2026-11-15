@@ -9,7 +9,7 @@ from pathlib import Path
 import tomli_w
 
 from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
-from pwn_broker.model import Box, Cred, FileRecord, Flag, Target, ToolRecord
+from pwn_broker.model import Box, Cred, FileRecord, Flag, Target, ToolRecord, VpnRecord
 
 SCHEMA = 1
 
@@ -89,6 +89,10 @@ def save_box(box: Box) -> None:
     }
     if box.tools:
         data["tools"] = [asdict(t) for t in box.tools]
+    if box.hosts:
+        data["hosts"] = list(box.hosts)
+    if box.vpn:
+        data["vpn"] = [asdict(v) for v in box.vpn]
     for key, value in box.extra.items():
         data.setdefault(key, value)
     write_toml(box.path / "box.toml", data)
@@ -103,6 +107,20 @@ def _tool(row: dict) -> ToolRecord:
     return ToolRecord(**{key: row[key] for key in kinds})
 
 
+def _vpn(row: dict) -> VpnRecord:
+    kinds = {"file": str, "sha256": str, "started": datetime}
+    for key, kind in kinds.items():
+        if not isinstance(row[key], kind):
+            raise TypeError(f"vpn.{key} has the wrong type")
+    return VpnRecord(**{key: row[key] for key in kinds})
+
+
+def _hosts(value) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise TypeError("hosts must be a list of strings")
+    return list(value)
+
+
 def load_box(folder: Path) -> Box:
     path = folder / "box.toml"
     data = _read_checked(path)
@@ -110,7 +128,7 @@ def load_box(folder: Path) -> Box:
     def make() -> Box:
         known = {
             "schema", "id", "name", "platform", "os", "difficulty", "status",
-            "started", "finished", "last_target", "flags", "tools",
+            "started", "finished", "last_target", "flags", "tools", "hosts", "vpn",
         }  # fmt: skip
         return Box(
             id=data["id"],
@@ -124,6 +142,8 @@ def load_box(folder: Path) -> Box:
             last_target=data.get("last_target"),
             flags={k: Flag(value=v["value"], at=v["at"]) for k, v in data.get("flags", {}).items()},
             tools=[_tool(row) for row in data.get("tools", [])],
+            hosts=_hosts(data.get("hosts", [])),
+            vpn=[_vpn(row) for row in data.get("vpn", [])],
             extra={k: v for k, v in data.items() if k not in known},
             path=folder,
         )

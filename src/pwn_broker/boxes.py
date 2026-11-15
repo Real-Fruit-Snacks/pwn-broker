@@ -181,8 +181,10 @@ def rename_target(
     target.name = new
     save_target(box, target)
 
-    if box.last_target == old:
-        box.last_target = new
+    if box.last_target == old or old in box.hosts:
+        if box.last_target == old:
+            box.last_target = new
+        box.hosts = [new if h == old else h for h in box.hosts]
         save_box(box)
 
     changed = False
@@ -232,6 +234,9 @@ def remove_target(box: Box, targets: list[Target], name: str) -> None:
     folder = box.path / "targets" / target.name
     shutil.rmtree(folder)
     targets.remove(target)
+    if target.name in box.hosts:
+        box.hosts = [h for h in box.hosts if h != target.name]
+        save_box(box)
 
 
 def find_target(targets: list[Target], text: str) -> Target:

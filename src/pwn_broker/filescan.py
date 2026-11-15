@@ -14,6 +14,8 @@ HASH_NOW_LIMIT = 64 * 1024 * 1024
 ROOT_APP_FILES = frozenset({"files.toml", "manifest.toml", ".note-state", ".history"})
 # of those, the ones that are not packed either
 ROOT_TRANSIENT_FILES = frozenset({".note-state"})
+# folders at the top of a box that belong to the app and are never recorded or packed
+BOX_PRIVATE_FOLDERS = frozenset({"vpn"})
 NOTE_SWAP = ".notes.md.sw?"
 # store.write_text's temp files, in the destination's folder at any depth
 TEMP_PREFIX = ".pwn-broker-"
@@ -28,7 +30,7 @@ def is_temp_name(name: str) -> bool:
 
 def is_app_file(rel_path: str) -> bool:
     folder, _, name = rel_path.rpartition("/")
-    if is_temp_name(name):
+    if is_temp_name(name) or rel_path.split("/", 1)[0] in BOX_PRIVATE_FOLDERS:
         return True
     return not folder and (name in ROOT_APP_FILES or fnmatchcase(name, NOTE_SWAP))
 
@@ -68,7 +70,9 @@ def scan(
         unreadable.append(rel)
         skip(rel, exc)
 
-    for root, _dirs, files in os.walk(box.path, followlinks=False, onerror=dir_failed):
+    for root, dirs, files in os.walk(box.path, followlinks=False, onerror=dir_failed):
+        if Path(root) == box.path:
+            dirs[:] = [d for d in dirs if d not in BOX_PRIVATE_FOLDERS]
         for name in files:
             full = Path(root) / name
             rel = full.relative_to(box.path).as_posix()

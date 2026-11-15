@@ -25,7 +25,7 @@ _TOP_FILES = (MANIFEST, "LICENSE", "wheels.lock")
 # sudo or the app itself relies on
 RESERVED_COMMANDS = frozenset(
     "sh bash dash zsh fish sudo su doas env python python3 pip pip3 sed cut mkdir kill cat rm "
-    "ls cp mv ln tar vim vi pwn-broker".split()
+    "ls cp mv ln tar vim vi pwn-broker record asciinema openvpn ping ip".split()
 )
 LOCK_LIMIT = 1024 * 1024
 # pip obeys options, URLs and markers in a requirements file; only exact pins with hashes pass

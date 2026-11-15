@@ -271,3 +271,41 @@ def test_real_fifo_does_not_hang(box, loot):
     result = scan(box, [], now=NOW, on_skip=lambda p, why: skipped.append(why))
     assert not [r for r in result if r.path.endswith("rev")]
     assert skipped == ["not a regular file"]
+
+
+@pytest.mark.parametrize("rel", ["vpn", "vpn/lab.ovpn", "vpn/a/b"])
+def test_vpn_folder_is_app_owned(rel):
+    assert is_app_file(rel)
+
+
+@pytest.mark.parametrize("rel", ["vpn.txt", "targets/dc01/vpn/x", "targets/dc01/vpn", "vpns/a", "lists/vpn/a"])
+def test_other_vpn_names_are_not_app_files(rel):
+    assert not is_app_file(rel)
+
+
+def test_scan_never_records_the_vpn_folder(box):
+    (box.path / "vpn" / "a").mkdir(parents=True)
+    (box.path / "vpn" / "lab.ovpn").write_text("x")
+    (box.path / "vpn" / "a" / "b").write_text("x")
+    (box.path / "targets/dc01/vpn").mkdir(parents=True)
+    (box.path / "targets/dc01/vpn/x").write_text("x")
+    (box.path / "vpn.txt").write_text("x")
+    paths = {r.path for r in scan(box, [], now=NOW)}
+    assert "targets/dc01/vpn/x" in paths and "vpn.txt" in paths
+    assert not any(p == "vpn" or p.startswith("vpn/") for p in paths)
+
+
+def test_scan_does_not_descend_into_the_vpn_folder(box, monkeypatch):
+    (box.path / "vpn").mkdir()
+    (box.path / "vpn" / "lab.ovpn").write_text("x")
+    seen = []
+    real = os.walk
+
+    def spy(top, *args, **kwargs):
+        for root, dirs, files in real(top, *args, **kwargs):
+            yield root, dirs, files
+            seen.append(list(dirs))
+
+    monkeypatch.setattr(filescan.os, "walk", spy)
+    scan(box, [], now=NOW)
+    assert not any("vpn" in dirs for dirs in seen)

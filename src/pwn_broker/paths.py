@@ -60,6 +60,34 @@ class AppPaths:
         return self.run / "tools"
 
     @property
+    def run_recordings(self) -> Path:
+        return self.run / "recordings"
+
+    @property
+    def run_vpn(self) -> Path:
+        return self.run / "vpn"
+
+    @property
+    def run_shell(self) -> Path:
+        return self.run / "shell"
+
+    @property
+    def run_asciinema(self) -> Path:
+        return self.run / "asciinema"
+
+    @property
+    def box_lock(self) -> Path:
+        return self.run / "box.lock"
+
+    @property
+    def asciinema(self) -> Path:
+        return self.opt / "app" / "bin" / "asciinema"
+
+    @property
+    def record_launcher(self) -> Path:
+        return self.bin / "record"
+
+    @property
     def active(self) -> Path:
         return self.home / "active"
 

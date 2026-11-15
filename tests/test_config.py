@@ -140,3 +140,16 @@ def test_tools_index_empty_means_not_set(tmp_path):
 def test_tools_index_wrong_type(tmp_path):
     with pytest.raises(ConfigError, match="config.toml"):
         _settings_for(tmp_path, "tools_index = 3\n")
+
+
+def test_state_round_trip_with_vpn_file(tmp_path):
+    f = tmp_path / "state.toml"
+    for state in (State("thm", "lab.ovpn"), State(None, "lab.ovpn"), State("thm"), State()):
+        save_state(f, state)
+        assert load_state(f) == state
+
+
+def test_state_ignores_a_vpn_file_of_the_wrong_type(tmp_path):
+    f = tmp_path / "state.toml"
+    f.write_text('last_vpn_file = 3\nlast_platform = "htb"\n')
+    assert load_state(f) == State("htb", None)

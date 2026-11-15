@@ -13,7 +13,7 @@ from datetime import datetime
 from fnmatch import fnmatchcase
 from pathlib import Path
 
-from pwn_broker.filescan import NOTE_SWAP, ROOT_TRANSIENT_FILES, is_temp_name, sha256_file
+from pwn_broker.filescan import BOX_PRIVATE_FOLDERS, NOTE_SWAP, ROOT_TRANSIENT_FILES, is_temp_name, sha256_file
 from pwn_broker.model import Box, FileRecord
 from pwn_broker.paths import AppPaths
 from pwn_broker.store import SCHEMA, write_toml
@@ -76,6 +76,8 @@ def _entries(root: Path) -> tuple[list[tuple[str, Path]], list[str]]:
         here = Path(current)
         keep = []
         for name in dirs:
+            if here == root and name in BOX_PRIVATE_FOLDERS:
+                continue
             rel = (here / name).relative_to(root).as_posix()
             if stat.S_ISDIR(os.lstat(here / name).st_mode):
                 keep.append(name)

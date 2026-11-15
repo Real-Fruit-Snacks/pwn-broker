@@ -667,7 +667,7 @@ def test_check_lock_has_a_size_cap():
 
 RESERVED = (
     "sh bash dash zsh fish sudo su doas env python python3 pip pip3 sed cut mkdir kill cat rm "
-    "ls cp mv ln tar vim vi pwn-broker"
+    "ls cp mv ln tar vim vi pwn-broker record asciinema openvpn ping ip"
 ).split()
 
 

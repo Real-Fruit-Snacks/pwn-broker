@@ -25,3 +25,15 @@ def test_tool_folders(tmp_path):
     assert paths.tools == o / "tools" and paths.upload == o / "upload"
     assert paths.cache == o / "cache" and paths.tools_state == o / "tools" / "installed.toml"
     assert paths.run_box == o / "run" / "box" and paths.run_tools == o / "run" / "tools"
+
+
+def test_recording_and_vpn_paths(tmp_path):
+    paths = AppPaths(opt=tmp_path / "o", home=tmp_path / "h")
+    o = tmp_path / "o"
+    assert paths.run_recordings == o / "run" / "recordings"
+    assert paths.run_vpn == o / "run" / "vpn"
+    assert paths.run_shell == o / "run" / "shell"
+    assert paths.run_asciinema == o / "run" / "asciinema"
+    assert paths.box_lock == o / "run" / "box.lock"
+    assert paths.asciinema == o / "app" / "bin" / "asciinema"
+    assert paths.record_launcher == o / "bin" / "record"
