@@ -1128,8 +1128,8 @@ Making the environment runs the runtime's interpreter. That is the one new thing
 - One build of a runtime is on the machine at a time, shared by every tool that requires it.
 - A runtime is needed while any installed tool requires it. The app works that out from the installed tools; a runtime has no list of users of its own.
 - At `finish` and at `tool remove`, after the tools are gone, any runtime no installed tool requires is removed. The check for files left behind at launch covers runtimes too.
-- `box.toml` records, with each tool, the runtime it was built on: name, version, build and SHA-256.
-- `import`, and reopening a finished box, install the tools again as now, and with them whatever runtime they require.
+- `box.toml` records, with each tool, the runtime it was built on: name, version, build and SHA-256. It is a note of what ran, not a pin: any build of a runtime serves any tool built for its series.
+- `import`, and reopening a finished box, install the tools again as now, and with them whatever runtime they require: the one already on the machine, or the latest build in the index. When that is not the build the box recorded, the app says so and carries on.
 - A newer build of a runtime in the index does not replace one that is installed. It is used the next time none is.
 
 **Commands.**
@@ -1145,7 +1145,7 @@ Making the environment runs the runtime's interpreter. That is the one new thing
 - A Python tool's recipe names its runtime in its manifest. `build.py lock` resolves for that runtime's series alone, and the build refuses a wheel that does not fit it. The fixed list of Python versions goes away.
 - The first runtime is `python-3.13`, at CPython 3.13.18. `certipy` and `targetedkerberoast` become build 3, each requiring it.
 - CI builds the runtime with the other packages and installs every tool through pwn-broker's own code, which now installs the runtime from the built index first.
-- A new CI job installs every package inside the official Kali image and starts each command with `--help`, so the real tools are run on a real Kali.
+- A new CI job installs each recipe's current build inside the official Kali image and starts each command with `--help`, so the real tools are run on a real Kali. Publishing waits for it: a published build can never be replaced, so a build that fails on today's Kali is not published. Older builds are not tested there.
 
 **Testing.**
 
