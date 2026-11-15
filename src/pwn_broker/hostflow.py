@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from pathlib import Path
 
-from pwn_broker import boxes, hosts, privilege, toolstate
+from pwn_broker import boxes, hosts, toolstate
 from pwn_broker.console import Cancelled, Console
 from pwn_broker.model import Target
 from pwn_broker.paths import AppPaths
@@ -304,11 +304,14 @@ def leftovers(
     paths: AppPaths,
     console: Console,
     *,
-    hosts_path: Path = hosts.DEFAULT_PATH,
-    is_root: Callable[[], bool] = privilege.is_root,
-    run: Callable = privilege.run_privileged,
+    hosts_path: Path,
+    is_root: Callable[[], bool],
+    run: Callable,
 ) -> None:
-    """Offer to remove lines marked with the ID of a box that is finished or gone."""
+    """Offer to remove lines marked with the ID of a box that is finished or gone.
+
+    The file, the root check and the runner have no defaults: the caller's are the session's seams.
+    """
     folders, problems = boxes.list_boxes(paths)
     if problems:
         return

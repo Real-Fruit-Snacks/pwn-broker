@@ -499,6 +499,12 @@ def launch(paths, system):
     return Launch(paths, system.hosts_path)
 
 
+def test_leftovers_has_no_default_for_the_file_root_or_sudo(paths):
+    # a default would be the real /etc/hosts, root check and sudo
+    with pytest.raises(TypeError, match="hosts_path.*is_root.*run"):
+        hostflow.leftovers(paths, FakeConsole())
+
+
 def _finished(session):
     from pwn_broker.store import save_box
 
