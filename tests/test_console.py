@@ -1,6 +1,7 @@
 import io
 
 import pytest
+from helpers import NASTY
 from rich.console import Console as RichConsole
 
 from pwn_broker.console import Cancelled, FakeConsole, TermConsole, status_line
@@ -87,3 +88,17 @@ def test_table_cells_fold_on_narrow_terminal():
     text = out.getvalue()
     assert "\u2026" not in text
     assert text.count("x") == 70 and text.count("y") == 40
+
+
+@pytest.mark.parametrize("env", [{"NO_COLOR": "1"}, {}])
+@pytest.mark.parametrize("value", [*NASTY, "a\tb", "x" * 300])
+def test_raw_writes_the_text_byte_for_byte(env, value):
+    out = io.StringIO()
+    TermConsole(env, out=out).raw(value)
+    assert out.getvalue() == value + "\n"
+
+
+def test_fake_raw_is_recorded():
+    c = FakeConsole()
+    c.raw("a\tb")
+    assert c.lines == [("raw", "a\tb")]

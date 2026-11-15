@@ -1,15 +1,18 @@
+import io
+
 import pytest
 
 from helpers import NASTY, NOW, make_cred
+from pwn_broker import session as session_module
 from pwn_broker import shell  # noqa: F401  (fills the command registry)
 from pwn_broker.boxes import add_target
 from pwn_broker.config import Settings
-from pwn_broker.console import FakeConsole
+from pwn_broker.console import FakeConsole, TermConsole
 from pwn_broker.creds import KINDS, has_edge_space
 from pwn_broker.questions import CredAnswers, ask_cred, ask_value
 from pwn_broker.session import Session
 from pwn_broker.shell.commands import dispatch
-from pwn_broker.store import load_box, load_creds
+from pwn_broker.store import StoreError, load_box, load_creds
 
 
 def _lines(session, kind):
@@ -125,12 +128,115 @@ def test_cred_add_edge_space_asks_keep_or_trim(session, answer, stored):
     assert load_creds(session.box)[0].secret == stored
 
 
+def _disk(session):
+    box = session.box.path
+    lists = {p.name: p.read_bytes() for p in (box / "lists").glob("*")} if (box / "lists").exists() else {}
+    creds_file = box / "creds.toml"
+    return (
+        (box / "box.toml").read_bytes(),
+        creds_file.read_bytes() if creds_file.exists() else None,
+        lists,
+    )
+
+
 def test_cred_add_cancel_saves_nothing(session):
+    before = _disk(session)
     session.console = FakeConsole(["bob", "", "pw"])
     dispatch(session, "cred add")
     assert session.creds == []
-    assert load_creds(session.box) == []
+    assert _disk(session) == before
     assert _lines(session, "info") == ["cancelled"]
+
+
+def test_cred_edit_cancel_changes_nothing(session):
+    _seed(session, secret="old")
+    dispatch(session, "cred works 1")
+    before = _disk(session)
+    session.console = FakeConsole(["bob", "", "new"])
+    dispatch(session, "cred edit 1")
+    assert session.creds[0].secret == "old" and session.creds[0].username == "administrator"
+    assert _disk(session) == before
+    assert _lines(session, "info") == ["cancelled"]
+
+
+def test_cred_import_cancel_at_second_question_changes_nothing(session, tmp_path):
+    names = tmp_path / "n.txt"
+    names.write_text("a\nb\n", encoding="utf-8")
+    before = _disk(session)
+    session.console = FakeConsole(["CORP"])
+    dispatch(session, f"cred import {names}")
+    assert session.creds == []
+    assert _disk(session) == before
+    assert _lines(session, "info") == ["cancelled"]
+
+
+def test_failed_save_leaves_the_list_unchanged(session, monkeypatch):
+    def broken(box, creds):
+        raise StoreError("disk full")
+
+    monkeypatch.setattr(session_module, "save_creds", broken)
+    session.console = FakeConsole(["bob", "", "pw", "", "", ""])
+    dispatch(session, "cred add")
+    assert session.creds == []
+    assert _lines(session, "ok") == []
+    assert len(_lines(session, "fail")) == 1
+
+
+def test_failed_save_restores_edit_remove_and_works(session, monkeypatch):
+    _seed(session, secret="old")
+    before = [(c.secret, list(c.works_on)) for c in session.creds]
+
+    def broken(box, creds):
+        raise StoreError("disk full")
+
+    monkeypatch.setattr(session_module, "save_creds", broken)
+    for line, answers in (
+        ("cred edit 1", ["", "", "new", "", "", ""]),
+        ("cred works 1", []),
+        ("cred remove 1", ["y"]),
+    ):
+        session.console = FakeConsole(answers)
+        dispatch(session, line)
+        assert [(c.secret, list(c.works_on)) for c in session.creds] == before, line
+        assert _lines(session, "ok") == [], line
+
+
+def test_remove_remembers_the_number_on_an_old_box(session):
+    _seed(session)
+    assert "last_cred_n" not in session.box.extra
+    session.console = FakeConsole(["y"])
+    dispatch(session, "cred remove 1")
+    assert load_box(session.box.path).extra["last_cred_n"] == 1
+
+
+def test_cred_import_skips_a_byte_order_mark(session, tmp_path):
+    names = tmp_path / "n.txt"
+    names.write_bytes(b"\xef\xbb\xbfalice\nbob\n")
+    session.console = FakeConsole(["", ""])
+    dispatch(session, f"cred import {names}")
+    assert [c.username for c in load_creds(session.box)] == ["alice", "bob"]
+
+
+def test_edit_found_on_blank_when_stored_target_is_gone(session):
+    _seed(session, found_on="gone")
+    session.console = FakeConsole(["", "", "", "", "", ""])
+    dispatch(session, "cred edit 1")
+    assert load_creds(session.box)[0].found_on == ""
+    assert session.console.asked[-2] == "found on"
+    assert _lines(session, "fail") == []
+
+
+def test_edit_found_on_nonblank_is_still_resolved(session):
+    _seed(session, found_on="")
+    session.console = FakeConsole(["", "", "", "", "nope", "dc", ""])
+    dispatch(session, "cred edit 1")
+    assert len(_lines(session, "fail")) == 1
+    assert load_creds(session.box)[0].found_on == "dc01"
+
+
+def test_missing_cred_number_is_one_fail_line(session):
+    dispatch(session, "cred show 4")
+    assert session.console.lines == [("fail", "no credential numbered 4")]
 
 
 def test_cred_add_found_on_must_be_a_target(session):
@@ -152,7 +258,7 @@ def test_secret_is_exact_on_disk_in_the_table_and_in_show(session, secret):
     assert rows[0][3] == secret
     dispatch(session, "cred show 1")
     if secret:
-        assert session.console.lines == [("info", secret)]
+        assert session.console.lines == [("raw", secret)]
     else:
         assert session.console.lines == [("fail", "cred 1 has no secret")]
 
@@ -335,3 +441,12 @@ def test_colon_username_prints_warn(session):
     assert _lines(session, "warn") == [
         "a:b contains a colon and is left out of the colon-separated lists"
     ]
+
+
+@pytest.mark.parametrize("env", [{"NO_COLOR": "1"}, {}])
+def test_cred_show_writes_a_tab_secret_exactly_to_the_terminal(session, env):
+    out = io.StringIO()
+    session.console = TermConsole(env, out=out)
+    _seed(session, secret="tab\there  ")
+    dispatch(session, "cred show 1")
+    assert out.getvalue() == "tab\there  \n"

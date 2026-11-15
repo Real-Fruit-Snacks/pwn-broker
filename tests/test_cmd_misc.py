@@ -16,6 +16,10 @@ from pwn_broker.store import load_box, save_files
 FLAG = "e5e4e47ae7022664cda6eb013fb0d9ed"
 
 
+def _raw(console):
+    return [text for kind, text in console.lines if kind == "raw"]
+
+
 def _info(console):
     return [text for kind, text in console.lines if kind == "info"]
 
@@ -57,7 +61,7 @@ def test_path_prints_target_folder_and_subfolder(session):
     box = session.box.path
     for line in ("path", "path scans", "path lists", "path screenshots"):
         dispatch(session, line)
-    assert _info(session.console) == [
+    assert _raw(session.console) == [
         str(box / "targets" / "dc01"),
         str(box / "targets" / "dc01" / "scans"),
         str(box / "lists"),
@@ -69,7 +73,7 @@ def test_path_without_current_target(session):
     session.current = None
     for line in ("path", "path lists", "path loot"):
         dispatch(session, line)
-    assert _info(session.console) == [str(session.box.path), str(session.box.path / "lists")]
+    assert _raw(session.console) == [str(session.box.path), str(session.box.path / "lists")]
     assert len(_fails(session.console)) == 1
 
 

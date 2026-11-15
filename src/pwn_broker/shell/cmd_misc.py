@@ -78,7 +78,7 @@ def path(session: Session, args: list[str]) -> None:
     else:
         valid = ", ".join(sorted({*boxes.TARGET_FOLDERS, *BOX_FOLDERS}))
         raise ValueError(f"unknown folder {name}. use one of: {valid}")
-    session.console.info(str(folder))
+    session.console.raw(str(folder))
 
 
 @command("note", "open the note in vim")

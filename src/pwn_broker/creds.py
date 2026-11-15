@@ -45,7 +45,7 @@ def _targets(targets) -> list[str]:
     return unique
 
 
-def _find(creds: list[Cred], n: int) -> Cred:
+def find_cred(creds: list[Cred], n: int) -> Cred:
     for cred in creds:
         if cred.n == n:
             return cred
@@ -78,7 +78,7 @@ def add_cred(
 
 
 def edit_cred(creds: list[Cred], n: int, /, **changes) -> Cred:
-    cred = _find(creds, n)
+    cred = find_cred(creds, n)
     unknown = sorted(set(changes) - set(EDITABLE))
     if unknown:
         raise CredError(f"cannot edit: {', '.join(unknown)}")
@@ -95,13 +95,13 @@ def edit_cred(creds: list[Cred], n: int, /, **changes) -> Cred:
 
 
 def remove_cred(creds: list[Cred], n: int) -> Cred:
-    cred = _find(creds, n)
+    cred = find_cred(creds, n)
     creds.remove(cred)
     return cred
 
 
 def mark_works(creds: list[Cred], n: int, targets: list[str]) -> Cred:
-    cred = _find(creds, n)
+    cred = find_cred(creds, n)
     for target in _targets(targets):
         if target not in cred.works_on:
             cred.works_on.append(target)

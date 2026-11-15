@@ -1,6 +1,7 @@
 import pytest
 
 from pwn_broker import lifecycle
+from pwn_broker.archive import ArchiveError
 from pwn_broker import shell  # noqa: F401  (fills the command registry)
 from pwn_broker.console import FakeConsole
 from pwn_broker.shell.commands import Quit, dispatch
@@ -37,9 +38,24 @@ def test_quit_declined_exports_nothing(session):
     assert not _archive(session, "exported").exists()
 
 
-def test_quit_quits_even_when_export_fails(session, monkeypatch):
-    monkeypatch.setattr(lifecycle, "export_box", lambda s: None)
-    session.console = FakeConsole(["y"])
+def _failing_pack(monkeypatch):
+    def pack(box, dest):
+        raise ArchiveError("disk full")
+
+    monkeypatch.setattr(lifecycle, "pack", pack)
+
+
+def test_quit_after_failed_export_asks_and_stays_open_by_default(session, monkeypatch):
+    _failing_pack(monkeypatch)
+    session.console = FakeConsole(["y", ""])
+    dispatch(session, "quit")
+    assert session.console.asked == ["export forest before you go?", "the export failed. quit anyway?"]
+    assert [k for k, _ in session.console.lines] == ["fail"]
+
+
+def test_quit_after_failed_export_quits_when_confirmed(session, monkeypatch):
+    _failing_pack(monkeypatch)
+    session.console = FakeConsole(["y", "y"])
     with pytest.raises(Quit):
         dispatch(session, "quit")
 

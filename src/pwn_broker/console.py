@@ -20,6 +20,7 @@ class Console(Protocol):
     def warn(self, text: str) -> None: ...
     def fail(self, text: str) -> None: ...
     def info(self, text: str) -> None: ...
+    def raw(self, text: str) -> None: ...
     def table(self, columns: list[str], rows: list[list[str]]) -> None: ...
 
 
@@ -67,6 +68,9 @@ class FakeConsole:
     def info(self, text: str) -> None:
         self.lines.append(("info", text))
 
+    def raw(self, text: str) -> None:
+        self.lines.append(("raw", text))
+
     def table(self, columns: list[str], rows: list[list[str]]) -> None:
         self.tables.append((columns, rows))
 
@@ -108,6 +112,12 @@ class TermConsole:
 
     def info(self, text: str) -> None:
         self._rich.print(Text(text, style=self._style(theme.MUTE)), soft_wrap=True)
+
+    def raw(self, text: str) -> None:
+        # rich would expand tabs and wrap; this output exists to be copied
+        stream = self._rich.file
+        stream.write(text + "\n")
+        stream.flush()
 
     def table(self, columns: list[str], rows: list[list[str]]) -> None:
         mute = self._style(theme.MUTE)

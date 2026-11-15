@@ -122,16 +122,22 @@ def ask_domain(console: Console, session: Session, current: str | None = None) -
 
 
 def ask_found_on(console: Console, session: Session, current: str | None = None) -> str:
-    if not session.targets:
-        while True:
-            answer = console.ask("found on")
-            if answer == "":
-                return ""
-            console.fail("this box has no targets yet, leave found on blank")
-    default = current if current is not None else (session.current.name if session.current else "")
+    names = {t.name for t in session.targets}
+    if current is None:
+        default = session.current.name if session.current else None
+    else:
+        # a stored name that is empty or no longer a target is not worth offering
+        default = current if current in names else None
+    blank_ok = not names or (current is not None and default is None)
     while True:
+        answer = console.ask("found on", default)
+        if answer == "" and blank_ok:
+            return ""
+        if not names:
+            console.fail("this box has no targets yet, leave found on blank")
+            continue
         try:
-            return find_target(session.targets, console.ask("found on", default or None)).name
+            return find_target(session.targets, answer).name
         except BoxError as exc:
             console.fail(str(exc))
 

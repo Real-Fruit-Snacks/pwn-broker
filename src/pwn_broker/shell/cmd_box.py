@@ -20,8 +20,8 @@ def finish(session: Session, args: list[str]) -> None:
 def quit_shell(session: Session, args: list[str]) -> None:
     take_args(args)
     box = session.box
-    if box.status == "active" and session.console.confirm(
-        f"export {box.name} before you go?", default=True
-    ):
-        lifecycle.export_box(session)
+    console = session.console
+    if box.status == "active" and console.confirm(f"export {box.name} before you go?", default=True):
+        if lifecycle.export_box(session) is None and not console.confirm("the export failed. quit anyway?"):
+            return
     raise Quit
