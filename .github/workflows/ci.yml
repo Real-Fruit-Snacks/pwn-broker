@@ -68,12 +68,12 @@ jobs:
           export PWN_BROKER_OPT="$work/opt"
           export HOME="$work/home"
           mkdir -p "$HOME"
-          sh install.sh --from .
+          sh install.sh --from . --no-asciinema
           test -x "$PWN_BROKER_OPT/bin/pwn-broker"
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
           "$PWN_BROKER_OPT/bin/pwn-broker" --version | tee "$work/version.txt"
           grep -qF "$version" "$work/version.txt"
-          sh install.sh --from .
+          sh install.sh --from . --no-asciinema
           test "$(grep -c '# pwn-broker' "$HOME/.zshrc")" = 1
 
   art:

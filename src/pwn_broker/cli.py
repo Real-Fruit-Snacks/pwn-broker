@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from pwn_broker import __version__, boxes, checks, config, lifecycle, note, notewindow, privilege
-from pwn_broker import hostflow, hosts, kalihooks, questions, session as sessions, setup
+from pwn_broker import hostflow, hosts, kalihooks, questions, recorder, session as sessions, setup
 from pwn_broker import targetflow, toolhooks, vpn
 from pwn_broker.boxes import BoxError
 from pwn_broker.config import ConfigError, Settings
@@ -43,6 +43,8 @@ class Env:
     is_root: Callable[[], bool] = privilege.is_root
     run_privileged: Callable = privilege.run_privileged
     tunnel: Callable[[], vpn.Tunnel | None] = vpn.tunnel
+    # how setup and the launch check download the pinned asciinema
+    fetch: Callable[[AppPaths], None] = recorder.fetch
 
 
 def _load(env: Env, box: Box) -> Session:
@@ -51,6 +53,7 @@ def _load(env: Env, box: Box) -> Session:
     session.is_root = env.is_root
     session.run_privileged = env.run_privileged
     session.tunnel = env.tunnel
+    session.fetch = env.fetch
     return session
 
 
@@ -209,6 +212,22 @@ def _pick_session(env: Env, argv: list[str]) -> Session | None:
     return choose(env)
 
 
+def _asciinema(env: Env) -> None:
+    """Fetch the pinned asciinema for setup; a failure is a warning, never a failed setup."""
+    if env.environ.get("PWN_BROKER_SKIP_ASCIINEMA"):
+        return
+    try:
+        if not recorder.present(env.paths):
+            env.fetch(env.paths)
+    except recorder.RecorderError as exc:
+        env.console.warn(
+            f"asciinema was not installed: {exc}. "
+            "record and replay will not work until it is: run check in the prompt"
+        )
+        return
+    env.console.ok(f"asciinema {recorder.VERSION} in {env.paths.asciinema}")
+
+
 def _usage(env: Env, argv: list[str]) -> int | None:
     console = env.console
     if argv == ["--version"]:
@@ -227,6 +246,7 @@ def _usage(env: Env, argv: list[str]) -> int | None:
         except OSError as exc:
             console.fail(str(exc))
             return 1
+        _asciinema(env)
         return 0
     if argv and argv[0] not in SUBCOMMANDS:
         console.fail(f"unknown option {argv[0]}, see pwn-broker --help")
@@ -252,8 +272,20 @@ def _prepare(env: Env) -> int | None:
             console.info("run the installer again to repair the install")
             return 1
 
+    if not env.paths.record_launcher.exists():
+        try:
+            setup.write_launcher(env.paths, Path(sys.executable))
+        except OSError as exc:
+            console.warn(f"cannot write the record launcher: {exc}")
+
     results = checks.launch_checks(
-        env.paths, env.settings, env.environ, env.home, include_version=False, tunnel=env.tunnel
+        env.paths,
+        env.settings,
+        env.environ,
+        env.home,
+        include_version=False,
+        tunnel=env.tunnel,
+        fetch=env.fetch,
     )
     checks.report(console, results)
     if any(r.status == "fail" for r in results):

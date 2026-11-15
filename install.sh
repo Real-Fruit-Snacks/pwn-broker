@@ -5,7 +5,7 @@ set -eu
 # by `curl | sh` runs nothing.
 
 usage_line() {
-    echo "usage: install.sh [--from <path>] [--config <path>] [--no-path] [--help]"
+    echo "usage: install.sh [--from <path>] [--config <path>] [--no-path] [--no-asciinema] [--help]"
 }
 
 usage_full() {
@@ -15,6 +15,7 @@ usage_full() {
   --from <path>    install from a local folder or wheel instead of the latest release
   --config <path>  copy a settings file to config.toml
   --no-path        do not add /opt/pwn-broker/bin to PATH in ~/.zshrc and ~/.bashrc
+  --no-asciinema   do not download asciinema; record and replay will not work
   --help           show this text
 
 Run it as the user who will use pwn-broker, not with sudo.
@@ -57,6 +58,7 @@ main() {
     FROM=""
     CONFIG=""
     NO_PATH=0
+    NO_ASCIINEMA=0
     HAVE_FROM=0
     HAVE_CONFIG=0
     TMP=""
@@ -77,6 +79,10 @@ main() {
                 ;;
             --no-path)
                 NO_PATH=1
+                shift
+                ;;
+            --no-asciinema)
+                NO_ASCIINEMA=1
                 shift
                 ;;
             --help)
@@ -182,6 +188,10 @@ main() {
 
     PWN_BROKER_OPT="$OPT"
     export PWN_BROKER_OPT
+    if [ "$NO_ASCIINEMA" -eq 1 ]; then
+        PWN_BROKER_SKIP_ASCIINEMA=1
+        export PWN_BROKER_SKIP_ASCIINEMA
+    fi
     "$OPT/app/bin/python" -m pwn_broker setup || fail "pwn-broker setup failed"
     ok "launcher and data written in $OPT"
 

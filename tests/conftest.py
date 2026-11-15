@@ -77,6 +77,8 @@ class System:
         # the tunnel the stand-in reports; None means no VPN is up
         self.tunnel_found = None
         self.tunnel_reads = 0
+        # the paths each asciinema download was asked for; none ever reaches the network
+        self.fetches: list = []
         # programs `which` finds, by name; openvpn is not installed unless a test says so
         self.programs: dict[str, str] = {}
         self.sleeps: list[float] = []
@@ -104,6 +106,10 @@ class System:
         # the real reader runs `ip`; no test may
         self.tunnel_reads += 1
         return self.tunnel_found
+
+    def fetch(self, paths):
+        # the real one downloads; this one only notes the call
+        self.fetches.append(paths)
 
     def which(self, name):
         return self.programs.get(name)
@@ -145,7 +151,7 @@ def system(tmp_path_factory, monkeypatch):
         if self.hosts_path == defaults["hosts_path"]:
             self.hosts_path = fake.hosts_path
         for name in (
-            "is_root", "run_privileged", "ping", "tunnel",
+            "is_root", "run_privileged", "ping", "tunnel", "fetch",
             "which", "sleep", "vpn_alive", "vpn_started", "vpn_comm",
         ):  # fmt: skip
             if getattr(self, name) is defaults[name]:
@@ -162,7 +168,7 @@ def system(tmp_path_factory, monkeypatch):
         env_original(self, *args, **kwargs)
         if self.hosts_path == env_defaults["hosts_path"]:
             self.hosts_path = fake.hosts_path
-        for name in ("is_root", "run_privileged", "tunnel"):
+        for name in ("is_root", "run_privileged", "tunnel", "fetch"):
             if getattr(self, name) is env_defaults[name]:
                 setattr(self, name, getattr(fake, name))
 
@@ -223,6 +229,17 @@ def no_real_ip(monkeypatch):
         raise AssertionError("a test reached the real `ip`; pass a tunnel reader or a run")
 
     monkeypatch.setattr(vpn.tunnel, "__defaults__", (refuse,))
+
+
+@pytest.fixture(autouse=True)
+def no_real_download(monkeypatch):
+    """recorder.fetch's own default would download asciinema; make that an error."""
+    from pwn_broker import recorder
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a test reached the network; pass a download stand-in")
+
+    monkeypatch.setattr(recorder.fetch, "__kwdefaults__", {**recorder.fetch.__kwdefaults__, "download": refuse})
 
 
 @pytest.fixture(autouse=True)

@@ -63,6 +63,9 @@ def write_launcher(paths: AppPaths, python: Path) -> Path:
     launcher = paths.bin / "pwn-broker"
     write_text(launcher, f'#!/bin/sh\nexec "{python.as_posix()}" -m pwn_broker "$@"\n')
     os.chmod(launcher, 0o755)
+    record = paths.record_launcher
+    write_text(record, f'#!/bin/sh\nexec "{python.as_posix()}" -m pwn_broker.record "$@"\n')
+    os.chmod(record, 0o755)
     return launcher
 
 

@@ -230,7 +230,7 @@ def _fetch_index(url: str, timeout: float) -> bytes:
     return body
 
 
-def _download(url: str, dest: Path, limit: int, timeout: float) -> None:
+def download(url: str, dest: Path, limit: int, timeout: float) -> None:
     # streamed to disk and cut off as soon as it passes the size the index promised
     deadline = time.monotonic() + timeout
     total = 0
@@ -449,7 +449,7 @@ def fetch_zip(
     settings: Settings,
     entry: BuildEntry,
     *,
-    download: Callable[[str, Path, int, float], None] = _download,
+    download: Callable[[str, Path, int, float], None] = download,
 ) -> Path:
     # entries can be built directly, so the name is judged again before any path exists
     _plain_zip_name(entry.file, "file")

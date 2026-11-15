@@ -721,14 +721,14 @@ def test_default_download_stops_at_the_limit(tmp_path):
     target = tmp_path / "x.part"
     with _Serve(b"x" * 500_000) as url:
         with pytest.raises(ToolError, match="more than"):
-            toolindex._download(url, target, 1000, 5.0)
+            toolindex.download(url, target, 1000, 5.0)
     assert target.stat().st_size <= 1000
 
 
 def test_default_download_writes_a_body_within_the_limit(tmp_path):
     target = tmp_path / "x.part"
     with _Serve(b"hello") as url:
-        toolindex._download(url, target, 1000, 5.0)
+        toolindex.download(url, target, 1000, 5.0)
     assert target.read_bytes() == b"hello"
 
 
@@ -850,7 +850,7 @@ def test_a_redirect_away_from_http_is_refused(monkeypatch, code, target):
 def test_a_redirect_away_from_http_is_refused_for_a_zip_too(monkeypatch, tmp_path):
     stand_in(monkeypatch, {URL: (302, "ftp://example.invalid/x.zip", b"")})
     with pytest.raises(ToolError, match="redirect"):
-        toolindex._download(URL, tmp_path / "x.zip", 100, 5)
+        toolindex.download(URL, tmp_path / "x.zip", 100, 5)
 
 
 def test_a_redirect_to_https_is_followed(monkeypatch):

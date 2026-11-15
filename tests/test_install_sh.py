@@ -18,10 +18,10 @@ needs_sh = pytest.mark.skipif(shutil.which("sh") is None, reason="needs sh")
 def test_install_from_local_source(tmp_path):
     env = {**os.environ, "PWN_BROKER_OPT": str(tmp_path / "opt"), "HOME": str(tmp_path / "home")}
     (tmp_path / "home").mkdir()
-    subprocess.run(["sh", "install.sh", "--from", "."], check=True, env=env, cwd=ROOT)
+    subprocess.run(["sh", "install.sh", "--from", ".", "--no-asciinema"], check=True, env=env, cwd=ROOT)
     assert (tmp_path / "opt/bin/pwn-broker").exists() and (tmp_path / "opt/vim/vimrc").exists()
     assert "# pwn-broker" in (tmp_path / "home/.zshrc").read_text()
-    subprocess.run(["sh", "install.sh", "--from", "."], check=True, env=env, cwd=ROOT)
+    subprocess.run(["sh", "install.sh", "--from", ".", "--no-asciinema"], check=True, env=env, cwd=ROOT)
     assert (tmp_path / "home/.zshrc").read_text().count("# pwn-broker") == 1
 
 
@@ -60,6 +60,22 @@ shells = pytest.mark.parametrize("shell", SHELLS)
 
 def run_script(shell, *args):
     return subprocess.run([shell, str(SCRIPT), *args], capture_output=True, text=True)
+
+
+@shells
+def test_install_sh_help_lists_no_asciinema(shell):
+    helped = run_script(shell, "--help")
+    assert helped.returncode == 0
+    assert "--no-asciinema   do not download asciinema; record and replay will not work" in helped.stdout
+    assert "[--no-asciinema]" in helped.stdout
+
+
+def test_install_sh_skips_asciinema_through_the_setup_variable():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assert "NO_ASCIINEMA=1" in text
+    assert "PWN_BROKER_SKIP_ASCIINEMA=1" in text
+    # exported before the setup step reads it
+    assert text.index("export PWN_BROKER_SKIP_ASCIINEMA") < text.index("-m pwn_broker setup")
 
 
 @shells
@@ -111,7 +127,7 @@ def run_with_fake_python(shell, tmp_path, opt):
     (fake / "python3").chmod(0o755)
     env = {**os.environ, "PWN_BROKER_OPT": opt.as_posix(), "PATH": f"{fake}{os.pathsep}{os.environ['PATH']}"}
     return subprocess.run(
-        [shell, str(SCRIPT), "--from", str(ROOT), "--no-path"], capture_output=True, text=True, env=env
+        [shell, str(SCRIPT), "--from", str(ROOT), "--no-path", "--no-asciinema"], capture_output=True, text=True, env=env
     )
 
 

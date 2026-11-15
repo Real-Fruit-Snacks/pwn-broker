@@ -265,3 +265,16 @@ def test_install_data_creates_recording_folders_and_can_run_twice(paths):
         install_data(paths)
         for folder in (paths.run_recordings, paths.run_vpn, paths.run_shell, paths.run_asciinema):
             assert folder.is_dir()
+
+
+def test_record_launcher_content(paths):
+    write_launcher(paths, Path("/opt/pwn-broker/app/bin/python"))
+    assert paths.record_launcher.read_bytes() == (
+        b'#!/bin/sh\nexec "/opt/pwn-broker/app/bin/python" -m pwn_broker.record "$@"\n'
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no file modes on Windows")
+def test_record_launcher_is_executable(paths):
+    write_launcher(paths, Path("/x/python"))
+    assert os.stat(paths.record_launcher).st_mode & 0o777 == 0o755

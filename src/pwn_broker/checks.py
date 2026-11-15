@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from pwn_broker import __version__, setup, vpn
+from pwn_broker import __version__, recorder, setup, vpn
 from pwn_broker.config import Settings
 from pwn_broker.console import Cancelled, Console
 from pwn_broker.notewindow import has_display
@@ -57,6 +57,7 @@ def run_checks(
     run: Callable = subprocess.run,
     *,
     tunnel: Callable[[], vpn.Tunnel | None],
+    fetch: Callable[[AppPaths], None],
 ) -> list[CheckResult]:
     results = [
         _tool("vim", "vim", which, "apt install vim"),
@@ -106,6 +107,18 @@ def run_checks(
             CheckResult("folders", "warn", "box folders are missing", repair=make_folders)
         )
 
+    if recorder.present(paths):
+        results.append(CheckResult("asciinema", "ok", f"asciinema {recorder.VERSION}"))
+    else:
+        results.append(
+            CheckResult(
+                "asciinema",
+                "warn",
+                "asciinema is missing or does not match its checksum",
+                repair=lambda: fetch(paths),
+            )
+        )
+
     found = tunnel()
     if found is not None:
         results.append(CheckResult("vpn", "ok", f"{found.address} on {found.name}"))
@@ -143,7 +156,7 @@ def _offer_repair(console: Console, name: str, repair: Callable[[], None]) -> No
         return
     try:
         repair()
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, recorder.RecorderError) as exc:
         console.fail(str(exc))
     else:
         console.ok(f"{name} fixed")
@@ -221,6 +234,7 @@ def launch_checks(
     include_version: bool = True,
     *,
     tunnel: Callable[[], vpn.Tunnel | None],
+    fetch: Callable[[AppPaths], None],
 ) -> list[CheckResult]:
     def add_path_lines() -> None:
         # the same rc files the installer writes to
@@ -228,7 +242,8 @@ def launch_checks(
         if (home / ".bashrc").exists():
             setup.ensure_path_line(home / ".bashrc", paths.bin)
 
-    results = run_checks(paths, settings, env, repair_path=add_path_lines, tunnel=tunnel)
+    results = run_checks(paths, settings, env, repair_path=add_path_lines, tunnel=tunnel, fetch=fetch
+    )
     if include_version:
         version = version_check(settings)
         if version is not None:
