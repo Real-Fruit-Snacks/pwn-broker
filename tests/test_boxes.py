@@ -285,3 +285,14 @@ def test_pid_alive_posix():
 @pytest.mark.skipif(sys.platform != "win32", reason="windows only")
 def test_pid_alive_never_signals_on_windows():
     assert pid_alive(os.getpid()) is False
+
+
+def test_target_contents_lists_files_but_not_target_toml(box, dc01):
+    from pwn_broker.boxes import ensure_removable, target_contents
+
+    assert target_contents(box, "dc01") == []
+    ensure_removable(box, "dc01")
+    (box.path / "targets" / "dc01" / "loot" / "a.txt").write_text("x")
+    assert target_contents(box, "dc01") == ["loot/a.txt"]
+    with pytest.raises(BoxError, match="still has 1 file"):
+        ensure_removable(box, "dc01")

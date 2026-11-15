@@ -1,6 +1,7 @@
 import pytest
 
 from helpers import NOW
+from pwn_broker import note
 from pwn_broker import shell  # noqa: F401  (fills the command registry)
 from pwn_broker.boxes import add_target
 from pwn_broker.console import FakeConsole
@@ -193,3 +194,67 @@ def test_target_remove_current_moves_to_another(session):
 def test_missing_target_argument_fails(session, line):
     dispatch(session, line)
     assert len(_fails(session.console)) == 1
+
+
+def _break_note_writes(monkeypatch):
+    def broken(box, text):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(note, "write_note", broken)
+
+
+def test_target_add_survives_a_broken_note(session, monkeypatch):
+    original = note.write_note
+    calls = []
+
+    def broken(box, text):
+        calls.append(1)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(note, "write_note", broken)
+    session.console = FakeConsole(["10.10.10.50", "", "", "web01"])
+    dispatch(session, "target add")
+    monkeypatch.setattr(note, "write_note", original)
+    kinds = [kind for kind, _ in session.console.lines]
+    assert kinds.count("warn") == 1 and ("ok", "target web01 created") in session.console.lines
+    assert session.current.name == "web01"
+    assert load_box(session.box.path).last_target == "web01"
+    assert "10.10.10.50" in (session.box.path / "lists" / "ips.txt").read_text(encoding="utf-8")
+
+
+def test_target_rename_survives_a_broken_note(session, monkeypatch):
+    _break_note_writes(monkeypatch)
+    session.console = FakeConsole(["dc"])
+    dispatch(session, "target rename dc01")
+    kinds = [kind for kind, _ in session.console.lines]
+    assert kinds.count("warn") == 1
+    assert ("ok", "target dc01 is now dc") in session.console.lines
+    assert session.current.name == "dc"
+    assert [t.name for t in session.targets] == ["dc"]
+    assert (session.box.path / "targets" / "dc").is_dir()
+    assert load_box(session.box.path).last_target == "dc"
+
+
+def test_target_remove_checks_emptiness_before_asking(session):
+    (session.box.path / "targets" / "dc01" / "loot" / "x.txt").write_text("x")
+    session.console = FakeConsole(["y"])
+    dispatch(session, "target remove dc01")
+    assert session.console.asked == []
+    assert len(_fails(session.console)) == 1
+
+
+def test_target_rename_to_same_name_fails(session):
+    session.console = FakeConsole(["DC01"])
+    dispatch(session, "target rename dc01")
+    assert len(_fails(session.console)) == 1
+    assert (session.box.path / "targets" / "dc01").is_dir()
+    assert not any(kind == "ok" for kind, _ in session.console.lines)
+
+
+def test_ask_target_dash_clears_a_field_when_editing(dc01):
+    a = ask_target(FakeConsole(["", "-", ""]), taken=set(), defaults=dc01, ask_name=False)
+    assert a.hostnames == [] and a.ips == ["10.10.10.161"]
+    console = FakeConsole(["-", "-", "10.10.10.7", "", ""])
+    a = ask_target(console, taken=set(), defaults=dc01, ask_name=False)
+    assert a.ips == ["10.10.10.7"]
+    assert len(_fails(console)) == 1

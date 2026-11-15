@@ -180,3 +180,14 @@ def test_extra_arguments_fail(session, line, monkeypatch):
     monkeypatch.setattr(checks, "launch_checks", lambda *a: [])
     dispatch(session, line)
     assert len(_fails(session.console)) == 1
+
+
+def test_files_added_uses_the_clock_timezone(session):
+    from datetime import timezone
+
+    seen = session.clock().astimezone(timezone.utc).replace(hour=23, minute=30)
+    seen = seen - timedelta(days=1)
+    # 23:30 UTC the day before is 01:30 on the clock's date at +02:00
+    save_files(session.box, [_record("targets/dc01/a", "dc01", seen, 1)])
+    dispatch(session, "files")
+    assert session.console.tables[0][1][0][1] == "01:30"

@@ -32,6 +32,14 @@ def _usable(name: str) -> bool:
     return True
 
 
+def _values(console: Console, label: str, default: str, clearable: bool) -> list[str]:
+    answer = console.ask(label, default or None)
+    # a lone "-" lets an edit empty a field that has a default
+    if clearable and answer == "-":
+        return []
+    return parse_values(answer)
+
+
 def ask_target(
     console: Console,
     *,
@@ -44,12 +52,12 @@ def ask_target(
 
     while True:
         while True:
-            ips = parse_values(console.ask("ip", default_ips or None))
+            ips = _values(console, "ip", default_ips, defaults is not None)
             bad = _bad_ip(ips)
             if bad is None:
                 break
             console.fail(f"not an IP address: {bad}")
-        hostnames = parse_values(console.ask("hostname", default_hosts or None))
+        hostnames = _values(console, "hostname", default_hosts, defaults is not None)
         if ips or hostnames:
             break
         console.fail("a target needs at least one IP address or hostname")

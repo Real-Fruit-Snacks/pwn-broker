@@ -1,11 +1,24 @@
 from pwn_broker import boxes, note, setup
+from pwn_broker.note import NoteError
+from pwn_broker.paths import safe_name
 from pwn_broker.questions import ask_target
 from pwn_broker.session import Session, refresh, set_current
 from pwn_broker.shell.commands import command, take_args
+from pwn_broker.store import StoreError
 
 
 def _has_note(session: Session) -> bool:
     return (session.box.path / note.NOTE_NAME).exists()
+
+
+def _update_note(session: Session, change) -> None:
+    # The target already exists on disk by now, so a broken note must not stop the rest.
+    if not _has_note(session):
+        return
+    try:
+        note.write_note(session.box, change(note.read_note(session.box)))
+    except (OSError, NoteError, StoreError) as exc:
+        session.console.warn(f"the note could not be updated: {exc}")
 
 
 @command("target add", "add a target to this box")
@@ -22,10 +35,12 @@ def target_add(session: Session, args: list[str]) -> None:
         name=answers.name,
         now=session.clock(),
     )
-    if _has_note(session):
+
+    def add_section(text: str) -> str:
         _, section = note.split_template(setup.load_template(session.paths))
-        text = note.append_section(note.read_note(session.box), section, target)
-        note.write_note(session.box, text)
+        return note.append_section(text, section, target)
+
+    _update_note(session, add_section)
     set_current(session, target)
     refresh(session)
     console.ok(f"target {target.name} created")
@@ -97,12 +112,16 @@ def target_rename(session: Session, args: list[str]) -> None:
     target = boxes.find_target(session.targets, name)
     old = target.name
     new = session.console.ask("new name")
+    try:
+        unchanged = safe_name(new) == old
+    except ValueError:
+        unchanged = False
+    if unchanged:
+        raise ValueError(f"{old} is already its name")
     boxes.rename_target(session.box, session.targets, old, new)
     if session.current is target:
         set_current(session, target)
-    if _has_note(session):
-        text = note.rename_heading(note.read_note(session.box), old, target.name)
-        note.write_note(session.box, text)
+    _update_note(session, lambda text: note.rename_heading(text, old, target.name))
     refresh(session)
     session.console.ok(f"target {old} is now {target.name}")
 
@@ -111,6 +130,7 @@ def target_rename(session: Session, args: list[str]) -> None:
 def target_remove(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, ("target name",))
     target = boxes.find_target(session.targets, name)
+    boxes.ensure_removable(session.box, target.name)
     if not session.console.confirm(f"remove target {target.name}?"):
         return
     boxes.remove_target(session.box, session.targets, target.name)

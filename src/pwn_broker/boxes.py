@@ -202,17 +202,26 @@ def rename_target(box: Box, targets: list[Target], old: str, new: str) -> Target
     return target
 
 
-def remove_target(box: Box, targets: list[Target], name: str) -> None:
-    target = find_target(targets, name)
-    folder = box.path / "targets" / target.name
-    found = sorted(
+def target_contents(box: Box, name: str) -> list[str]:
+    folder = box.path / "targets" / name
+    return sorted(
         p.relative_to(folder).as_posix()
         for p in folder.rglob("*")
         if p.is_file() and p.relative_to(folder).as_posix() != "target.toml"
     )
+
+
+def ensure_removable(box: Box, name: str) -> None:
+    found = target_contents(box, name)
     if found:
         shown = ", ".join(found[:5])
-        raise BoxError(f"{target.name} still has {len(found)} file(s): {shown}")
+        raise BoxError(f"{name} still has {len(found)} file(s): {shown}")
+
+
+def remove_target(box: Box, targets: list[Target], name: str) -> None:
+    target = find_target(targets, name)
+    ensure_removable(box, target.name)
+    folder = box.path / "targets" / target.name
     shutil.rmtree(folder)
     targets.remove(target)
 

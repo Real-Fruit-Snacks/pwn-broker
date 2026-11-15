@@ -22,7 +22,7 @@ def human_size(size: int) -> str:
 
 
 def _added(session: Session, record: FileRecord) -> str:
-    seen = record.first_seen
+    seen = record.first_seen.astimezone(session.clock().tzinfo)
     if seen.date() == session.clock().date():
         return seen.strftime("%H:%M")
     return seen.strftime("%Y-%m-%d")
