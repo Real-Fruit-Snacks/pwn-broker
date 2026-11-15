@@ -43,6 +43,26 @@ def test_bad_header_is_refused(tmp_path, first, reason):
     assert reason in str(err.value)
 
 
+def test_deeply_nested_header_is_refused(tmp_path):
+    path = _write(tmp_path / "deep.cast", "[" * 200000 + "\n")
+    with pytest.raises(CastError, match="JSON") as err:
+        cast.read_header(path)
+    assert str(path) in str(err.value)
+
+
+def test_deeply_nested_middle_line_names_its_number(tmp_path):
+    path = _write(tmp_path / "a.cast", cast_text([]) + "[" * 200000 + "\n" + '[1, "o", "b"]\n')
+    with pytest.raises(CastError, match="line 2"):
+        list(cast.events(path))
+
+
+def test_data_that_is_not_valid_text_is_a_bad_line(tmp_path):
+    # a lone surrogate is valid JSON but cannot be written out as UTF-8
+    path = _write(tmp_path / "a.cast", cast_text([]) + '[1, "o", "a\\ud800b"]\n[1, "o", "c"]\n')
+    with pytest.raises(CastError, match="line 2"):
+        list(cast.events(path))
+
+
 def test_empty_file_is_refused(tmp_path):
     path = _write(tmp_path / "empty.cast", "")
     with pytest.raises(CastError, match="empty"):

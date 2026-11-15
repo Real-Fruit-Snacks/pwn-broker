@@ -96,8 +96,8 @@ def test_full_screen_program_gives_one_line_and_none_of_its_content():
     ]
     got = render(events)
     assert got == [
-        "14:32:10  [full-screen program until 14:35:30, see the cast]",
         "14:32:07  $ vim notes",
+        "14:32:10  [full-screen program until 14:35:30, see the cast]",
         "14:35:31  $ ls",
     ]
 
@@ -106,8 +106,8 @@ def test_full_screen_program_gives_one_line_and_none_of_its_content():
 def test_other_alternate_screen_modes(mode):
     events = [(0, "o", "$ less\r\n"), (1, "o", f"\x1b[?{mode}hpage"), (2, "o", f"\x1b[?{mode}l$ ")]
     assert render(events) == [
-        "14:32:08  [full-screen program until 14:32:09, see the cast]",
         "14:32:07  $ less",
+        "14:32:08  [full-screen program until 14:32:09, see the cast]",
         "14:32:09  $",
     ]
 
@@ -115,23 +115,104 @@ def test_other_alternate_screen_modes(mode):
 def test_recording_ending_in_a_full_screen_program():
     events = [(0, "o", "$ top\r\n"), (1, "o", "\x1b[?1049hload 0.1"), (9, "m", "")]
     assert render(events) == [
-        "14:32:08  [full-screen program until 14:32:16, see the cast]",
         "14:32:07  $ top",
+        "14:32:08  [full-screen program until 14:32:16, see the cast]",
     ]
 
 
-def test_scrolled_lines_before_a_full_screen_program_come_first():
+def test_the_screen_above_a_full_screen_program_comes_out_before_it():
     text = "\r\n".join(f"line{n}" for n in range(1, 5)) + "\r\n$ vim"
     events = [(0, "o", text), (1, "o", "\x1b[?1049hx"), (2, "o", "\x1b[?1049l\r\n$ ")]
     assert render(events, rows=3) == [
         "14:32:07  line1",
         "14:32:07  line2",
-        "14:32:08  [full-screen program until 14:32:09, see the cast]",
         "14:32:07  line3",
         "14:32:07  line4",
         "14:32:07  $ vim",
+        "14:32:08  [full-screen program until 14:32:09, see the cast]",
         "14:32:09  $",
     ]
+
+
+def test_an_empty_line_after_a_full_screen_program_is_kept():
+    events = [(0, "o", "$ vim\r\n"), (1, "o", "\x1b[?1049hx\x1b[?1049l"), (2, "o", "\r\n$ ")]
+    assert render(events) == [
+        "14:32:07  $ vim",
+        "14:32:08  [full-screen program until 14:32:08, see the cast]",
+        "",
+        "14:32:09  $",
+    ]
+
+
+def test_a_full_screen_program_across_midnight_gives_one_date_line():
+    late = int(datetime(2026, 11, 14, 23, 59, 50, tzinfo=TZ).timestamp())
+    events = [(8, "o", "$ vim\r\n"), (12, "o", "\x1b[?1049hx"), (30, "o", "\x1b[?1049l$ ls\r\n")]
+    assert render(events, timestamp=late) == [
+        "23:59:58  $ vim",
+        "---- 2026-11-15 ----",
+        "00:00:02  [full-screen program until 00:00:20, see the cast]",
+        "00:00:20  $ ls",
+    ]
+
+
+def test_a_date_line_never_goes_back_to_an_earlier_day():
+    late = int(datetime(2026, 11, 14, 23, 59, 50, tzinfo=TZ).timestamp())
+    # the last row is drawn before midnight, the one above it is redrawn after
+    events = [(0, "o", "one\r\n\r\ntwo"), (20, "o", "\x1b[2;1Hlater")]
+    assert render(events, timestamp=late) == [
+        "23:59:50  one",
+        "---- 2026-11-15 ----",
+        "00:00:10  later",
+        "23:59:50  two",
+    ]
+
+
+def test_a_scroll_region_from_the_top_still_gives_its_lines():
+    # apt keeps a progress bar on the last row and scrolls the rows above it
+    lines = "\r\n".join(f"dpkg{n}" for n in range(10))
+    events = [(0, "o", "\x1b[5;1Hprogress\x1b[1;4r\x1b[1;1H" + lines)]
+    expected = [f"14:32:07  dpkg{n}" for n in range(10)] + ["14:32:07  progress"]
+    assert render(events, rows=5) == expected
+
+
+def test_a_scroll_region_lower_down_drops_what_scrolls_out_of_it():
+    events = [(0, "o", "top\x1b[2;3r\x1b[2;1Ha\r\nb\r\nc\r\nd")]
+    assert render(events, rows=4) == ["14:32:07  top", "14:32:07  c", "14:32:07  d"]
+
+
+def test_a_narrower_window_keeps_the_whole_line():
+    events = [(0, "o", "$ " + "w" * 98 + "\r\n$ "), (1, "r", "40x24"), (2, "o", "ls\r\n")]
+    assert render(events, cols=120) == ["14:32:07  $ " + "w" * 98, "14:32:09  $ ls"]
+
+
+def test_a_narrower_window_during_a_full_screen_program_keeps_the_main_screen():
+    # the cursor is on the first row, so the long row below it stays on the main screen
+    events = [
+        (0, "o", "one\r\n" + "w" * 100 + "\x1b[1;4H"),
+        (1, "o", "\x1b[?1049hx"),
+        (2, "r", "40x24"),
+        (3, "o", "\x1b[?1049l\r\n$ ls"),
+    ]
+    assert render(events, cols=120) == [
+        "14:32:07  one",
+        "14:32:07  " + "w" * 100,
+        "14:32:08  [full-screen program until 14:32:10, see the cast]",
+        "14:32:10  $ ls",
+    ]
+
+
+def test_a_narrower_window_takes_a_wrapped_line_whole():
+    events = [(0, "o", "a" * 50 + "b" * 10 + "\r\n$ "), (1, "r", "40x24"), (2, "o", "ls")]
+    assert render(events, cols=50) == ["14:32:07  " + "a" * 50 + "b" * 10, "14:32:09  $ ls"]
+
+
+def test_zero_width_characters_do_not_cut_the_line():
+    events = [(0, "o", "abc​def ghi\r\n"), (0, "o", "x️yz\r\n"), (0, "o", "a\x01b\r\n")]
+    assert render(events) == ["14:32:07  abcdef ghi", "14:32:07  xyz", "14:32:07  ab"]
+
+
+def test_combining_characters_are_kept():
+    assert render([(0, "o", "café ok\r\n")]) == ["14:32:07  café ok"]
 
 
 def test_a_session_crossing_midnight_gets_the_date_line():
@@ -234,6 +315,22 @@ def test_a_cast_pyte_cannot_render_is_a_cast_error(tmp_path):
         casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
     assert str(path) in str(err.value)
     assert isinstance(err.value.__cause__, AssertionError)
+    assert [p.name for p in path.parent.iterdir()] == ["odd.cast"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[" * 200000 + "\n",
+        cast_text([(0, "o", "a\ud800b"), (1, "o", "c")]),
+    ],
+)
+def test_odd_casts_raise_only_cast_error(tmp_path, text):
+    path = tmp_path / "recordings" / "odd.cast"
+    path.parent.mkdir()
+    path.write_bytes(text.encode("utf-8"))
+    with pytest.raises(CastError):
+        casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
     assert [p.name for p in path.parent.iterdir()] == ["odd.cast"]
 
 

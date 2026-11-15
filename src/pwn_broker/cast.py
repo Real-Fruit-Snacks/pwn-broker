@@ -37,7 +37,7 @@ def read_header(path: Path) -> Header:
         raise CastError(f"{path}: empty file")
     try:
         data = json.loads(first)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         raise CastError(f"{path}: the first line is not JSON") from exc
     if not isinstance(data, dict):
         raise CastError(f"{path}: the first line is not a JSON object")
@@ -60,7 +60,10 @@ def read_header(path: Path) -> Header:
 
 
 def _event(line: bytes) -> tuple[float, str, str]:
-    value = json.loads(line)  # ValueError, UnicodeDecodeError included
+    try:
+        value = json.loads(line)  # ValueError, UnicodeDecodeError included
+    except RecursionError:
+        raise ValueError("nested too deeply") from None
     if not isinstance(value, list) or len(value) != 3:
         raise ValueError("not an [interval, code, data] array")
     interval, code, data = value
@@ -70,6 +73,10 @@ def _event(line: bytes) -> tuple[float, str, str]:
         raise ValueError("the interval is not a time")
     if not isinstance(code, str) or not isinstance(data, str):
         raise ValueError("the code or the data is not text")
+    try:
+        data.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("the data holds a lone surrogate") from None
     return interval, code, data
 
 
