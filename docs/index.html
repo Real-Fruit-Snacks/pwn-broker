@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>pwn-broker: keeps a box's targets, notes, creds and tools in order</title>
+<meta name="description" content="Keeps a box's targets, notes, creds and tools in order">
+<link rel="canonical" href="https://real-fruit-snacks.github.io/pwn-broker/">
+<meta property="og:title" content="pwn-broker">
+<meta property="og:description" content="Keeps a box's targets, notes, creds and tools in order">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://real-fruit-snacks.github.io/pwn-broker/">
+<meta property="og:image" content="https://real-fruit-snacks.github.io/pwn-broker/assets/cover-dark.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="560">
+<meta property="og:image:alt" content="pwn-broker: a terminal session that starts a new box, saves a credential at the forest/dc01 prompt and runs finish.">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="favicon.ico" sizes="32x32">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0C0D10">
+<script>
+    // A saved theme wins over the system setting; the key is shared with the other RFS pages.
+    // js-run hides the terminal's lines until script.js plays them (a CSS failsafe shows them after 6 s).
+    (function (d) {
+        try { var t = localStorage.getItem('rfs-theme'); if (t === 'nightshift' || t === 'dayshift') d.dataset.theme = t; } catch (e) {}
+        if (window.matchMedia && matchMedia('(prefers-reduced-motion: no-preference)').matches) d.classList.add('js-run');
+    })(document.documentElement);
+</script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#install">Skip to the install commands</a>
+
+<header class="top">
+    <div class="wrap">
+        <a class="name" href="./" aria-label="pwn-broker, top of the page">pwn-broker</a>
+        <nav aria-label="Page">
+            <a href="#install">Install</a>
+            <a href="#what">What it does</a>
+            <a href="#note">The note</a>
+            <a href="#tested">Tested on</a>
+            <a href="#issues">Known issues</a>
+            <a href="https://github.com/Real-Fruit-Snacks/pwn-broker">GitHub</a>
+        </nav>
+        <button class="theme" type="button" id="theme"><span class="sr-only">Theme: </span><span class="t-night">Night</span><span class="t-day">Day</span></button>
+    </div>
+</header>
+
+<main>
+<div class="hero">
+    <div class="wrap hero-grid">
+        <div class="hero-text">
+            <h1 class="wordmark">pwn-broker</h1>
+            <p class="lead">Keeps a box's targets, notes, creds and tools in order</p>
+            <p class="sub">I launch it when I start a Hack The Box machine. It asks a few questions, builds the workspace, opens my notes in vim, and stays open as a prompt for the whole session. When the box is done it packs everything into one archive. It is for Kali Linux with a desktop session, and it has not been run on Kali yet: see <a href="#tested">tested on</a>.</p>
+
+            <div class="install" id="install">
+                <p class="install-label">Install, once a release exists</p>
+                <div class="cmd"><code>curl -fsSL https://raw.githubusercontent.com/Real-Fruit-Snacks/pwn-broker/main/install.sh | sh</code><button class="copy" type="button" data-copy="curl -fsSL https://raw.githubusercontent.com/Real-Fruit-Snacks/pwn-broker/main/install.sh | sh">Copy</button></div>
+                <div class="caveat">
+                    <p><b>No release has been published yet, so that line does not work today.</b> From a clone:</p>
+                    <div class="cmd cmd-block"><pre><code>git clone https://github.com/Real-Fruit-Snacks/pwn-broker.git
+cd pwn-broker
+sh install.sh --from .</code></pre><button class="copy" type="button" data-copy="git clone https://github.com/Real-Fruit-Snacks/pwn-broker.git
+cd pwn-broker
+sh install.sh --from .">Copy</button></div>
+                </div>
+                <p class="install-note">Run it as the user who will use pwn-broker, not with <code>sudo</code>; it asks for <code>sudo</code> itself, once, if it has to create <code>/opt/pwn-broker</code>. It builds a virtual environment there and adds <code>/opt/pwn-broker/bin</code> to PATH in <code>~/.zshrc</code>. Nothing goes into the system Python. Run it again to upgrade.</p>
+            </div>
+        </div>
+
+        <figure class="session" aria-labelledby="session-cap">
+            <div class="term">
+                <div class="bar" aria-hidden="true"><i></i><i></i><i></i><span>zsh</span></div>
+<pre class="screen" id="screen" data-type="view" tabindex="0" aria-label="A pwn-broker session"><code><span class="ln"><span class="p">$</span> <span class="t">pwn-broker new</span></span>
+<span class="ln s">ok    6 checks passed</span>
+<span class="ln"><span class="q">box name     &gt; </span>forest</span>
+<span class="ln"><span class="q">platform     [htb] &gt; </span></span>
+<span class="ln"><span class="q">date         [2026-11-14] &gt; </span></span>
+<span class="ln"><span class="q">os           &gt; </span>windows</span>
+<span class="ln"><span class="q">difficulty   &gt; </span>easy</span>
+<span class="ln"><span class="q">add a target? [Y/n] &gt; </span></span>
+<span class="ln"><span class="q">ip           &gt; </span>10.10.10.161</span>
+<span class="ln"><span class="q">hostname     &gt; </span>forest.htb.local</span>
+<span class="ln"><span class="q">scope        [external] &gt; </span></span>
+<span class="ln"><span class="q">name         [forest.htb.local] &gt; </span>dc01</span>
+<span class="ln s">ok    target dc01 created</span>
+<span class="ln"><span class="q">add another? [y/N] &gt; </span></span>
+<span class="ln s">ok    box forest created</span>
+<span class="ln"><span class="p">forest/dc01 &gt;</span> <span class="t">cred add</span></span>
+<span class="ln"><span class="q">username     &gt; </span>svc-alfresco</span>
+<span class="ln"><span class="q">domain       &gt; </span>htb.local</span>
+<span class="ln"><span class="q">secret       &gt; </span>s3rvice</span>
+<span class="ln"><span class="q">kind         [password] &gt; </span></span>
+<span class="ln"><span class="q">found on     [dc01] &gt; </span></span>
+<span class="ln"><span class="q">note         &gt; </span></span>
+<span class="ln s">ok    cred 1 saved, found on dc01</span>
+<span class="ln s">ok    lists updated: 1 username, 1 password, 1 pair</span>
+<span class="ln"><span class="p">forest/dc01 &gt;</span> <span class="t">finish</span></span>
+<span class="ln o">box       forest (htb), started 2026-11-14</span>
+<span class="ln o">targets   1</span>
+<span class="ln o">files     14</span>
+<span class="ln o">archive   /home/kali/pwn-broker/wrapped/2026-11-14_htb_forest.finished.tar.gz</span>
+<span class="ln"><span class="q">finish this box? [y/N] &gt; </span>y</span>
+<span class="ln s">ok    archive /home/kali/pwn-broker/wrapped/2026-11-14_htb_forest.finished.tar.gz</span>
+<span class="ln"><span class="q">remove working folder? [y/N] &gt; </span>y</span>
+<span class="ln s">ok    removed /home/kali/pwn-broker/active/2026-11-14_htb_forest</span>
+<span class="ln end"><span class="p">$</span> <span class="cursor"></span></span></code></pre>
+            </div>
+            <figcaption id="session-cap">
+                <span class="cap-note">One box from start to finish. The lines are the app's own output from a scripted run of its code, with the paths a user called kali would see. The note window opens beside it.</span>
+                <button class="replay" type="button" data-replay="screen" hidden>Replay</button>
+            </figcaption>
+        </figure>
+    </div>
+</div>
+
+<section id="what" class="what" aria-labelledby="what-h">
+    <div class="wrap">
+        <h2 id="what-h">What it does</h2>
+        <div class="blocks">
+            <div class="block">
+                <h3>A folder per box, and per target</h3>
+                <p>A box lives in <code>~/pwn-broker/active/&lt;date&gt;_&lt;platform&gt;_&lt;name&gt;/</code>. Each target gets its own folder with <code>creds/</code>, <code>files/</code>, <code>loot/</code>, <code>scans/</code>, <code>exploits/</code>, <code>screenshots/</code> and <code>recordings/</code>.</p>
+            </div>
+            <div class="block">
+                <h3>A prompt for the whole session</h3>
+                <p>It stays open as <code>forest/dc01 &gt;</code>, with commands for targets, credentials, flags, files and status. <code>help</code> lists them. Only one box is open at a time.</p>
+            </div>
+            <div class="block">
+                <h3>Credentials kept as typed</h3>
+                <p>One credential list for the whole box, in <code>creds.toml</code>, each answer stored exactly as typed. The <code>lists/</code> folder is rebuilt from it, so other tools can read <code>usernames.txt</code>, <code>userpass.txt</code>, <code>hashes.txt</code> or <code>hosts.txt</code> as they are.</p>
+            </div>
+            <div class="block">
+                <h3>The note window</h3>
+                <p>A second terminal runs vim on <code>notes.md</code> with its own vimrc; your <code>~/.vimrc</code> is never read. It saves when you leave the window and reloads when you come back.</p>
+            </div>
+            <div class="block">
+                <h3>Finish, export, import</h3>
+                <p><code>finish</code> archives the box and closes it. <code>export</code> writes a snapshot and keeps working. Both write to <code>~/pwn-broker/wrapped/</code>, and <code>pwn-broker import &lt;file&gt;</code> unpacks one.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section id="note" class="note-sec" aria-labelledby="note-h">
+    <div class="wrap note-grid">
+        <div class="note-text">
+            <h2 id="note-h">The note</h2>
+            <p><code>notes.md</code> starts with a box drawn in <code>#</code> that holds the box details and one row per target. The app redraws it whenever the targets change.</p>
+            <p>Below it, each target has a section wrapped in a vim fold that starts with its <code>Target:</code> line, and the note opens with every fold closed down to that line. <kbd>F8</kbd> adds an empty fold below the cursor.</p>
+            <p>IP addresses are Amber and <code>&lt;Placeholder&gt;</code> text is Ember wherever they appear. The app changes nothing else in the note, apart from a <code>Target:</code> line it wrote when that target is renamed or edited.</p>
+            <p class="aside">Here dc01's fold is open and ws01's is closed. The two lines under enumeration are mine; the app wrote the rest.</p>
+        </div>
+        <figure class="vim" aria-labelledby="vim-cap">
+            <div class="vim-win">
+<pre class="vim-buf" tabindex="0" aria-labelledby="vim-cap"><code><span class="r">################################################################</span>
+<span class="b">#  </span>Box:         forest                                       <span class="b">  #</span>
+<span class="b">#  </span>Platform:    htb                                          <span class="b">  #</span>
+<span class="b">#  </span>Date:        2026-11-14                                   <span class="b">  #</span>
+<span class="b">#  </span>OS:          windows                                      <span class="b">  #</span>
+<span class="b">#  </span>Difficulty:  easy                                         <span class="b">  #</span>
+<span class="b">#</span>                                                              <span class="b">#</span>
+<span class="b">#  </span>Targets:                                                  <span class="b">  #</span>
+<span class="b">#  </span>  dc01   <span class="ip">10.10.10.161</span>   forest.htb.local   external       <span class="b">  #</span>
+<span class="b">#  </span>  ws01   <span class="ip">10.10.10.162</span>   -                  internal       <span class="b">  #</span>
+<span class="r">################################################################</span>
+
+<span class="m">##########@@@@@@@@@@</span>
+<span class="h">Target:</span> dc01   <span class="ip">10.10.10.161</span>   forest.htb.local   external
+
+<span class="h">## enumeration</span>
+nmap -sC -sV -oA scans/dc01 <span class="ip">10.10.10.161</span>
+GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-ip <span class="ip">10.10.10.161</span>
+
+<span class="h">## foothold</span>
+
+<span class="h">## privilege escalation</span>
+
+<span class="m">@@@@@@@@@@##########</span>
+
+<span class="fold">Target: ws01   10.10.10.162   -   internal</span>
+<span class="eob">~</span>
+<span class="eob">~</span></code></pre>
+                <p class="vim-status" aria-hidden="true"><span>notes.md</span><span>18:1</span></p>
+            </div>
+            <figcaption id="vim-cap" class="sr-only">notes.md in vim: the box of details with two targets, dc01's section open under its fold markers, and ws01's section closed to its Target line.</figcaption>
+        </figure>
+    </div>
+</section>
+
+<section id="tested" class="tested" aria-labelledby="tested-h">
+    <div class="wrap">
+        <h2 id="tested-h">Tested on</h2>
+        <div class="tested-grid">
+            <ul class="untested" aria-label="Not tested">
+                <li><b>Not tested: Kali Linux.</b> The app has not been run there.</li>
+                <li><b>Not tested: <code>install.sh</code>.</b> It passes <code>sh -n</code>, its help and option handling are tested, and so is how it treats an existing <code>app/</code> folder (with a stand-in for <code>python3</code>), but it has not been run end to end.</li>
+                <li><b>Not tested: the note window and the prompt on a real terminal.</b></li>
+            </ul>
+            <ul aria-label="Tested">
+                <li><b>The unit tests, on Windows 11 with Python 3.13:</b> 770 passed, 15 skipped. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer).</li>
+                <li><b>The vimrc, run by Vim 9.2 in headless mode on a note the app wrote:</b> folds, fold text, <kbd>F8</kbd>, colours, settings, and the reload after the app changes the note. Timers and focus events do not fire in that mode, so the tests run the check by hand.</li>
+            </ul>
+        </div>
+    </div>
+</section>
+
+<section id="issues" class="issues" aria-labelledby="issues-h">
+    <div class="wrap">
+        <h2 id="issues-h">Known issues</h2>
+        <ul>
+            <li>Recording and tool install are not in this release. They are later phases in <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/design.md">the design</a>.</li>
+            <li>No release has been published, so the <code>curl</code> install line does not work yet. Install from a clone.</li>
+            <li><code>cred list</code> marks a secret it cannot show exactly (a tab, another control character, or a space at either end) with <code>*</code> after the number. <code>cred show</code> prints it unchanged.</li>
+            <li>Links and special files (named pipes, sockets, devices) in a box are not archived. <code>export</code> and <code>finish</code> list them, and <code>finish</code> says how many will go when the folder is removed.</li>
+        </ul>
+    </div>
+</section>
+</main>
+
+<footer>
+    <div class="wrap">
+        <p>MIT. Not affiliated with Hack The Box.</p>
+        <p><a href="https://github.com/Real-Fruit-Snacks/pwn-broker">Source</a> · <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/SECURITY.md">Security</a> · <a href="https://real-fruit-snacks.github.io/">RFS</a></p>
+    </div>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
