@@ -73,13 +73,19 @@ def python_manifest(**extra):
 class FakeRun:
     def __init__(self, version="3.13", fail_at=None, output="line\n" * 12):
         self.calls = []
+        self.kwargs = []
         self.version = version
         self.fail_at = fail_at
         self.output = output
 
     def __call__(self, argv, **kwargs):
-        assert kwargs == {"capture_output": True, "text": True}
+        # the version check runs as it always has; venv and pip get a folder and an environment
+        if argv[1] == "-c":
+            assert kwargs == {"capture_output": True, "text": True}
+        else:
+            assert set(kwargs) == {"capture_output", "text", "cwd", "env"}
         self.calls.append(list(argv))
+        self.kwargs.append(kwargs)
         index = len(self.calls) - 1
         if argv[1] == "-c":
             return SimpleNamespace(returncode=0, stdout=self.version + "\n", stderr="")
@@ -568,9 +574,9 @@ def test_python_tool_runs_venv_and_pip(paths, box, tmp_path):
     venv_python = str(folder / "venv" / "bin" / "python")
     assert fake.calls == [
         ["py3", "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
-        ["py3", "-m", "venv", str(folder / "venv")],
+        ["py3", "-I", "-m", "venv", str(folder / "venv")],
         [
-            venv_python, "-m", "pip", "install", "--no-index",
+            venv_python, "-I", "-m", "pip", "--isolated", "install", "--no-index",
             "--find-links", str(folder / "wheels"),
             "--only-binary", ":all:", "--require-hashes",
             "--disable-pip-version-check", "--no-input",
@@ -578,6 +584,37 @@ def test_python_tool_runs_venv_and_pip(paths, box, tmp_path):
         ],
     ]  # fmt: skip
     assert "venv/bin/kerbrute" in (paths.bin / "kerbrute").read_text(encoding="utf-8")
+
+
+PY_VERSION = "import sys; print('%d.%d' % sys.version_info[:2])"
+SHADOWS = ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PIP_TARGET", "PIP_PREFIX", "PIP_INDEX_URL")
+
+
+@pytest.mark.parametrize("schema", [1, 2])
+def test_venv_and_pip_run_in_the_tool_folder_with_none_of_the_callers_settings(
+    paths, box, tmp_path, monkeypatch, schema
+):
+    # a venv.py or pip/ in the caller's folder, or these variables, would change what runs
+    for name in SHADOWS:
+        monkeypatch.setenv(name, (tmp_path / "elsewhere").as_posix())
+    monkeypatch.setenv("PIP_CONFIG_FILE", (tmp_path / "pip.conf").as_posix())
+    kw = {}
+    if schema == 1:
+        zip_path, entry = python_zip(tmp_path)
+    else:
+        kw["runtime"], _c, kw["installed"] = rt_install(paths, tmp_path)
+        zip_path, entry = runtime_tool(tmp_path)
+    fake = FakeRun()
+    do_install(paths, box, entry, zip_path, tmp_path, run=fake, **kw)
+    folder = paths.tools / "kerbrute" / "1.0.3-1"
+    made = [(call, kwargs) for call, kwargs in zip(fake.calls, fake.kwargs) if call[1] != "-c"]
+    assert [call[2:4] for call, _kw in made] == [["-m", "venv"], ["-m", "pip"]]
+    for _call, kwargs in made:
+        assert kwargs["cwd"] == str(folder)
+        env = kwargs["env"]
+        assert not set(SHADOWS) & set(env)
+        assert env["PIP_CONFIG_FILE"] == os.devnull
+        assert env["PATH"] == os.environ["PATH"]  # everything else is passed on
 
 
 def python_zip(tmp_path):
@@ -1319,6 +1356,74 @@ def test_a_runtime_that_cannot_be_removed_keeps_its_row(paths, tmp_path, monkeyp
     assert list(installed) == list(load_installed(paths)) == ["python-3.13"]
 
 
+def test_forget_runtime_keeps_a_runtime_another_tool_requires(paths, box, tmp_path):
+    rt, _c, installed = rt_install(paths, tmp_path)
+    zip_path, entry = runtime_tool(tmp_path)
+    do_install(paths, box, entry, zip_path, tmp_path, installed=installed, runtime=rt)
+    # its row goes stale, so the next install brings it afresh and looks like this command's own
+    Path(rt.python).unlink()
+    again_zip, again = toolkit.make_runtime(tmp_path / "again", build=2)
+    fresh, _c, _i = rt_install(paths, tmp_path, again_zip, again, installed=installed)
+    assert fresh is not rt
+    assert forget_runtime(paths, installed, "python-3.13") is False
+    assert installed["python-3.13"] is fresh and load_installed(paths)["python-3.13"] == fresh
+    assert Path(fresh.python).is_file()
+
+
+def test_forget_runtime_says_whether_it_removed_the_runtime(paths, tmp_path):
+    _item, _c, installed = rt_install(paths, tmp_path)
+    assert forget_runtime(paths, installed, "python-3.13") is True
+    assert forget_runtime(paths, installed, "python-3.13") is False
+
+
+def test_a_recorded_interpreter_outside_the_unpacked_archive_is_not_used(paths, tmp_path):
+    first, _c, installed = rt_install(paths, tmp_path)
+    # inside the runtime's folder, but not part of the archive
+    first.python = (rt_folder(paths) / "LICENSE").resolve().as_posix()
+    zip_path, entry = toolkit.make_runtime(tmp_path / "again", build=2)
+    item, console, _i = rt_install(paths, tmp_path, zip_path, entry, installed=installed)
+    assert item is not first and item.build == 2
+    assert Path(item.python).read_bytes() == toolkit.stand_in_python()
+    assert console.lines == [("ok", "python-3.13 3.13.18 installed (runtime, 1 MB)")]
+
+
+STRANGER = b"#!/bin/sh\necho not the runtime\n"
+
+
+@pytest.mark.parametrize("where", ["a folder elsewhere", "an interpreter elsewhere"])
+def test_a_hand_edited_row_cannot_make_an_install_run_another_program(paths, tmp_path, where):
+    first, _c, installed = rt_install(paths, tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "root").mkdir(parents=True)
+    program = elsewhere / "root" / "python3.13"
+    program.write_bytes(STRANGER)
+    if where == "a folder elsewhere":
+        first.folder = elsewhere.resolve().as_posix()
+    first.python = program.resolve().as_posix()
+    zip_path, entry = toolkit.make_runtime(tmp_path / "again", build=2)
+    item, _c, _i = rt_install(paths, tmp_path, zip_path, entry, installed=installed)
+    assert item is not first and item.python.startswith(paths.tools.resolve().as_posix())
+    assert program.read_bytes() == STRANGER  # nothing outside the root is touched
+
+
+def test_a_stale_row_that_cannot_be_saved_away_is_reported_and_kept(paths, tmp_path, monkeypatch):
+    from pwn_broker import toolinstall
+
+    first, _c, installed = rt_install(paths, tmp_path)
+    shutil.rmtree(rt_folder(paths))
+
+    def full(_paths, _installed):
+        raise OSError("no space left")
+
+    monkeypatch.setattr(toolinstall, "save_installed", full)
+    zip_path, entry = toolkit.make_runtime(tmp_path / "again", build=2)
+    with pytest.raises(ToolError, match="the installed list could not be saved"):
+        rt_install(paths, tmp_path, zip_path, entry, installed=installed)
+    # the file still lists the runtime, and so does the list in memory
+    assert installed == {"python-3.13": first} and load_installed(paths) == installed
+    assert not rt_folder(paths, 2).exists()
+
+
 def test_stray_files_counts_a_recorded_runtime_as_recorded(paths, tmp_path):
     _item, _c, installed = rt_install(paths, tmp_path)
     assert stray_files(paths, installed) == []
@@ -1347,9 +1452,9 @@ def test_a_tool_on_a_runtime_makes_its_environment_with_the_runtimes_python(path
     venv = folder / "venv"
     # no version check: the wheels are built for the runtime's series
     assert fake.calls == [
-        [rt.python, "-m", "venv", str(venv)],
+        [rt.python, "-I", "-m", "venv", str(venv)],
         [
-            str(venv / "bin" / "python"), "-m", "pip", "install", "--no-index",
+            str(venv / "bin" / "python"), "-I", "-m", "pip", "--isolated", "install", "--no-index",
             "--find-links", str(folder / "wheels"),
             "--only-binary", ":all:", "--require-hashes",
             "--disable-pip-version-check", "--no-input",
@@ -1416,7 +1521,7 @@ def test_a_schema_1_python_tool_still_uses_kalis_python(paths, box, tmp_path):
     zip_path, entry = python_zip(tmp_path)
     fake = FakeRun()
     item, _c, _i = do_install(paths, box, entry, zip_path, tmp_path, run=fake)
-    assert [call[:2] for call in fake.calls[:2]] == [["python3", "-c"], ["python3", "-m"]]
+    assert [call[:3] for call in fake.calls[:2]] == [["python3", "-c", PY_VERSION], ["python3", "-I", "-m"]]
     assert item.requires == [] and box.tools[0].runtime is None
     assert "requires" not in paths.tools_state.read_text(encoding="utf-8")
 

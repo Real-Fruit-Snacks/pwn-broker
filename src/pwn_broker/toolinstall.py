@@ -26,7 +26,7 @@ from pwn_broker.toolpkg import (
     valid_tool_name,
     verify_zip,
 )
-from pwn_broker.toolstate import Installed, save_installed
+from pwn_broker.toolstate import Installed, needed_runtimes, save_installed
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _MARK = "# pwn-broker tool: "
@@ -137,9 +137,21 @@ def _tail(result) -> str:
     return "\n".join(text.strip().splitlines()[-10:])
 
 
-def _run_checked(run, argv: list[str], what: str) -> None:
+def _clean_environment() -> dict[str, str]:
+    # a PYTHONPATH or PIP_TARGET of the caller's would change what runs or where pip writes
+    env = {
+        k: v for k, v in os.environ.items() if not k.upper().startswith(("PYTHON", "PIP_"))
+    }
+    env["PIP_CONFIG_FILE"] = os.devnull  # no user or system pip configuration is read
+    return env
+
+
+def _run_checked(run, argv: list[str], what: str, folder: Path) -> None:
+    # run from the tool's own folder: the caller's folder could hold a venv.py or a pip/
     try:
-        result = run(argv, capture_output=True, text=True)
+        result = run(
+            argv, capture_output=True, text=True, cwd=str(folder), env=_clean_environment()
+        )
     except OSError as exc:
         raise ToolError(f"{what} could not run: {exc}") from exc
     if result.returncode != 0:
@@ -425,7 +437,9 @@ def _build_venv(
                 f"this machine has {found}"
             )
     venv = folder / "venv"
-    _run_checked(run, [python, "-m", "venv", str(venv)], "creating the virtual environment")
+    _run_checked(
+        run, [python, "-I", "-m", "venv", str(venv)], "creating the virtual environment", folder
+    )
     lock = folder / Path(*spec.lock.split("/"))
     try:
         with open(lock, "rb") as fh:
@@ -434,13 +448,13 @@ def _build_venv(
         raise ToolError(f"cannot read {spec.lock}: {exc}") from exc
     check_lock(raw, spec.lock)  # checked again here: this is the file pip is about to read
     pip = [
-        str(venv / "bin" / "python"), "-m", "pip", "install",
+        str(venv / "bin" / "python"), "-I", "-m", "pip", "--isolated", "install",
         "--no-index", "--find-links", str(folder / Path(*spec.wheels.split("/"))),
         "--only-binary", ":all:", "--require-hashes",
         "--disable-pip-version-check", "--no-input",
         "-r", str(lock),
     ]  # fmt: skip
-    _run_checked(run, pip, "pip")
+    _run_checked(run, pip, "pip", folder)
 
 
 def _write_launchers(
@@ -494,26 +508,44 @@ def megabytes(size: int) -> int:
     return max(1, round(size / (1024 * 1024)))
 
 
-def _check_interpreter(python: Path, folder: Path, shown: str) -> None:
-    # links inside the runtime are followed; where they end must still be inside it
+def _check_interpreter(python: Path, root: Path, shown: str) -> None:
+    # links inside the unpacked archive are followed; where they end must still be inside it
     try:
         real = python.resolve(strict=True)
     except (OSError, RuntimeError) as exc:
         raise ToolError(f"the runtime's interpreter {shown} is missing") from exc
-    if not _inside(real, folder):
+    if not _inside(real, root):
         raise ToolError(f"the runtime's interpreter {shown} leads outside the runtime's folder")
     if not real.is_file():
         raise ToolError(f"the runtime's interpreter {shown} is not a regular file")
 
 
-def _intact(item: Installed) -> bool:
-    if not item.python or not Path(item.folder).is_dir():
+def _intact(paths: AppPaths, item: Installed) -> bool:
+    folder = Path(item.folder)
+    # the row is only believed where it points into the runtime's own place: a hand-edited
+    # list must not make an install run another program
+    home = paths.tools.resolve() / item.name
+    if not item.python or not _inside(folder, home, resolve_root=False) or not folder.is_dir():
         return False
     try:
-        _check_interpreter(Path(item.python), Path(item.folder), item.python)
+        _check_interpreter(Path(item.python), folder / _RUNTIME_ROOT, item.python)
     except ToolError:
         return False
     return True
+
+
+def _drop_row(paths: AppPaths, installed: dict[str, Installed], name: str) -> None:
+    # the list in memory must say what the file says, whether or not the save succeeds
+    before = dict(installed)
+    del installed[name]
+    try:
+        save_installed(paths, installed)
+    except OSError as exc:
+        installed.clear()
+        installed.update(before)
+        raise ToolError(
+            f"the installed list could not be saved; check {paths.tools_state}"
+        ) from exc
 
 
 def install_runtime(
@@ -538,7 +570,7 @@ def install_runtime(
     if current is not None:
         if current.kind != "runtime":
             raise ToolError(f"{name} is installed as a tool, not a runtime")
-        if _intact(current):
+        if _intact(paths, current):
             return current
         # its files are gone or damaged: whatever is left under its name goes with the row
         leftover = paths.tools / name
@@ -548,8 +580,7 @@ def install_runtime(
                 _delete_tree(leftover)
         except OSError as exc:
             raise ToolError(f"cannot remove {leftover}: {exc}") from exc
-        del installed[name]
-        save_installed(paths, installed)
+        _drop_row(paths, installed, name)
 
     folder = paths.tools / name / build_id(entry.version, entry.build)
     _check_inside(folder, paths.tools, "the runtime folder")
@@ -575,7 +606,7 @@ def install_runtime(
         runtimearchive.unpack(archive, root)
         here = folder.resolve()
         python = here / _RUNTIME_ROOT / Path(*manifest.runtime.python.split("/"))
-        _check_interpreter(python, here, manifest.runtime.python)
+        _check_interpreter(python, here / _RUNTIME_ROOT, manifest.runtime.python)
         # unpacked, the archive is only a second copy; the zip stays in the download cache
         archive.unlink()
         item = Installed(
@@ -629,14 +660,18 @@ def remove_runtime(paths: AppPaths, item: Installed) -> None:
         pass
 
 
-def forget_runtime(paths: AppPaths, installed: dict[str, Installed], name: str) -> None:
-    """Removes a runtime and its row. If its files cannot be removed the row stays."""
+def forget_runtime(paths: AppPaths, installed: dict[str, Installed], name: str) -> bool:
+    """Removes a runtime and its row; returns whether it did.
+
+    A runtime an installed tool requires is kept, files and row. If its files cannot be removed
+    the row stays.
+    """
     item = installed.get(name)
-    if item is None:
-        return
+    if item is None or name in needed_runtimes(installed):
+        return False
     remove_runtime(paths, item)
-    del installed[name]
-    save_installed(paths, installed)
+    _drop_row(paths, installed, name)
+    return True
 
 
 # ---- remove

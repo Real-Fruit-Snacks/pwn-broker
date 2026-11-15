@@ -142,6 +142,9 @@ def _build(tool: str, row: object, label: str, schema: int) -> BuildEntry:
     if kind == "runtime" and schema == 1:
         raise ToolError(f"{label}.kind: runtime needs a schema 2 index")
     requires = _requires(tool, row, kind, schema, label)
+    commands = _strings(row, "commands", f"{label}.commands")
+    if commands and kind == "runtime":
+        raise ToolError(f"{label}.commands: a runtime has no commands")
     needs_root = row.get("needs_root", False)
     if not isinstance(needs_root, bool):
         raise ToolError(f"{label}.needs_root: must be true or false")
@@ -157,7 +160,7 @@ def _build(tool: str, row: object, label: str, schema: int) -> BuildEntry:
         build=number,
         kind=kind,
         needs_root=needs_root,
-        commands=_strings(row, "commands", f"{label}.commands"),
+        commands=commands,
         file=_plain_zip_name(row.get("file"), f"{label}.file"),
         url=_optional_text(row, "url", f"{label}.url"),
         size=size,
@@ -464,7 +467,9 @@ def find_tool(index: Index, name: str) -> ToolEntry:
     for tool in index.tools:
         if tool.name == name:
             return tool
-    close = difflib.get_close_matches(name, [t.name for t in index.tools], n=1)
+    # a runtime is installed with the tools that need it, so it is never suggested
+    names = [t.name for t in index.tools if not is_runtime(t)]
+    close = difflib.get_close_matches(name, names, n=1)
     hint = f"; did you mean {close[0]}" if close else ""
     raise ToolError(f"no tool named {name!r} in the index{hint}")
 

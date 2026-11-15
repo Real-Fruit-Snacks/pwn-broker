@@ -1162,3 +1162,19 @@ def test_folder_index_written_by_the_toolkit_is_schema_2_only_when_needed(paths,
     assert [t.name for t in index.tools] == ["kerbrute", "python-3.13", "certipy"]
     assert toolindex.find_runtime(index, "python-3.13").builds[0].file == runtime.file
     assert toolindex.find_tool(index, "certipy").builds[0].requires == ["python-3.13"]
+
+
+def test_index_runtime_has_no_commands():
+    tool = runtime_tool(builds=[runtime_build(commands=["python3"])])
+    with pytest.raises(ToolError) as err:
+        toolindex.parse_index(schema2(tool))
+    assert "tool python-3.13.build[0].commands: a runtime has no commands" in str(err.value)
+
+
+def test_find_tool_never_suggests_a_runtime():
+    index = runtimes_index()
+    with pytest.raises(ToolError) as err:
+        toolindex.find_tool(index, "python-3.1")
+    assert "did you mean" not in str(err.value)
+    with pytest.raises(ToolError, match="did you mean certipy"):
+        toolindex.find_tool(index, "certipi")
