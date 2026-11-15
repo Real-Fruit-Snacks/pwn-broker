@@ -1,4 +1,8 @@
 import hashlib
+import http.server
+import os
+import threading
+import time
 from dataclasses import replace
 from datetime import timedelta
 
@@ -11,6 +15,10 @@ from pwn_broker.config import DEFAULT_TOOLS_INDEX, Settings
 from pwn_broker.toolpkg import ToolError
 
 HASH = "a" * 64
+
+
+def stamp_of(paths):
+    return (paths.cache / "index.fetched").read_text(encoding="utf-8").splitlines()[0]
 
 
 def build_row(version="1.0.3", build=1, **over):
@@ -62,6 +70,19 @@ class Fetcher:
         if self.fail:
             raise OSError("offline")
         return self.payload
+
+
+class Downloader:
+    def __init__(self, payload=b"", fail=False):
+        self.payload = payload
+        self.fail = fail
+        self.calls = []
+
+    def __call__(self, url, path, limit, timeout):
+        self.calls.append((url, path.name, limit, timeout))
+        if self.fail:
+            raise OSError("offline")
+        path.write_bytes(self.payload)
 
 
 URL = "https://example.invalid/index.toml"
@@ -242,7 +263,7 @@ def test_url_first_fetch_writes_cache(paths):
     assert index.tools[0].name == "kerbrute"
     assert fetch.calls == [(URL, 2)]
     assert (paths.cache / "index.toml").read_text(encoding="utf-8") == index_text()
-    stamp = (paths.cache / "index.fetched").read_text(encoding="utf-8").strip()
+    stamp = stamp_of(paths)
     assert stamp == NOW.isoformat()
 
 
@@ -263,7 +284,7 @@ def test_url_stale_cache_is_refreshed(paths):
     index = toolindex.load_index(paths, url_settings(), now=later, fetch=fetch)
     assert index.tools[0].name == "fresh"
     assert fetch.calls == [(URL, 2)]
-    assert (paths.cache / "index.fetched").read_text(encoding="utf-8").strip() == later.isoformat()
+    assert stamp_of(paths) == later.isoformat()
 
 
 def test_url_force_fetches_with_longer_timeout(paths):
@@ -308,7 +329,7 @@ def test_bad_download_never_replaces_good_cache(paths):
     index = toolindex.load_index(paths, url_settings(), now=later, fetch=Fetcher(b"garbage = ["))
     assert index.tools[0].name == "kerbrute"
     assert (paths.cache / "index.toml").read_text(encoding="utf-8") == index_text()
-    assert (paths.cache / "index.fetched").read_text(encoding="utf-8").strip() == NOW.isoformat()
+    assert stamp_of(paths) == NOW.isoformat()
 
 
 def test_bad_download_wrong_schema_is_refused_without_cache(paths):
@@ -339,14 +360,106 @@ def test_missing_or_unreadable_stamp_is_stale(paths, stamp):
 def test_cached_index_that_no_longer_parses_is_absent(paths):
     paths.cache.mkdir(parents=True)
     (paths.cache / "index.toml").write_text("broken = [", encoding="utf-8")
-    (paths.cache / "index.fetched").write_text(NOW.isoformat(), encoding="utf-8")
+    (paths.cache / "index.fetched").write_text(NOW.isoformat() + "\n" + URL, encoding="utf-8")
     fetch = Fetcher(index_text().encode())
     index = toolindex.load_index(paths, url_settings(), now=NOW, fetch=fetch)
     assert index.tools[0].name == "kerbrute"
     assert len(fetch.calls) == 1
+
+
+def test_unparsable_cache_and_failed_fetch_raises(paths):
+    paths.cache.mkdir(parents=True)
+    (paths.cache / "index.toml").write_text("broken = [", encoding="utf-8")
+    (paths.cache / "index.fetched").write_text(NOW.isoformat() + "\n" + URL, encoding="utf-8")
+    with pytest.raises(ToolError, match="tools_index"):
+        toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(fail=True))
+
+
+def test_forced_bad_download_raises_and_keeps_old_cache(paths):
+    toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode()))
+    later = NOW + timedelta(days=3)
     with pytest.raises(ToolError):
-        (paths.cache / "index.toml").write_text("broken = [", encoding="utf-8")
-        toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(fail=True), force=False)
+        toolindex.load_index(
+            paths, url_settings(), now=later, fetch=Fetcher(b"garbage = ["), force=True
+        )
+    assert (paths.cache / "index.toml").read_text(encoding="utf-8") == index_text()
+    assert stamp_of(paths) == NOW.isoformat()
+
+
+def test_cache_from_another_location_is_absent(paths):
+    toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode()))
+    other = Settings(tools_index="https://other.invalid/index.toml")
+    with pytest.raises(ToolError):
+        toolindex.load_index(paths, other, now=NOW, fetch=Fetcher(fail=True))
+    fetch = Fetcher(index_text(tool_row(name="elsewhere")).encode())
+    index = toolindex.load_index(paths, other, now=NOW, fetch=fetch)
+    assert index.tools[0].name == "elsewhere"
+    assert len(fetch.calls) == 1
+
+
+def test_future_stamp_is_stale(paths):
+    toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode()))
+    fetch = Fetcher(index_text(tool_row(name="again")).encode())
+    earlier = NOW - timedelta(hours=1)
+    index = toolindex.load_index(paths, url_settings(), now=earlier, fetch=fetch)
+    assert index.tools[0].name == "again"
+
+
+def test_unwritable_cache_still_returns_the_fetched_index(paths):
+    # a file where the cache folder should be makes every cache write fail
+    paths.opt.mkdir(parents=True)
+    paths.cache.write_text("in the way", encoding="utf-8")
+    index = toolindex.load_index(
+        paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode())
+    )
+    assert index.tools[0].name == "kerbrute"
+
+
+def test_stamp_is_written_only_after_the_index(paths, monkeypatch):
+    written = []
+
+    def fake_write(path, text, **kw):
+        written.append(path.name)
+        if path.name == "index.toml":
+            raise OSError("full")
+
+    monkeypatch.setattr(toolindex, "write_text", fake_write)
+    toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode()))
+    assert written == ["index.toml"]
+
+
+def test_slow_fetch_is_abandoned_at_the_deadline(paths, monkeypatch):
+    monkeypatch.setattr(toolindex, "QUICK_TIMEOUT", 0.05)
+
+    def slow(url, timeout):
+        time.sleep(1)
+        return index_text().encode()
+
+    start = time.monotonic()
+    with pytest.raises(ToolError):
+        toolindex.load_index(paths, url_settings(), now=NOW, fetch=slow)
+    assert time.monotonic() - start < 0.8
+    assert not (paths.cache / "index.toml").exists()
+
+
+def test_slow_fetch_with_cache_uses_the_cache(paths, monkeypatch):
+    toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode()))
+    monkeypatch.setattr(toolindex, "QUICK_TIMEOUT", 0.05)
+
+    def slow(url, timeout):
+        time.sleep(1)
+        return b""
+
+    start = time.monotonic()
+    index = toolindex.load_index(paths, url_settings(), now=NOW + timedelta(days=2), fetch=slow)
+    assert index.tools[0].name == "kerbrute"
+    assert time.monotonic() - start < 0.8
+
+
+def test_oversized_index_is_a_failed_fetch(paths, monkeypatch):
+    monkeypatch.setattr(toolindex, "MAX_INDEX_BYTES", 10)
+    with pytest.raises(ToolError):
+        toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode()))
 
 
 # ---- find, pick, search
@@ -437,17 +550,17 @@ def test_fetch_zip_cache_hit(paths, tmp_path):
     entry = make_zip_entry(tmp_path)
     paths.cache.mkdir(parents=True)
     (paths.cache / entry.file).write_bytes(b"zip bytes")
-    fetch = Fetcher(fail=True)
-    got = toolindex.fetch_zip(paths, url_settings(), entry, fetch=fetch)
+    download = Downloader(fail=True)
+    got = toolindex.fetch_zip(paths, url_settings(), entry, download=download)
     assert got == paths.cache / entry.file
-    assert fetch.calls == []
+    assert download.calls == []
 
 
 def test_fetch_zip_bad_cached_copy_is_replaced(paths, tmp_path):
     entry = make_zip_entry(tmp_path)
     paths.cache.mkdir(parents=True)
     (paths.cache / entry.file).write_bytes(b"tampered!")
-    got = toolindex.fetch_zip(paths, url_settings(), entry, fetch=Fetcher(b"zip bytes"))
+    got = toolindex.fetch_zip(paths, url_settings(), entry, download=Downloader(b"zip bytes"))
     assert got.read_bytes() == b"zip bytes"
 
 
@@ -471,48 +584,48 @@ def test_fetch_zip_folder_missing_file(paths, tmp_path):
 
 def test_fetch_zip_downloads(paths, tmp_path):
     entry = make_zip_entry(tmp_path)
-    fetch = Fetcher(b"zip bytes")
-    got = toolindex.fetch_zip(paths, url_settings(), entry, fetch=fetch)
+    download = Downloader(b"zip bytes")
+    got = toolindex.fetch_zip(paths, url_settings(), entry, download=download)
     assert got == paths.cache / entry.file
     assert got.read_bytes() == b"zip bytes"
-    assert fetch.calls == [(entry.url, 300)]
+    assert download.calls == [(entry.url, entry.file + ".part", entry.size, 300.0)]
     assert list(paths.cache.glob("*.part")) == []
 
 
 def test_fetch_zip_wrong_hash_deletes_and_raises(paths, tmp_path):
     entry = make_zip_entry(tmp_path)
     with pytest.raises(ToolError, match="SHA-256"):
-        toolindex.fetch_zip(paths, url_settings(), entry, fetch=Fetcher(b"zip BYTES"))
+        toolindex.fetch_zip(paths, url_settings(), entry, download=Downloader(b"zip BYTES"))
     assert list(paths.cache.iterdir()) == []
 
 
 def test_fetch_zip_wrong_size_deletes_and_raises(paths, tmp_path):
     entry = make_zip_entry(tmp_path)
     with pytest.raises(ToolError, match="size"):
-        toolindex.fetch_zip(paths, url_settings(), entry, fetch=Fetcher(b"zip bytes plus"))
+        toolindex.fetch_zip(paths, url_settings(), entry, download=Downloader(b"zip bytes plus"))
     assert list(paths.cache.iterdir()) == []
 
 
 def test_fetch_zip_failed_download(paths, tmp_path):
     entry = make_zip_entry(tmp_path)
     with pytest.raises(ToolError, match="offline"):
-        toolindex.fetch_zip(paths, url_settings(), entry, fetch=Fetcher(fail=True))
+        toolindex.fetch_zip(paths, url_settings(), entry, download=Downloader(fail=True))
     assert list(paths.cache.iterdir()) == []
 
 
 def test_fetch_zip_url_location_needs_a_url(paths, tmp_path):
     entry = make_zip_entry(tmp_path, url="")
     with pytest.raises(ToolError, match="no download address"):
-        toolindex.fetch_zip(paths, url_settings(), entry, fetch=Fetcher(b"zip bytes"))
+        toolindex.fetch_zip(paths, url_settings(), entry, download=Downloader(b"zip bytes"))
 
 
 @pytest.mark.parametrize("file", ["../evil.zip", "a/b.zip", "a\\b.zip", "x.tar", "", ".."])
 def test_fetch_zip_rechecks_file_name(paths, tmp_path, file):
     entry = replace(make_zip_entry(tmp_path), file=file)
-    fetch = Fetcher(b"zip bytes")
+    download = Downloader(b"zip bytes")
     with pytest.raises(ToolError):
-        toolindex.fetch_zip(paths, url_settings(), entry, fetch=fetch)
-    assert fetch.calls == []
+        toolindex.fetch_zip(paths, url_settings(), entry, download=download)
+    assert download.calls == []
     assert not (tmp_path / "evil.zip").exists()
     assert not (paths.opt / "evil.zip").exists()
 
@@ -534,3 +647,90 @@ def test_clear_cache_removes_zips_and_parts_only(paths):
 
 def test_clear_cache_without_a_cache_folder(paths):
     assert toolindex.clear_cache(paths) == 0
+
+
+# ---- untrusted download addresses
+
+
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://x/y.zip", "/dev/zero", "//x/y"])
+def test_fetch_zip_refuses_non_http_urls(paths, tmp_path, url):
+    entry = make_zip_entry(tmp_path, url=url)
+    download = Downloader(b"zip bytes")
+    with pytest.raises(ToolError, match="http"):
+        toolindex.fetch_zip(paths, url_settings(), entry, download=download)
+    assert download.calls == []
+
+
+def test_fetch_zip_folder_entry_must_be_a_regular_file(paths, tmp_path):
+    folder = tmp_path / "idx"
+    (folder / "kerbrute-1.0.3-1.zip").mkdir(parents=True)
+    entry = make_zip_entry(tmp_path)
+    with pytest.raises(ToolError, match="regular file"):
+        toolindex.fetch_zip(paths, Settings(tools_index=str(folder)), entry)
+    assert list(paths.cache.glob("*")) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="needs symlinks")
+def test_fetch_zip_folder_entry_may_not_be_a_link(paths, tmp_path):
+    folder = tmp_path / "idx"
+    folder.mkdir()
+    real = tmp_path / "real"
+    real.write_bytes(b"zip bytes")
+    entry = make_zip_entry(tmp_path)
+    (folder / entry.file).symlink_to(real)
+    with pytest.raises(ToolError, match="regular file"):
+        toolindex.fetch_zip(paths, Settings(tools_index=str(folder)), entry)
+
+
+class _Serve:
+    def __init__(self, body):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                try:
+                    self.wfile.write(body)
+                except OSError:
+                    pass
+
+            def log_message(self, *args):
+                pass
+
+        try:
+            self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        except OSError:
+            pytest.skip("cannot start a local server")
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        return f"http://127.0.0.1:{self.server.server_address[1]}/f"
+
+    def __exit__(self, *exc):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def test_default_download_stops_at_the_limit(tmp_path):
+    target = tmp_path / "x.part"
+    with _Serve(b"x" * 500_000) as url:
+        with pytest.raises(ToolError, match="more than"):
+            toolindex._download(url, target, 1000, 5.0)
+    assert target.stat().st_size <= 1000
+
+
+def test_default_download_writes_a_body_within_the_limit(tmp_path):
+    target = tmp_path / "x.part"
+    with _Serve(b"hello") as url:
+        toolindex._download(url, target, 1000, 5.0)
+    assert target.read_bytes() == b"hello"
+
+
+def test_default_index_fetch_is_bounded(monkeypatch):
+    monkeypatch.setattr(toolindex, "MAX_INDEX_BYTES", 100)
+    with _Serve(b"x" * 500_000) as url:
+        with pytest.raises(ToolError, match="more than"):
+            toolindex._fetch_index(url, 5.0)
+    with _Serve(b"small") as url:
+        assert toolindex._fetch_index(url, 5.0) == b"small"

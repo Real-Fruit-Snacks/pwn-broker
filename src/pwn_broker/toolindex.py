@@ -2,14 +2,17 @@ import difflib
 import os
 import re
 import shutil
+import stat
+import threading
+import time
 import tomllib
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from pwn_broker import config
-from pwn_broker.checks import _fetch
 from pwn_broker.config import Settings
 from pwn_broker.paths import AppPaths
 from pwn_broker.store import write_text
@@ -20,7 +23,9 @@ STAMP_FILE = "index.fetched"
 MAX_AGE = timedelta(days=1)
 QUICK_TIMEOUT = 2
 FORCED_TIMEOUT = 30
-ZIP_TIMEOUT = 300
+ZIP_TIMEOUT = 300.0
+MAX_INDEX_BYTES = 5 * 1024 * 1024
+_CHUNK = 64 * 1024
 
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 _SHA256 = re.compile(r"[0-9a-fA-F]{64}")
@@ -184,6 +189,59 @@ def _parse_bytes(raw: bytes) -> Index:
         raise ToolError(f"the index cannot be read ({exc})") from exc
 
 
+# ---- network
+
+
+def _open(url: str, timeout: float):
+    request = urllib.request.Request(url, headers={"User-Agent": "pwn-broker"})
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
+def _fetch_index(url: str, timeout: float) -> bytes:
+    with _open(url, timeout) as response:
+        body = response.read(MAX_INDEX_BYTES + 1)
+    if len(body) > MAX_INDEX_BYTES:
+        raise ToolError(f"the index is more than {MAX_INDEX_BYTES} bytes")
+    return body
+
+
+def _download(url: str, dest: Path, limit: int, timeout: float) -> None:
+    # streamed to disk and cut off as soon as it passes the size the index promised
+    deadline = time.monotonic() + timeout
+    total = 0
+    with _open(url, timeout) as response, open(dest, "wb") as out:
+        while chunk := response.read(_CHUNK):
+            total += len(chunk)
+            if total > limit:
+                raise ToolError(f"the download is more than the {limit} bytes the index gives")
+            if time.monotonic() > deadline:
+                raise ToolError("the download took too long")
+            out.write(chunk)
+
+
+def _with_deadline(fetch: Callable[[str, float], bytes], url: str, timeout: float) -> bytes:
+    # urlopen's timeout is per socket operation, so the total time is enforced here
+    box: list = []
+
+    def run() -> None:
+        try:
+            box.append((True, fetch(url, timeout)))
+        except BaseException as exc:
+            box.append((False, exc))
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if not box:
+        raise ToolError(f"no answer from {url} within {timeout:g} seconds")
+    ok, value = box[0]
+    if not ok:
+        raise value
+    if len(value) > MAX_INDEX_BYTES:
+        raise ToolError(f"the index is more than {MAX_INDEX_BYTES} bytes")
+    return value
+
+
 # ---- loading
 
 
@@ -203,20 +261,34 @@ def _not_found(where: str, reason: str = "") -> ToolError:
     )
 
 
-def _read_cached(paths: AppPaths) -> Index | None:
+def _stamp(paths: AppPaths) -> tuple[datetime | None, str | None]:
+    try:
+        lines = (paths.cache / STAMP_FILE).read_text(encoding="utf-8").splitlines()
+        fetched = datetime.fromisoformat(lines[0].strip())
+    except (OSError, ValueError, IndexError):
+        return None, None
+    return fetched, lines[1].strip() if len(lines) > 1 else None
+
+
+def _read_cached(paths: AppPaths, where: str) -> Index | None:
+    _, source = _stamp(paths)
+    if source is not None and source != where:
+        # a copy of some other index must not stand in for this one
+        return None
     try:
         return _parse_bytes((paths.cache / INDEX_FILE).read_bytes())
     except (OSError, ToolError):
         return None
 
 
-def _is_fresh(paths: AppPaths, now: datetime) -> bool:
+def _is_fresh(paths: AppPaths, where: str, now: datetime) -> bool:
+    fetched, source = _stamp(paths)
+    if fetched is None or source != where:
+        return False
     try:
-        text = (paths.cache / STAMP_FILE).read_text(encoding="utf-8").strip()
-        fetched = datetime.fromisoformat(text)
-        return now - fetched <= MAX_AGE
-    except (OSError, ValueError, TypeError):
-        # unreadable, or a naive time that cannot be compared with now
+        return timedelta(0) <= now - fetched <= MAX_AGE
+    except TypeError:
+        # a naive time cannot be compared with now
         return False
 
 
@@ -225,7 +297,7 @@ def load_index(
     settings: Settings,
     *,
     now: datetime,
-    fetch: Callable[[str, float], bytes] = _fetch,
+    fetch: Callable[[str, float], bytes] = _fetch_index,
     force: bool = False,
 ) -> Index:
     where = location(settings)
@@ -237,11 +309,11 @@ def load_index(
             raise _not_found(str(file), str(exc)) from exc
         return _parse_bytes(raw)
 
-    cached = _read_cached(paths)
-    if cached is not None and not force and _is_fresh(paths, now):
+    cached = _read_cached(paths, where)
+    if cached is not None and not force and _is_fresh(paths, where, now):
         return cached
     try:
-        raw = fetch(where, FORCED_TIMEOUT if force else QUICK_TIMEOUT)
+        raw = _with_deadline(fetch, where, FORCED_TIMEOUT if force else QUICK_TIMEOUT)
         fresh = _parse_bytes(raw)
     except Exception as exc:
         if cached is not None and not force:
@@ -249,9 +321,13 @@ def load_index(
         if isinstance(exc, ToolError):
             raise
         raise _not_found(where, str(exc) or type(exc).__name__) from exc
-    # the download parsed, so it may replace the cached copy
-    write_text(paths.cache / INDEX_FILE, raw.decode("utf-8"))
-    write_text(paths.cache / STAMP_FILE, now.isoformat() + "\n")
+    # the download parsed, so it may replace the cached copy; a cache that cannot be
+    # written costs only the saving, not the answer
+    try:
+        write_text(paths.cache / INDEX_FILE, raw.decode("utf-8"))
+        write_text(paths.cache / STAMP_FILE, f"{now.isoformat()}\n{where}\n")
+    except OSError:
+        pass
     return fresh
 
 
@@ -308,7 +384,7 @@ def fetch_zip(
     settings: Settings,
     entry: BuildEntry,
     *,
-    fetch: Callable[[str, float], bytes] = _fetch,
+    download: Callable[[str, Path, int, float], None] = _download,
 ) -> Path:
     # entries can be built directly, so the name is judged again before any path exists
     _plain_zip_name(entry.file, "file")
@@ -318,17 +394,23 @@ def fetch_zip(
             verify_zip(target, size=entry.size, sha256=entry.sha256)
             return target
         except ToolError:
+            # nothing unverified is ever returned: a bad copy is dropped and fetched afresh
             _remove(target)
 
     where = location(settings)
-    if is_url(where) and not entry.url:
-        raise ToolError(f"{entry.name} {entry.version}: the index gives no download address")
+    if is_url(where):
+        if not entry.url:
+            raise ToolError(f"{entry.name} {entry.version}: the index gives no download address")
+        if not is_url(entry.url):
+            raise ToolError(f"{entry.name} {entry.version}: {entry.url!r} is not an http or https address")
     paths.cache.mkdir(parents=True, exist_ok=True)
     part = paths.cache / (entry.file + ".part")
     try:
         if is_url(where):
             try:
-                part.write_bytes(fetch(entry.url, ZIP_TIMEOUT))
+                download(entry.url, part, entry.size, ZIP_TIMEOUT)
+            except ToolError:
+                raise
             except Exception as exc:
                 raise ToolError(
                     f"cannot download {entry.url}: {str(exc) or type(exc).__name__}"
@@ -336,6 +418,8 @@ def fetch_zip(
         else:
             source = Path(where) / entry.file
             try:
+                if not stat.S_ISREG(source.lstat().st_mode):
+                    raise ToolError(f"{source} is not a regular file")
                 shutil.copyfile(source, part)
             except OSError as exc:
                 raise ToolError(f"cannot copy {source}: {exc}") from exc
