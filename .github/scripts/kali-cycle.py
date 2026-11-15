@@ -33,7 +33,6 @@ import time
 import tomllib
 import traceback
 from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
 
 OPT = Path("/opt/pwn-broker")
@@ -526,15 +525,19 @@ def tool_runs() -> None:
 
 class State:
     def __init__(self) -> None:
-        self.today = date.today().isoformat()
-        # paths.box_folder_name: <date>_<platform>_<name>
-        self.folder = ACTIVE / f"{self.today}_{PLATFORM}_{BOX}"
+        # the date the app offers at the date question, read from the question itself
+        self.day = ""
         self.ip = ""
         self.hosts_before = b""
         self.box_id = ""
         self.prompt: Terminal | None = None
         self.record: Terminal | None = None
         self.finished: Path | None = None
+
+    @property
+    def folder(self) -> Path:
+        # paths.box_folder_name: <date>_<platform>_<name>
+        return ACTIVE / f"{self.day}_{PLATFORM}_{BOX}"
 
 
 def hosts_line(s: State, names: list[str]) -> bytes:
@@ -552,10 +555,12 @@ def check_hosts(s: State, expected: bytes, what: str, snapshot: str) -> None:
     )
 
 
-def launch(name: str, argv: list[str], first: str) -> Terminal:
-    """Start pwn-broker; answer any repair offer with its default; note every warn and fail line.
+def launch(name: str, argv: list[str], first: str, repairs: tuple[str, ...] = ()) -> Terminal:
+    """Start pwn-broker; note every warn and fail line; answer the expected repair offers.
 
-    Fails when a check fails. Returns once `first`, the first thing after the launch, is shown.
+    `repairs` names the checks whose repair offer is expected; any other offer fails, so an
+    installer defect cannot hide behind a repair. Fails when a check fails. Returns once
+    `first`, the first thing after the launch, is shown.
     """
     term = Terminal(name, argv, environment())
     start = term.pos
@@ -563,7 +568,15 @@ def launch(name: str, argv: list[str], first: str) -> Terminal:
     # checks._offer_repair asks after a check that can be fixed
     fix = confirm("fix it now?", True)
     while term.wait_any({"fix": fix, "next": first}, f"a repair offer or {first!r}") == "fix":
-        note(f"{fix.strip()} answered with its default, yes")
+        # checks.report: the check's warn line, `<name>   <message>`, comes before its offer
+        warned = [line for line in lines_of(term.text()[start : term.pos]) if line.startswith("warn  ")]
+        check_name = warned[-1].split()[1] if warned else "?"
+        check(
+            check_name in repairs,
+            f"only an expected repair is offered at {name}'s launch (offered: {check_name})",
+            term.failure(f"a repair offer for {check_name} at {name}'s launch; expected only {list(repairs)}"),
+        )
+        note(f"{fix.strip()} for {check_name}, answered with its default, yes")
         term.type("\r")
         # the repair's own line: past the question's redraw, which must not count as another offer
         done = term.wait(re.compile(r"ok    \S+ fixed|fail  [^\r\n]*"), "the repair's result")
@@ -592,12 +605,15 @@ def prepare(s: State) -> None:
 
     done = run(["ip", "route"])
     found = re.search(r"^default via (\S+)", done.stdout, re.M)
-    if found:
-        s.ip = found[1]
-        note(f"target address {s.ip}, the default gateway")
-    else:
+    if not found:
         s.ip = "127.0.0.1"
-        note(f"no default route, so the target address is the loopback 127.0.0.1\n{done.stdout}")
+        note("no default route, so the target address is the loopback 127.0.0.1")
+    elif run(["ping", "-c", "1", "-W", "2", found[1]]).returncode != 0:
+        s.ip = "127.0.0.1"
+        note(f"the default gateway {found[1]} did not answer a ping, so the target address is the loopback 127.0.0.1")
+    else:
+        s.ip = found[1]
+        note(f"target address {s.ip}, the default gateway, which answered a ping")
 
     sys.path.insert(0, str(REPO / "tests"))
     import toolkit  # noqa: E402  (tests/toolkit.py, run with the app's own packages)
@@ -628,8 +644,28 @@ def prepare(s: State) -> None:
     EVIDENCE.write("config.toml", settings.read_text(encoding="utf-8"))
 
 
+def found_by_zsh(command: str) -> None:
+    """The installer's PATH line: Kali's zsh, from root's own .zshrc alone, finds the command."""
+    env = environment()
+    env["PATH"] = os.pathsep.join(p for p in env["PATH"].split(os.pathsep) if p != str(BIN))
+    done = subprocess.run(
+        ["zsh", "-ic", f"command -v {command}"],
+        capture_output=True, text=True, errors="replace", timeout=20, env=env, cwd=HOME,
+    )  # fmt: skip
+    log(f"ran zsh -ic 'command -v {command}': status {done.returncode}")
+    last = ([line.strip() for line in done.stdout.splitlines() if line.strip()] or [""])[-1]
+    check(
+        done.returncode == 0 and last == str(BIN / command),
+        f"zsh -ic 'command -v {command}' finds {BIN / command} through root's .zshrc",
+        shown_run(done),
+    )
+
+
 def step_launch(s: State) -> None:
-    s.prompt = launch("prompt", [str(BIN / "pwn-broker"), "new"], asked("box name"))
+    found_by_zsh("pwn-broker")
+    found_by_zsh("record")
+    # the box folders do not exist until the first launch repairs them; no other repair is expected
+    s.prompt = launch("prompt", [str(BIN / "pwn-broker"), "new"], asked("box name"), repairs=("folders",))
     # the launch questions are answered in step 2; the vpn check must say no tunnel is up
     shown = s.prompt.text()
     check("warn  vpn   no VPN tunnel is up" in shown, "the vpn check warns that no tunnel is up")
@@ -639,7 +675,15 @@ def step_new_box(s: State) -> None:
     t = s.prompt
     t.type(BOX + "\r")
     t.answer(asked("platform", PLATFORM), "", "the platform question")
-    t.answer(asked("date", s.today), "", "the date question")
+    # the default is whatever date the app offers; the folder name and summary follow it
+    question = asked("date", "DAY").split("DAY")
+    offered = t.wait(
+        re.compile(re.escape(question[0]) + r"(\d{4}-\d\d-\d\d)" + re.escape(question[1].rstrip(" "))),
+        "the date question",
+    )
+    s.day = offered[1]
+    note(f"the date question offered {s.day}")
+    t.type("\r")
     t.answer(asked("os"), OS_NAME, "the os question")
     t.answer(asked("difficulty"), DIFFICULTY, "the difficulty question")
     t.answer(confirm("add a target?", True), "", "the add a target question")
@@ -703,10 +747,35 @@ def step_box_created(s: State) -> None:
         raise Failed(f"no vim with -u {VIMRC} on {notes}\n--- processes ---\n{listing}\n--- end ---") from None
     parent = process(found.ppid)
     note(f"vim {found.pid}: {' '.join(found.argv)}; parent {found.ppid} ({parent.comm if parent else 'gone'})")
+    # the parent is the terminal x-terminal-emulator resolves to, or the program that one runs
+    # when it is a wrapper script (Debian's uxterm and lxterm exec xterm)
+    resolved = Path(os.path.realpath(shutil.which("x-terminal-emulator", path=environment()["PATH"]) or "missing"))
+    try:
+        parent_exe = Path(os.path.realpath(f"/proc/{found.ppid}/exe"))
+    except OSError:
+        parent_exe = Path("unknown")
+    head = resolved.read_bytes()[:4096] if resolved.is_file() else b""
+    wrapped = head.startswith(b"#!") and re.search(rb"\b" + re.escape(parent_exe.name.encode()) + rb"\b", head)
+    note(f"x-terminal-emulator resolves to {resolved}; vim's parent runs {parent_exe}")
+    check(
+        parent_exe == resolved or bool(wrapped),
+        f"vim's parent is the terminal x-terminal-emulator resolves to ({resolved})",
+        f"parent {found.ppid}: {parent_exe}",
+    )
+    prompt_tty = process(t.process.pid)
+    check(
+        found.tty != 0 and prompt_tty is not None and found.tty != prompt_tty.tty,
+        "vim has a terminal of its own, not the prompt's",
+        f"vim tty_nr {found.tty}, prompt tty_nr {prompt_tty.tty if prompt_tty else 'gone'}",
+    )
     time.sleep(2)  # the window draws vim's screen
     shot = EVIDENCE.folder / "note-window.png"
     done = run(["import", "-display", os.environ.get("DISPLAY", ":99"), "-window", "root", str(shot)])
     check(done.returncode == 0 and shot.is_file() and shot.stat().st_size > 0, "a screenshot of the display", shown_run(done))
+    colours = run(["identify", "-format", "%k", str(shot)])
+    count = int(colours.stdout.strip()) if colours.returncode == 0 and colours.stdout.strip().isdecimal() else 0
+    note(f"the screenshot has {count} distinct colours")
+    check(count > 1, "the screenshot is not one flat colour", shown_run(colours))
 
 
 def step_cred(s: State) -> None:
@@ -759,6 +828,28 @@ def step_record(s: State) -> None:
     EVIDENCE.write("record-prompt.txt", "\n".join(prompt_lines) + "\n")
     for line in prompt_lines:
         note(f"prompt: {line}")
+    # Kali's own two-line prompt from root's .zshrc, behind the prefix: bash would also get the
+    # prefix, and a zsh without the user's .zshrc would not draw this
+    kali = f"[rec {TARGET}] ┌──(root㉿kali)-[~]"
+    check(
+        len(prompt_lines) == 2 and prompt_lines[0].strip() == kali and prompt_lines[1].startswith("└─#"),
+        "the recorded window shows Kali's own zsh prompt behind the prefix",
+        "\n".join(prompt_lines),
+    )
+
+    def zsh_under_record() -> Proc | None:
+        for p in processes():
+            if p.comm != "zsh":
+                continue
+            current = p
+            while current is not None and current.pid > 1:
+                if current.ppid == r.process.pid:
+                    return p
+                current = process(current.ppid)
+        return None
+
+    shell_proc = wait_until(zsh_under_record, f"a zsh runs under record ({r.process.pid})")
+    note(f"zsh {shell_proc.pid}: {' '.join(shell_proc.argv)}")
     r.type(COMMAND + "\r")
     r.wait(MARKER, f"the output of {COMMAND}")
     r.type("id\r")
@@ -863,8 +954,13 @@ def step_vpn(s: State) -> None:
 
     done = run(["ip", "-4", "addr", "show", "tun0"])
     check(f"inet {VPN_ADDRESS}" in done.stdout, f"ip shows {VPN_ADDRESS} on tun0", shown_run(done))
-    check(len(openvpns()) == 1, "one openvpn process is running", repr(openvpns()))
+    running = openvpns()
+    check(len(running) == 1, "one openvpn process is running", repr(running))
     check((RUN / "vpn" / "marker.toml").is_file(), f"{RUN / 'vpn' / 'marker.toml'} exists")
+    marked = read_toml(RUN / "vpn" / "marker.toml").get("pid")
+    check(running[0].pid == marked, f"the running openvpn is the marker's process {marked}", repr(running[0]))
+    config = str(RUN / "vpn" / "config.ovpn")
+    check(config in running[0].argv, f"openvpn's command line names {config}", " ".join(running[0].argv))
     copy = s.folder / "vpn" / "test.ovpn"
     mode = stat.S_IMODE(copy.stat().st_mode) if copy.exists() else None
     check(mode == 0o600, f"{copy} has mode 600", oct(mode) if mode is not None else "missing")
@@ -929,7 +1025,7 @@ def step_finish(s: State) -> None:
 
     t.type("finish\r")
     # lifecycle.finish_box's summary, then the hooks' lines: toolhooks registers before kalihooks
-    t.wait(f"box       {BOX} ({PLATFORM}), started {s.today}", "the summary's box line")
+    t.wait(f"box       {BOX} ({PLATFORM}), started {s.day}", "the summary's box line")
     t.wait(f"tools     {TOOL} {TOOL_VERSION}   (will be removed)", "the summary's tools line")
     t.wait("hosts     1 line to remove from /etc/hosts", "the summary's hosts line")
     t.answer(confirm("finish this box?", False), "y", "the finish question")
@@ -944,6 +1040,7 @@ def step_finish(s: State) -> None:
 
     check_hosts(s, s.hosts_before, "/etc/hosts is byte for byte what it was before step 3", "hosts.step16")
     wait_until(lambda: not openvpns(), "no openvpn process is left")
+    wait_until(lambda: run(["ip", "link", "show", "tun0"]).returncode != 0, "tun0 is gone")
     check(not (BIN / TOOL).exists(), f"{BIN / TOOL} is gone")
     check(not s.folder.exists(), f"{s.folder} is gone")
     archive = s.finished = Path(found[1])
@@ -986,22 +1083,40 @@ def step_import(s: State) -> None:
 
 def step_last_finish(s: State) -> None:
     t = launch("resume", [str(BIN / "pwn-broker"), "resume", BOX], PROMPT)
+    start = t.pos
     t.type("finish\r")
     t.wait(f"tools     {TOOL} {TOOL_VERSION}   (will be removed)", "the summary's tools line")
     t.wait("hosts     1 line to remove from /etc/hosts", "the summary's hosts line")
     t.answer(confirm("finish this box?", False), "y", "the finish question")
     t.answer(confirm("replace the existing archive?", False), "y", "the replace archive question")
-    t.wait(re.compile(r"ok    archive \S+\.finished\.tar\.gz"), "the archive line")
+    found = t.wait(re.compile(r"ok    archive (\S+\.finished\.tar\.gz)"), "the archive line")
     t.wait("ok    removed 1 line from /etc/hosts", "the hosts lines removed")
     t.answer(confirm("remove working folder?", False), "y", "the remove folder question")
     t.wait(f"ok    removed {s.folder}", "the folder removed line")
     status = t.wait_exit("the prompt to end after finish")
     check(status == 0, "pwn-broker ended with status 0", f"status {status}")
+    out = t.text()[start:]
+    # kalihooks.vpn_question asks only while the app's VPN runs; none was started since step 16
+    check("stop it?" not in out, "finish asked no VPN question", readable(out))
+    check(not openvpns(), "no openvpn process is running", repr(openvpns()))
+    archive = Path(found[1])
+    check(archive == s.finished and archive.is_file(), f"the replaced finished archive is {s.finished}", str(archive))
+    verify(archive)
     check_hosts(s, s.hosts_before, "/etc/hosts matches the original bytes once more", "hosts.step18")
-    tools = sorted(p.name for p in (OPT / "tools").iterdir() if p.is_dir())
-    check(tools == [], f"{OPT / 'tools'} holds no tool", repr(tools))
+    left = sorted(p.name for p in (OPT / "tools").iterdir())
+    check(left == ["installed.toml"], f"{OPT / 'tools'} holds nothing but installed.toml", repr(left))
     check(not (BIN / TOOL).exists(), f"{BIN / TOOL} is gone")
     check(not s.folder.exists(), f"{s.folder} is gone")
+
+    # the app leaves each launch's note window open; recorded here, not judged
+    windows = [
+        p for p in processes()
+        if p.argv and Path(p.argv[0]).name == "vim" and "-u" in p.argv and str(VIMRC) in p.argv
+    ]  # fmt: skip
+    note(f"{len(windows)} note windows are still open at the end")
+    for p in windows:
+        shown = p.argv[-1]
+        note(f"vim {p.pid} on {shown} ({'exists' if Path(shown).exists() else 'no longer exists'})")
 
 
 STEPS = [

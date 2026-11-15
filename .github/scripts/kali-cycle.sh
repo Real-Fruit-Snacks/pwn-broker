@@ -82,8 +82,9 @@ fi
 cat "$EVIDENCE/versions.txt"
 
 say "2. Kali's zsh settings for root"
+[ -f /etc/skel/.zshrc ] || stop "kali-defaults left no /etc/skel/.zshrc"
 if [ ! -e /root/.zshrc ]; then
-    cp /etc/skel/.zshrc /root/.zshrc || stop "kali-defaults left no /etc/skel/.zshrc"
+    cp /etc/skel/.zshrc /root/.zshrc || stop "cannot copy /etc/skel/.zshrc to /root/.zshrc"
     echo "copied /etc/skel/.zshrc to /root/.zshrc"
 else
     echo "/root/.zshrc was already there"
@@ -118,6 +119,16 @@ cat "$EVIDENCE/install.txt"
 grep -qxF "ok    asciinema 3.2.1 in $OPT/app/bin/asciinema" "$EVIDENCE/install.txt" \
     || stop "the installer did not report the pinned asciinema"
 "$OPT/app/bin/asciinema" --version
+# root's .zshrc is Kali's own: /etc/skel/.zshrc plus the installer's one PATH line, nothing else
+# shellcheck disable=SC2016
+path_line="export PATH=\"$OPT/bin:\$PATH\"  # pwn-broker"
+[ "$(grep -cxF "$path_line" /root/.zshrc)" = 1 ] || stop "/root/.zshrc does not hold the installer's PATH line once"
+grep -vxF "$path_line" /root/.zshrc >"$WORK/zshrc-without-path-line"
+if ! cmp "$WORK/zshrc-without-path-line" /etc/skel/.zshrc; then
+    diff -u /etc/skel/.zshrc /root/.zshrc
+    stop "/root/.zshrc is not /etc/skel/.zshrc plus the PATH line"
+fi
+echo "/root/.zshrc is /etc/skel/.zshrc plus: $path_line"
 
 say "5. /etc/hosts as it was"
 cp /etc/hosts "$EVIDENCE/hosts.before" || stop "cannot copy /etc/hosts"
@@ -128,9 +139,14 @@ say "6. the unit suite in Kali as root"
 if python3 -m venv "$WORK/venv" >"$EVIDENCE/suite-install.txt" 2>&1 \
     && "$WORK/venv/bin/pip" install -e "$CHECKOUT[dev]" >>"$EVIDENCE/suite-install.txt" 2>&1; then
     (cd "$CHECKOUT" && env -u DISPLAY PWN_BROKER_REAL_ASCIINEMA="$OPT/app/bin/asciinema" \
-        "$WORK/venv/bin/python" -m pytest -q -W error) >"$EVIDENCE/unit-tests.txt" 2>&1
+        "$WORK/venv/bin/python" -m pytest -q -W error -rs) >"$EVIDENCE/unit-tests.txt" 2>&1
     SUITE_STATUS=$?
     tail -n 40 "$EVIDENCE/unit-tests.txt"
+    # the real-asciinema tests skip themselves without it; here they must run
+    if grep -E '^SKIPPED .*test_record_real\.py' "$EVIDENCE/unit-tests.txt"; then
+        echo "fail  tests in test_record_real.py were skipped"
+        SUITE_STATUS=record-tests-skipped
+    fi
 else
     tail -n 40 "$EVIDENCE/suite-install.txt"
     SUITE_STATUS=install-failed
