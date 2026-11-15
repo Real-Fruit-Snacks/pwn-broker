@@ -232,3 +232,121 @@ def test_completer_replaces_the_whole_line(session, registry):
     _register("target add")
     found = list(ShellCompleter(session).get_completions(Document("tar"), None))
     assert [(c.text, c.start_position) for c in found] == [("target add", -3)]
+
+
+# the prompt loop
+
+class _Lines:
+    """Stands in for PromptSession: hands out lines, then ends the input."""
+
+    def __init__(self, lines, between=None):
+        self.lines = list(lines)
+        self.between = between
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+    def prompt(self):
+        if self.between:
+            self.between(len(self.lines))
+        if not self.lines:
+            raise EOFError
+        return self.lines.pop(0)
+
+
+@pytest.fixture
+def loop(session, registry, monkeypatch):
+    from pwn_broker.shell import app
+
+    def start(lines, between=None):
+        monkeypatch.setattr(app, "PromptSession", _Lines(lines, between))
+        app.run_shell(session)
+
+    return start
+
+
+def test_a_busy_lock_prints_the_line_and_keeps_the_session_open(session, loop, monkeypatch):
+    from pwn_broker import boxlock
+    from pwn_broker.shell import app
+
+    ran = []
+    command("first", "help")(lambda s, a: ran.append("first"))
+    command("second", "help")(lambda s, a: ran.append("second"))
+    real = app.boxlock.held
+    calls = []
+
+    def held(paths, *, wait):
+        calls.append(wait)
+        if len(calls) == 1:
+            raise boxlock.Busy
+        return real(paths, wait=wait)
+
+    monkeypatch.setattr(app.boxlock, "held", held)
+    loop(["first", "second"])
+    assert ran == ["second"]
+    assert calls == [30, 30]
+    assert ("fail", "record is adding a target in another window; try again") in session.console.lines
+
+
+def test_a_command_sees_a_target_added_by_another_program(session, loop):
+    seen = []
+    command("names", "help")(lambda s, a: seen.append([t.name for t in s.targets]))
+    other = reload_from(session)
+    add_target(
+        other.box, other.targets, ips=["10.10.10.2"], hostnames=[],
+        scope="external", name="web", now=NOW + timedelta(minutes=1),
+    )  # fmt: skip
+    loop(["names", "names"])
+    assert seen == [["dc01", "web"], ["dc01", "web"]]
+
+
+def test_a_command_that_changes_nothing_does_not_reload_next_time(session, loop, monkeypatch):
+    from pwn_broker import session as session_module
+
+    session_module.mark_seen(session)
+    reloads = []
+    real = session_module.reload_if_changed
+    monkeypatch.setattr(
+        "pwn_broker.shell.app.reload_if_changed", lambda s: reloads.append(real(s)) or reloads[-1]
+    )
+    command("noop", "help")(_noop)
+    command("touch", "help")(
+        lambda s, a: add_target(
+            s.box, s.targets, ips=["10.10.10.7"], hostnames=[],
+            scope="external", name="mine", now=NOW,
+        )
+    )  # fmt: skip
+    loop(["noop", "touch", "noop"])
+    assert reloads == [False, False, False]
+
+
+def test_mark_seen_runs_when_the_command_quits(session, loop):
+    def writes_then_quits(s, a):
+        add_target(
+            s.box, s.targets, ips=["10.10.10.8"], hostnames=[],
+            scope="external", name="late", now=NOW,
+        )  # fmt: skip
+        raise Quit
+
+    command("quit", "help")(writes_then_quits)
+    loop(["quit"])
+    from pwn_broker.session import reload_if_changed
+
+    assert reload_if_changed(session) is False
+
+
+def test_the_lock_is_released_between_commands(session, loop):
+    from pwn_broker.boxlock import held
+
+    def between(left):
+        with held(session.paths, wait=0):
+            pass
+
+    command("noop", "help")(_noop)
+    loop(["noop"], between=between)
+
+
+def reload_from(session):
+    from pwn_broker.session import load_session
+
+    return load_session(session.paths, session.settings, session.console, session.box, session.clock)

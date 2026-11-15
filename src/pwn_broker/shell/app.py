@@ -10,9 +10,9 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
 
-from pwn_broker import toolindex, toolstate
+from pwn_broker import boxlock, toolindex, toolstate
 from pwn_broker.boxes import TARGET_FOLDERS
-from pwn_broker.session import Session, rescan
+from pwn_broker.session import Session, mark_seen, reload_if_changed, rescan
 from pwn_broker.shell.commands import COMMANDS, Quit, dispatch
 from pwn_broker.store import StoreError
 from pwn_broker.theme import color_enabled, prompt_style
@@ -22,6 +22,8 @@ TARGET_ARG_COMMANDS = ("target use", "target show", "target edit", "target renam
 PATH_COMMAND = "path"
 PATH_FOLDERS = tuple(sorted({*TARGET_FOLDERS, "lists", "screenshots"}))
 IMPORT_COMMAND = "cred import "
+# seconds a command waits for record to finish adding a target
+LOCK_WAIT = 30
 
 _TARGET_ARG = re.compile(r"(" + "|".join(TARGET_ARG_COMMANDS) + r") (\S*)")
 _TOOL_INDEX_ARG = re.compile(r"(tool install|tool info) (\S*)")
@@ -125,11 +127,18 @@ def run_shell(session: Session) -> None:
                 break
             line = "quit"
         try:
-            try:
-                rescan(session)
-            except (StoreError, OSError) as exc:
-                console.warn(str(exc))
-            dispatch(session, line)
+            with boxlock.held(session.paths, wait=LOCK_WAIT):
+                try:
+                    try:
+                        reload_if_changed(session)
+                        rescan(session)
+                    except (StoreError, OSError) as exc:
+                        console.warn(str(exc))
+                    dispatch(session, line)
+                finally:
+                    mark_seen(session)
+        except boxlock.Busy:
+            console.fail("record is adding a target in another window; try again")
         except Quit:
             break
         except KeyboardInterrupt:

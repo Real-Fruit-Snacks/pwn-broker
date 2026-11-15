@@ -9,7 +9,7 @@ from pwn_broker.console import FakeConsole
 from pwn_broker.creds import add_cred
 from pwn_broker.note import FOLD_START, NOTE_NAME, read_note
 from pwn_broker.session import load_session, refresh, rescan, set_current
-from pwn_broker.store import load_box
+from pwn_broker.store import load_box, save_creds
 
 
 def reload(session):
@@ -115,3 +115,150 @@ def test_rescan_records_files_and_saves(session):
     records = rescan(session)
     assert "targets/dc01/loot/x.txt" in [r.path for r in records]
     assert (session.box.path / "files.toml").exists()
+
+
+# reloading the box when another program changed it
+
+def test_stamp_changes_when_a_target_is_added_edited_or_removed(session):
+    from pwn_broker.boxes import edit_target
+    from pwn_broker.session import stamp
+
+    before = stamp(session.box)
+    assert stamp(session.box) == before
+    web = add_target(
+        session.box, session.targets, ips=["10.10.10.2"], hostnames=[],
+        scope="external", name="web", now=NOW,
+    )  # fmt: skip
+    added = stamp(session.box)
+    assert added != before
+    edit_target(session.box, session.targets, "web", ips=["10.10.10.3"], hostnames=[], scope="external")
+    # the same size, so only the time can tell; a coarse filesystem clock must not hide it
+    file = session.box.path / "targets" / "web" / "target.toml"
+    info = file.stat()
+    os.utime(file, ns=(info.st_atime_ns, info.st_mtime_ns + 5_000_000_000))
+    edited = stamp(session.box)
+    assert edited != added
+    (session.box.path / "targets" / web.name / "target.toml").unlink()
+    assert stamp(session.box) != edited
+
+
+def test_stamp_changes_with_creds_and_box_files(session):
+    from pwn_broker.session import stamp
+
+    before = stamp(session.box)
+    (session.box.path / "creds.toml").write_text("x = 1\n", encoding="utf-8")
+    with_creds = stamp(session.box)
+    assert with_creds != before
+    (session.box.path / "box.toml").write_text("y = 2\n", encoding="utf-8")
+    assert stamp(session.box) != with_creds
+
+
+def test_stamp_of_missing_files_is_not_an_error(tmp_path, box):
+    from pwn_broker.session import stamp
+
+    (box.path / "box.toml").unlink()
+    assert isinstance(stamp(box), tuple)
+
+
+def test_load_session_marks_what_it_read(session):
+    from pwn_broker.session import reload_if_changed, stamp
+
+    loaded = reload(session)
+    assert loaded.seen == stamp(loaded.box)
+    assert loaded.seen
+    assert reload_if_changed(loaded) is False
+
+
+def _add_elsewhere(session, name="web", address="10.10.10.2"):
+    other = reload(session)
+    return add_target(
+        other.box, other.targets, ips=[address], hostnames=[],
+        scope="external", name=name, now=NOW + timedelta(minutes=1),
+    )  # fmt: skip
+
+
+def test_reload_picks_up_a_target_added_on_disk(session):
+    from pwn_broker.session import load_session, reload_if_changed
+
+    mine = load_session(session.paths, session.settings, session.console, session.box, session.clock)
+    _add_elsewhere(session)
+    assert [t.name for t in mine.targets] == ["dc01"]
+    assert reload_if_changed(mine) is True
+    assert [t.name for t in mine.targets] == ["dc01", "web"]
+    assert mine.current.name == "dc01"
+    assert reload_if_changed(mine) is False
+
+
+def test_reload_drops_to_the_first_target_when_current_is_gone(session):
+    import shutil
+
+    from pwn_broker.session import load_session, reload_if_changed
+
+    _add_elsewhere(session)
+    mine = load_session(session.paths, session.settings, session.console, session.box, session.clock)
+    mine.current = mine.targets[1]
+    shutil.rmtree(session.box.path / "targets" / "web")
+    assert reload_if_changed(mine) is True
+    assert mine.current.name == "dc01"
+    shutil.rmtree(session.box.path / "targets" / "dc01")
+    assert reload_if_changed(mine) is True
+    assert mine.current is None
+    assert mine.targets == []
+
+
+def test_reload_updates_the_same_object_and_keeps_other_fields(session):
+    from pwn_broker.session import load_session, reload_if_changed
+
+    mine = load_session(session.paths, session.settings, session.console, session.box, session.clock)
+    mine.warned.add("x")
+    mine.copied_in_full.add(session.box.path)
+    settings, console, clock = mine.settings, mine.console, mine.clock
+    _add_elsewhere(session)
+    reload_if_changed(mine)
+    assert mine.warned == {"x"}
+    assert mine.copied_in_full == {session.box.path}
+    assert (mine.settings, mine.console, mine.clock) == (settings, console, clock)
+    assert mine.box.path == session.box.path
+
+
+def test_reload_picks_up_creds_on_disk(session):
+    from pwn_broker.session import load_session, reload_if_changed
+
+    mine = load_session(session.paths, session.settings, session.console, session.box, session.clock)
+    creds = []
+    add_cred(
+        creds, username="bob", domain="", secret="pw", kind="password",
+        found_on="forest", note="", now=NOW,
+    )  # fmt: skip
+    save_creds(session.box, creds)
+    assert mine.creds == []
+    assert reload_if_changed(mine) is True
+    assert [c.username for c in mine.creds] == ["bob"]
+
+
+def test_own_writes_do_not_cause_a_reload_after_mark_seen(session):
+    from pwn_broker.session import load_session, mark_seen, reload_if_changed
+
+    mine = load_session(session.paths, session.settings, session.console, session.box, session.clock)
+    add_target(
+        mine.box, mine.targets, ips=["10.10.10.9"], hostnames=[],
+        scope="external", name="own", now=NOW,
+    )  # fmt: skip
+    mark_seen(mine)
+    assert reload_if_changed(mine) is False
+    assert [t.name for t in mine.targets] == ["dc01", "own"]
+
+
+def test_refresh_after_reload_keeps_the_new_target_in_note_and_lists(session):
+    from pwn_broker.session import load_session, reload_if_changed
+
+    mine = load_session(session.paths, session.settings, session.console, session.box, session.clock)
+    _add_elsewhere(session, name="web", address="10.10.10.2")
+    assert reload_if_changed(mine) is True
+    refresh(mine)
+    assert "10.10.10.2" in read_note(mine.box)
+    assert "web" in read_note(mine.box)
+    listed = "\n".join(
+        p.read_text(encoding="utf-8") for p in (mine.box.path / "lists").iterdir() if p.is_file()
+    )
+    assert "10.10.10.2" in listed

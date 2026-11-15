@@ -11,7 +11,15 @@ from pwn_broker.model import Box, Cred, FileRecord, Target
 from pwn_broker.note import NOTE_NAME, NoteError, read_note, render_note, update_box, write_note
 from pwn_broker.paths import AppPaths
 from pwn_broker.setup import load_template
-from pwn_broker.store import load_creds, load_files, load_targets, save_box, save_creds, save_files
+from pwn_broker.store import (
+    load_box,
+    load_creds,
+    load_files,
+    load_targets,
+    save_box,
+    save_creds,
+    save_files,
+)
 
 
 # the key in Session.warned for a note that could not be updated; no file path holds a NUL
@@ -32,6 +40,8 @@ class Session:
     warned: set[str] = field(default_factory=set)
     # home paths the last copy before archiving took in full; only these may be deleted after
     copied_in_full: set[Path] = field(default_factory=set)
+    # stamp(box) as of the last read or write by this prompt; a different stamp means another program wrote
+    seen: tuple = ()
 
 
 def load_session(
@@ -45,7 +55,45 @@ def load_session(
     current = next((t for t in targets if t.name == box.last_target), None)
     if current is None and targets:
         current = targets[0]
-    return Session(paths, settings, console, box, targets, load_creds(box), current, clock)
+    session = Session(paths, settings, console, box, targets, load_creds(box), current, clock)
+    mark_seen(session)
+    return session
+
+
+def stamp(box: Box) -> tuple:
+    """Modification time and size of every file that holds the box's data; absent files count as None."""
+    files = [box.path / "box.toml", box.path / "creds.toml"]
+    files += sorted((box.path / "targets").glob("*/target.toml"))
+    found = []
+    for file in files:
+        try:
+            info = file.stat()
+            found.append((file.relative_to(box.path).as_posix(), info.st_mtime_ns, info.st_size))
+        except OSError:
+            found.append((file.relative_to(box.path).as_posix(), None, None))
+    return tuple(found)
+
+
+def mark_seen(session: Session) -> None:
+    session.seen = stamp(session.box)
+
+
+def reload_if_changed(session: Session) -> bool:
+    """Read the box, targets and credentials again when another program changed them."""
+    if stamp(session.box) == session.seen:
+        return False
+    # read the stamp first: a write that lands during the reload is then noticed next time
+    seen = stamp(session.box)
+    box = load_box(session.box.path)
+    targets = load_targets(box)
+    creds = load_creds(box)
+    name = session.current.name if session.current else None
+    current = next((t for t in targets if t.name == name), None)
+    if current is None and targets:
+        current = targets[0]
+    session.box, session.targets, session.creds, session.current = box, targets, creds, current
+    session.seen = seen
+    return True
 
 
 def write_new_note(paths: AppPaths, box: Box, targets: list[Target]) -> None:
