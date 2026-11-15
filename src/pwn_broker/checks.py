@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pwn_broker import __version__
 from pwn_broker.config import Settings
 from pwn_broker.console import Cancelled, Console
+from pwn_broker.notewindow import has_display
 from pwn_broker.paths import AppPaths
 
 RELEASES_URL = "https://api.github.com/repos/Real-Fruit-Snacks/pwn-broker/releases/latest"
@@ -47,7 +48,7 @@ def run_checks(
         _tool("tar", "tar", which, "apt install tar"),
     ]
 
-    if env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"):
+    if has_display(env):
         results.append(CheckResult("display", "ok", "desktop session found"))
     else:
         results.append(

@@ -1,0 +1,28 @@
+set nocompatible
+set encoding=utf-8
+set autoread
+set updatetime=1000
+set number
+set linebreak
+set termguicolors
+syntax on
+execute 'source ' . fnameescape(expand('<sfile>:p:h') . '/nightshift.vim')
+
+let s:state = expand('%:p:h') . '/.note-state'
+let s:dirty = -1
+function! s:Mark(value) abort
+  if s:dirty != a:value
+    let s:dirty = a:value
+    silent! call writefile([string(a:value)], s:state)
+  endif
+endfunction
+
+augroup pwn_broker
+  autocmd!
+  autocmd TextChanged,TextChangedI * call s:Mark(1)
+  autocmd BufWritePost * call s:Mark(0)
+  autocmd FocusLost,CursorHold,CursorHoldI * silent! update
+  autocmd FocusGained,CursorHold,CursorHoldI * silent! checktime
+  autocmd VimEnter * call s:Mark(0)
+  autocmd VimLeave * silent! call delete(s:state)
+augroup END
