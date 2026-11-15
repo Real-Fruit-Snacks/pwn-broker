@@ -25,8 +25,9 @@ def _one_line(value: str) -> str:
 
 def _plain(text: str) -> str:
     # free text, which may come from someone else's archive: no control character reaches the
-    # terminal that reads the log, and no run of spaces looks like the gap between two fields
-    shown = "".join("?" if unicodedata.category(c) == "Cc" else c for c in text)
+    # terminal that reads the log, no format character (a bidirectional override) reorders how
+    # the line shows, and no run of spaces looks like the gap between two fields
+    shown = "".join("?" if unicodedata.category(c) in ("Cc", "Cf") else c for c in text)
     return " ".join(shown.split())
 
 

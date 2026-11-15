@@ -89,6 +89,14 @@ def test_a_box_name_cannot_break_the_columns_or_reach_the_terminal(paths, box):
     assert line.split("  ")[2] == "x (id) evil?1-1?[31m sha256:ab?next line (2026-11-14_htb_forest)"
 
 
+def test_a_box_name_cannot_reorder_how_the_line_shows(paths, box):
+    # a right-to-left override and a zero-width space are format characters, not controls
+    box.name = "for‮est​x"
+    append(paths, box)
+    [line] = read(paths).splitlines()
+    assert line.split("  ")[2] == "for?est?x (2026-11-14_htb_forest)"
+
+
 def test_an_event_that_is_not_known_is_refused(paths, box):
     with pytest.raises(ValueError, match="event"):
         append(paths, box, event="installed\nfake line")
