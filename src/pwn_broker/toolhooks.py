@@ -251,29 +251,65 @@ def _restore(session: Session) -> None:
 def leftovers(paths: AppPaths, console: Console) -> None:
     try:
         installed = load_installed(paths)
-        if not installed:
-            return
-        unreadable = toolstate.unreadable_boxes(paths)
-        if unreadable:
-            names = ", ".join(p.split(":", 1)[0] for p in unreadable)
-            console.warn(f"tools left by finished boxes were not checked: {names} cannot be read")
-            return
-        orphans = toolstate.orphans(installed, set(unfinished_boxes(paths)))
-        if not orphans:
-            return
-        console.info("tools     " + ", ".join(f"{t.name} {t.version}" for t in orphans))
-        if not console.confirm("remove tools left by finished boxes?", default=True):
-            return
-        for item in orphans:
-            try:
-                toolinstall.remove_files(paths, item)
-            except ToolError as exc:
-                console.warn(f"{item.name}   {exc}")
-                continue
-            del installed[item.name]
-            toolstate.save_installed(paths, installed)
-            console.ok(f"removed {item.name} {item.version}")
-    except Cancelled:
-        pass
     except Exception as exc:  # the prompt must open whatever state the tools are in
         console.warn(f"tools left by finished boxes could not be checked: {exc}")
+        return
+    try:
+        _orphans(paths, console, installed)
+    except Cancelled:
+        pass
+    except Exception as exc:
+        console.warn(f"tools left by finished boxes could not be checked: {exc}")
+    # the installed list is the authority on what belongs; it was read, so the rest can be judged
+    try:
+        _strays(paths, console, installed)
+    except Cancelled:
+        pass
+    except Exception as exc:
+        console.warn(f"files left by an interrupted install could not be checked: {exc}")
+
+
+def _orphans(paths: AppPaths, console: Console, installed: dict[str, Installed]) -> None:
+    if not installed:
+        return
+    unreadable = toolstate.unreadable_boxes(paths)
+    if unreadable:
+        names = ", ".join(p.split(":", 1)[0] for p in unreadable)
+        console.warn(f"tools left by finished boxes were not checked: {names} cannot be read")
+        return
+    orphans = toolstate.orphans(installed, set(unfinished_boxes(paths)))
+    if not orphans:
+        return
+    console.info("tools     " + ", ".join(f"{t.name} {t.version}" for t in orphans))
+    if not console.confirm("remove tools left by finished boxes?", default=True):
+        return
+    homes = user_homes()
+    for item in orphans:
+        try:
+            toolinstall.remove_files(paths, item)
+        except ToolError as exc:
+            console.warn(f"{item.name}   {exc}")
+            continue
+        del installed[item.name]
+        toolstate.save_installed(paths, installed)
+        console.ok(f"removed {item.name} {item.version}")
+        # nothing was copied into a box, so the tool's home data is only named
+        for path in tooldata.to_delete(item, homes, False):
+            console.warn(f"{path} was left by {item.name}; remove it by hand if it is not needed")
+
+
+def _strays(paths: AppPaths, console: Console, installed: dict[str, Installed]) -> None:
+    strays = toolinstall.stray_files(paths, installed)
+    if not strays:
+        return
+    for path in strays:
+        console.info(f"left      {path}")
+    if not console.confirm("remove files left by an interrupted install?", default=True):
+        return
+    for path in strays:
+        try:
+            toolinstall.remove_stray(paths, path)
+        except (ToolError, OSError) as exc:
+            console.warn(f"{path}   {exc}")
+            continue
+        console.ok(f"removed {path}")

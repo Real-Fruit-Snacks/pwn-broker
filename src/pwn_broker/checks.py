@@ -34,14 +34,18 @@ def _tool(name: str, binary: str, which: Callable[[str], str | None], hint: str)
 
 
 def _venv(run: Callable) -> CheckResult:
+    # venv --help answers even without python3-venv; ensurepip is what that package adds.
+    # Only Python tools need it, so a missing one is a warning, not a reason to stop
     try:
-        done = run(["python3", "-m", "venv", "--help"], capture_output=True, timeout=20)
+        done = run(["python3", "-c", "import ensurepip"], capture_output=True, timeout=20)
         working = done.returncode == 0
     except (OSError, subprocess.SubprocessError):
         working = False
     if working:
         return CheckResult("venv", "ok", "python3 can make virtual environments")
-    return CheckResult("venv", "fail", "python3 -m venv does not work", "apt install python3-venv")
+    return CheckResult(
+        "venv", "warn", "python3 cannot make virtual environments", "apt install python3-venv"
+    )
 
 
 def run_checks(

@@ -1,3 +1,4 @@
+import os
 import shutil
 import sys
 import tarfile
@@ -863,3 +864,109 @@ def test_undo_saves_the_records_even_when_interrupted(tooled, monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         toolhooks.undo(tooled)
     assert [t.name for t in load_box(tooled.box.path).tools] == ["kerbrute"]
+
+
+# ---- files left by an interrupted install
+
+
+SWEEP_QUESTION = "remove files left by an interrupted install?"
+
+
+def plant_strays(paths):
+    strays = [
+        paths.tools / "kerbrute" / "0.9-1",
+        paths.tools / "ghost",
+        paths.upload / "ghost",
+        paths.bin / "ghost-cmd",
+    ]
+    (strays[0] / "files").mkdir(parents=True)
+    (strays[0] / "files" / "kerbrute").write_text("old build")
+    (strays[1] / "1-1" / "files").mkdir(parents=True)
+    (strays[2]).mkdir(parents=True)
+    (strays[2] / "agent").write_text("A")
+    strays[3].write_bytes(b"#!/bin/sh\n# pwn-broker tool: ghost\nexec x\n")
+    return strays
+
+
+def test_files_left_by_an_interrupted_install_are_offered_and_removed(tooled):
+    paths = tooled.paths
+    strays = plant_strays(paths)
+    plain = paths.bin / "plain"
+    plain.write_bytes(b"#!/bin/sh\necho mine\n")
+    extra = paths.bin / "kerbrute-extra"
+    extra.write_bytes(b"#!/bin/sh\n# pwn-broker tool: kerbrute\n")
+    keep = sorted(
+        p.relative_to(paths.opt).as_posix()
+        for p in paths.opt.rglob("*")
+        if not any(p == s or s in p.parents for s in strays)
+    )
+    console = FakeConsole(["y"])
+    toolhooks.leftovers(paths, console)
+    assert console.asked == [SWEEP_QUESTION]
+    assert [t for k, t in console.lines if k == "info"] == [f"left      {s}" for s in sorted(strays)]
+    assert [t for k, t in console.lines if k == "ok"] == [f"removed {s}" for s in sorted(strays)]
+    assert not any(os.path.lexists(s) for s in strays)
+    assert sorted(p.relative_to(paths.opt).as_posix() for p in paths.opt.rglob("*")) == keep
+    assert plain.exists() and extra.exists() and (paths.bin / "kerbrute").exists()
+
+
+def test_files_left_by_an_interrupted_install_stay_on_no(tooled):
+    strays = plant_strays(tooled.paths)
+    toolhooks.leftovers(tooled.paths, FakeConsole(["n"]))
+    assert all(os.path.lexists(s) for s in strays)
+
+
+def test_files_left_by_a_first_install_are_found_with_no_tool_installed(paths):
+    stray = paths.tools / "kerbrute" / "1.0.3-1"
+    stray.mkdir(parents=True)
+    paths.bin.mkdir(parents=True)
+    launcher = paths.bin / "kerbrute"
+    launcher.write_bytes(b"#!/bin/sh\n# pwn-broker tool: kerbrute\n")
+    console = FakeConsole(["y"])
+    toolhooks.leftovers(paths, console)
+    assert console.asked == [SWEEP_QUESTION]
+    assert not (paths.tools / "kerbrute").exists() and not launcher.exists()
+
+
+def test_nothing_is_swept_while_the_installed_list_cannot_be_read(tooled):
+    strays = plant_strays(tooled.paths)
+    tooled.paths.tools_state.write_text("not toml [", encoding="utf-8")
+    console = FakeConsole(["y"])
+    toolhooks.leftovers(tooled.paths, console)
+    assert console.asked == [] and [k for k, _ in console.lines] == ["warn"]
+    assert all(os.path.lexists(s) for s in strays)
+
+
+def test_a_clean_root_asks_nothing(tooled):
+    (tooled.paths.bin / "plain").write_bytes(b"#!/bin/sh\n")
+    console = FakeConsole()
+    toolhooks.leftovers(tooled.paths, console)
+    assert console.asked == [] and console.lines == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_links_are_never_followed_or_removed(tooled, tmp_path):
+    outside = tmp_path / "outside"
+    (outside / "1-1").mkdir(parents=True)
+    (tooled.paths.tools / "ghost").symlink_to(outside, target_is_directory=True)
+    (tooled.paths.upload).mkdir(parents=True, exist_ok=True)
+    (tooled.paths.upload / "ghost").symlink_to(outside, target_is_directory=True)
+    target = tmp_path / "launcher"
+    target.write_bytes(b"#!/bin/sh\n# pwn-broker tool: ghost\n")
+    (tooled.paths.bin / "ghost-cmd").symlink_to(target)
+    console = FakeConsole(["y"])
+    toolhooks.leftovers(tooled.paths, console)
+    assert console.asked == []
+    assert (outside / "1-1").is_dir() and target.exists()
+
+
+def test_a_removed_orphans_home_paths_are_named_not_deleted(tooled, user):
+    finish_without_undo(tooled)
+    console = FakeConsole(["y"])
+    toolhooks.leftovers(tooled.paths, console)
+    assert load_installed(tooled.paths) == {}
+    assert (user / ".kerb" / "found.txt").exists()
+    assert (
+        "warn",
+        f"{user / '.kerb'} was left by kerbrute; remove it by hand if it is not needed",
+    ) in console.lines

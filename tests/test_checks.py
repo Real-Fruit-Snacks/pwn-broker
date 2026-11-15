@@ -312,11 +312,12 @@ def test_venv_check_passes_when_python_can_make_environments(paths):
 
     _ready(paths)
     venv = _by_name(run_checks(paths, Settings(), _env(paths), which=_found, run=run))["venv"]
-    assert venv.status == "ok" and seen == [["python3", "-m", "venv", "--help"]]
+    # venv --help works without python3-venv; ensurepip is the part that package adds
+    assert venv.status == "ok" and seen == [["python3", "-c", "import ensurepip"]]
 
 
 @pytest.mark.parametrize("failure", ["exit", "missing", "hang"])
-def test_venv_check_fails_with_the_package_hint(paths, failure):
+def test_venv_check_warns_with_the_package_hint(paths, failure):
     import subprocess
 
     def run(argv, **kwargs):
@@ -328,4 +329,16 @@ def test_venv_check_fails_with_the_package_hint(paths, failure):
 
     _ready(paths)
     venv = _by_name(run_checks(paths, Settings(), _env(paths), which=_found, run=run))["venv"]
-    assert venv.status == "fail" and venv.hint == "apt install python3-venv"
+    assert venv.status == "warn" and venv.hint == "apt install python3-venv"
+
+
+def test_a_missing_venv_does_not_stop_the_app(paths):
+    def run(argv, **kwargs):
+        return SimpleNamespace(returncode=1)
+
+    _ready(paths)
+    results = run_checks(paths, Settings(), _env(paths), which=_found, run=run)
+    assert not any(r.status == "fail" for r in results)
+    console = FakeConsole()
+    checks.report(console, results)
+    assert ("warn", "venv   python3 cannot make virtual environments") in console.lines

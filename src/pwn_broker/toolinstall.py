@@ -20,6 +20,7 @@ from pwn_broker.toolpkg import (
     build_id,
     check_lock,
     machine_arch,
+    package_manifest,
     unpack,
     valid_command_name,
     valid_tool_name,
@@ -71,25 +72,27 @@ def launcher_text(paths: AppPaths, manifest: Manifest, command: Command, folder:
         _DATA in a for a in command.args
     )
     marker = f'"$run/tools/{tool}.$$"'
+    # helpers are run with command -p: the app's bin comes first on PATH, and a tool's own
+    # command of the same name must never be picked up in their place
     lines = [
         "#!/bin/sh",
         f"{_MARK}{tool}",
         f"run={sh_quote(paths.run.as_posix())}",
         "box=''",
         'if [ -r "$run/box" ]; then',
-        '    box="$(sed -n 1p "$run/box")"',
-        '    pid="$(sed -n 2p "$run/box")"',
+        '    box="$(command -p sed -n 1p "$run/box")"',
+        '    pid="$(command -p sed -n 2p "$run/box")"',
         "    kill -0 \"$pid\" 2>/dev/null || box=''",
         "fi",
         # the process start time lets a later reader tell a reused process ID from this run
         # a failed redirection must not end the shell, so the whole group is silenced and forgiven
-        "{ { sed 's/.*) //' \"/proc/$$/stat\" | cut -d' ' -f20; } > "
-        f"{marker}; }} 2>/dev/null || true",
+        "{ { command -p sed 's/.*) //' \"/proc/$$/stat\" | command -p cut -d' ' -f20; } "
+        f"> {marker}; }} 2>/dev/null || true",
     ]
     if uses_data:
         lines += [
             "data=''",
-            f'if [ -n "$box" ]; then data="$box/tooldata/{tool}"; mkdir -p "$data"; fi',
+            f'if [ -n "$box" ]; then data="$box/tooldata/{tool}"; command -p mkdir -p "$data"; fi',
         ]
     for name, value in command.env.items():
         if not _ENV_NAME.fullmatch(name) or name in _OWN_VARIABLES:
@@ -101,10 +104,10 @@ def launcher_text(paths: AppPaths, manifest: Manifest, command: Command, folder:
             lines.append(export)
     target = " ".join(_target(folder, command))
     if any(_DATA in a for a in command.args):
-        # arguments go in front of the user's own, last one first
-        for arg in reversed(command.args):
-            setter = f'set -- {_value(arg)} "$@"'
-            lines.append(f'if [ -n "$data" ]; then {setter}; fi' if _DATA in arg else setter)
+        # an option without its value would swallow the user's first argument, so with no box
+        # open none of the manifest's arguments are given
+        args = " ".join(_value(a) for a in command.args)
+        lines.append(f'if [ -n "$data" ]; then set -- {args} "$@"; fi')
         lines.append(f'exec {target} "$@"')
     else:
         args = "".join(f" {_value(a)}" for a in command.args)
@@ -255,6 +258,13 @@ def install(
     old_tools = list(box.tools)
     try:
         verify_zip(zip_path, size=entry.size, sha256=entry.sha256)
+        named = {c.name for c in package_manifest(zip_path).commands}
+        if named != set(entry.commands):
+            # tool list shows what the index says, so the two must agree
+            raise ToolError(
+                f"the package's commands ({', '.join(sorted(named)) or 'none'}) are not the "
+                f"commands the index lists ({', '.join(sorted(entry.commands)) or 'none'})"
+            )
         if os.path.lexists(folder):
             _delete_tree(folder)
         manifest = unpack(zip_path, folder)
@@ -451,15 +461,23 @@ def release(
     return True
 
 
-def _is_ours(path: Path, name: str) -> bool:
+def _owner(path: Path) -> str | None:
+    # the tool a launcher was written for, from its marker line; None for anything else
     if path.is_symlink() or not path.is_file():
-        return False
+        return None
     try:
         with open(path, "rb") as fh:
             head = fh.read(4096).split(b"\n")
     except OSError:
-        return False
-    return len(head) > 1 and head[1] == f"{_MARK}{name}".encode()
+        return None
+    mark = _MARK.encode()
+    if len(head) < 2 or not head[1].startswith(mark):
+        return None
+    return head[1][len(mark) :].decode("utf-8", errors="replace")
+
+
+def _is_ours(path: Path, name: str) -> bool:
+    return _owner(path) == name
 
 
 def remove_files(paths: AppPaths, item: Installed) -> None:
@@ -499,3 +517,61 @@ def remove_files(paths: AppPaths, item: Installed) -> None:
         pass
     if problems:
         raise ToolError("; ".join(problems))
+
+
+# ---- files an interrupted install left behind
+
+
+def _entries(folder: Path) -> list[os.DirEntry]:
+    try:
+        return sorted(os.scandir(folder), key=lambda e: e.name)
+    except OSError:
+        return []
+
+
+def _real_folder(entry: os.DirEntry) -> bool:
+    try:
+        return entry.is_dir(follow_symlinks=False)
+    except OSError:
+        return False
+
+
+def stray_files(paths: AppPaths, installed: dict[str, Installed]) -> list[Path]:
+    """Folders and launchers the installed list does not account for. Links are never followed."""
+    found: list[Path] = []
+    for entry in _entries(paths.tools):
+        if not _real_folder(entry):
+            continue
+        item = installed.get(entry.name)
+        if item is None:
+            found.append(Path(entry.path))
+            continue
+        builds = {build_id(item.version, item.build), Path(item.folder).name}
+        found += [
+            Path(e.path)
+            for e in _entries(Path(entry.path))
+            if _real_folder(e) and e.name not in builds
+        ]
+    found += [
+        Path(e.path) for e in _entries(paths.upload) if _real_folder(e) and e.name not in installed
+    ]
+    for entry in _entries(paths.bin):
+        owner = _owner(Path(entry.path))
+        if owner is not None and owner not in installed:
+            found.append(Path(entry.path))
+    return sorted(found)
+
+
+def remove_stray(paths: AppPaths, path: Path) -> None:
+    roots = (
+        (paths.tools, "a tool folder"),
+        (paths.upload, "an upload folder"),
+        (paths.bin, "a launcher"),
+    )
+    for root, what in roots:
+        if root in (path.parent, path.parent.parent):
+            break
+    else:
+        raise ToolError(f"refusing to touch {path}: it is not inside {paths.opt}")
+    _check_inside(path, root, what)
+    _delete_tree(path)

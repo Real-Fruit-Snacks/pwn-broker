@@ -656,3 +656,53 @@ def test_check_lock_has_a_size_cap():
     line = f"a==1 {LOCK_HASH}\n".encode()
     with pytest.raises(ToolError, match="too large"):
         toolpkg.check_lock(line * (1024 * 1024 // len(line) + 1))
+
+
+# ---- command names
+
+
+RESERVED = (
+    "sh bash dash zsh fish sudo su doas env python python3 pip pip3 sed cut mkdir kill cat rm "
+    "ls cp mv ln tar vim vi pwn-broker"
+).split()
+
+
+@pytest.mark.parametrize("name", RESERVED)
+def test_reserved_command_names_are_refused(name):
+    assert not toolpkg.valid_command_name(name)
+    data = sample_manifest(command=[{"name": name, "type": "binary", "path": "files/kerbrute"}])
+    with pytest.raises(ToolError, match=f"{name!r} is reserved"):
+        parse_manifest(data)
+
+
+def test_names_that_only_look_reserved_are_allowed():
+    for name in ("sed2", "Sudo", "python3.13", "kerbrute"):
+        assert toolpkg.valid_command_name(name)
+
+
+# ---- home entries
+
+
+SHARED = (
+    ".config .local .local/share .local/bin .cache .bashrc .zshrc .profile .bash_profile "
+    ".bash_history .zsh_history .vimrc .gitconfig Desktop Documents Downloads"
+).split()
+
+
+@pytest.mark.parametrize(
+    "entry", [".ssh", ".ssh/id_ed25519", ".ssh/x/y", ".gnupg", ".gnupg/pubring.kbx", *SHARED]
+)
+def test_home_entries_that_are_shared_places_are_refused(entry):
+    data = both_manifest()
+    data["data"] = {"home": [".kerb", entry]}
+    with pytest.raises(ToolError, match=f"data.home: {entry!r}"):
+        parse_manifest(data)
+
+
+@pytest.mark.parametrize(
+    "entry", [".config/kerbrute", ".local/share/kerbrute", ".cache/kerbrute", ".sshx", "desktop", ".Config"]
+)
+def test_home_entries_inside_shared_places_are_allowed(entry):
+    data = both_manifest()
+    data["data"] = {"home": [entry]}
+    assert parse_manifest(data).home == [entry]

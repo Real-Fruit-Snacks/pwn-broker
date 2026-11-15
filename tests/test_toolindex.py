@@ -1,8 +1,12 @@
+import email.message
 import hashlib
 import http.server
+import io
 import os
 import threading
 import time
+import urllib.request
+import urllib.response
 from dataclasses import replace
 from datetime import timedelta
 
@@ -792,3 +796,64 @@ def test_known_names_reads_a_changed_file_again(paths, tmp_path):
         index_text(tool_row(name="kerbrute"), tool_row(name="another-one")), encoding="utf-8"
     )
     assert toolindex.known_names(paths, settings) == ["another-one", "kerbrute"]
+
+
+# ---- redirects
+
+
+class StandIn(urllib.request.BaseHandler):
+    # answers http and https from a table instead of the network
+    handler_order = 100
+
+    def __init__(self, answers):
+        self.answers = answers
+        self.asked = []
+
+    def _answer(self, request):
+        url = request.full_url
+        self.asked.append(url)
+        status, location, body = self.answers[url]
+        headers = email.message.Message()
+        if location:
+            headers["Location"] = location
+        response = urllib.response.addinfourl(io.BytesIO(body), headers, url, status)
+        response.msg = "stand-in"
+        return response
+
+    http_open = https_open = _answer
+
+
+def stand_in(monkeypatch, answers):
+    handler = StandIn(answers)
+    monkeypatch.setattr(toolindex, "_OPENER", toolindex._opener(handler))
+    return handler
+
+
+def test_the_opener_in_use_guards_redirects():
+    kinds = [type(h) for h in toolindex._OPENER.handlers]
+    assert toolindex._SafeRedirect in kinds
+    assert urllib.request.HTTPRedirectHandler not in kinds
+
+
+@pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
+@pytest.mark.parametrize(
+    "target", ["ftp://example.invalid/index.toml", "file:///etc/passwd", "data:,schema"]
+)
+def test_a_redirect_away_from_http_is_refused(monkeypatch, code, target):
+    handler = stand_in(monkeypatch, {URL: (code, target, b"")})
+    with pytest.raises(ToolError, match="redirect"):
+        toolindex._fetch_index(URL, 2)
+    assert handler.asked == [URL]
+
+
+def test_a_redirect_away_from_http_is_refused_for_a_zip_too(monkeypatch, tmp_path):
+    stand_in(monkeypatch, {URL: (302, "ftp://example.invalid/x.zip", b"")})
+    with pytest.raises(ToolError, match="redirect"):
+        toolindex._download(URL, tmp_path / "x.zip", 100, 5)
+
+
+def test_a_redirect_to_https_is_followed(monkeypatch):
+    other = "https://elsewhere.invalid/index.toml"
+    handler = stand_in(monkeypatch, {URL: (302, other, b""), other: (200, None, b"schema = 1\n")})
+    assert toolindex._fetch_index(URL, 2) == b"schema = 1\n"
+    assert handler.asked == [URL, other]

@@ -21,6 +21,12 @@ MAX_UNPACKED_BYTES = 1024**3
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 _COMMAND_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _TOP_FILES = (MANIFEST, "LICENSE", "wheels.lock")
+# a launcher by one of these names, first on PATH, would stand in for something the user,
+# sudo or the app itself relies on
+RESERVED_COMMANDS = frozenset(
+    "sh bash dash zsh fish sudo su doas env python python3 pip pip3 sed cut mkdir kill cat rm "
+    "ls cp mv ln tar vim vi pwn-broker".split()
+)
 LOCK_LIMIT = 1024 * 1024
 # pip obeys options, URLs and markers in a requirements file; only exact pins with hashes pass
 _LOCK_LINE = re.compile(
@@ -82,7 +88,7 @@ def valid_tool_name(name: str) -> bool:
 
 
 def valid_command_name(name: str) -> bool:
-    return _COMMAND_NAME.fullmatch(name) is not None
+    return _COMMAND_NAME.fullmatch(name) is not None and name not in RESERVED_COMMANDS
 
 
 def build_id(version: str, build: int) -> str:
@@ -103,6 +109,14 @@ def machine_arch() -> str:
 
 
 # ---- manifest
+
+# finish deletes what a tool wrote under these names, so a manifest may not claim places that
+# hold the user's own keys or settings; a tool's own folder inside one (.config/<tool>) is fine
+_PRIVATE_HOME = (".ssh", ".gnupg")
+_SHARED_HOME = frozenset(
+    ".config .local .local/share .local/bin .cache .bashrc .zshrc .profile .bash_profile "
+    ".bash_history .zsh_history .vimrc .gitconfig Desktop Documents Downloads".split()
+)
 
 
 def _text(table: dict, key: str, label: str, *, required: bool = True) -> str:
@@ -148,7 +162,9 @@ def _table_list(data: dict, key: str) -> list[dict]:
 def _command(row: dict, index: int) -> Command:
     label = f"command[{index}]"
     name = _text(row, "name", f"{label}.name")
-    if not _COMMAND_NAME.fullmatch(name):
+    if name in RESERVED_COMMANDS:
+        raise ToolError(f"{label}.name: {name!r} is reserved and cannot be a tool's command")
+    if not valid_command_name(name):
         raise ToolError(f"{label}.name: {name!r} is not a valid command name")
     kind = row.get("type")
     if kind not in COMMAND_TYPES:
@@ -250,6 +266,10 @@ def parse_manifest(data: dict) -> Manifest:
     home = _strings(home_table, "home", "data.home")
     for entry in home:
         _relative(entry, "data.home")
+        if entry.split("/")[0] in _PRIVATE_HOME or entry in _SHARED_HOME:
+            raise ToolError(
+                f"data.home: {entry!r} is shared with everything else in the home folder"
+            )
 
     return Manifest(
         name=name,
@@ -432,23 +452,39 @@ def _clean_up(created: list[Path], dest: Path) -> None:
                 pass
 
 
+def _read_package(zf: zipfile.ZipFile) -> tuple[Manifest, dict[str, zipfile.ZipInfo]]:
+    seen = _check_entries(zf.infolist())
+    info = seen.get(MANIFEST)
+    if info is None or info.is_dir():
+        raise ToolError(f"{MANIFEST} is missing from the package")
+    if info.file_size > _MANIFEST_LIMIT:
+        raise ToolError(f"{MANIFEST} is too large")
+    manifest = _parse_text(zf.read(info), MANIFEST)
+    _check_named_files(manifest, seen)
+    if manifest.python is not None:
+        lock = manifest.python.lock
+        check_lock(zf.read(seen[lock]), lock)
+    return manifest, seen
+
+
+def package_manifest(zip_path: Path) -> Manifest:
+    """The manifest of a package, checked as unpack checks it, without writing anything."""
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            return _read_package(zf)[0]
+    except ToolError:
+        raise
+    except Exception as exc:
+        raise ToolError(f"cannot read {zip_path.name}: {exc}") from exc
+
+
 def unpack(zip_path: Path, dest: Path) -> Manifest:
     if os.path.lexists(dest):
         raise ToolError(f"{dest} already exists")
     created: list[Path] = []
     try:
         with zipfile.ZipFile(zip_path) as zf:
-            seen = _check_entries(zf.infolist())
-            info = seen.get(MANIFEST)
-            if info is None or info.is_dir():
-                raise ToolError(f"{MANIFEST} is missing from the package")
-            if info.file_size > _MANIFEST_LIMIT:
-                raise ToolError(f"{MANIFEST} is too large")
-            manifest = _parse_text(zf.read(info), MANIFEST)
-            _check_named_files(manifest, seen)
-            if manifest.python is not None:
-                lock = manifest.python.lock
-                check_lock(zf.read(seen[lock]), lock)
+            manifest, seen = _read_package(zf)
             _make_dest(dest, created)
             _extract(zf, seen, dest)
     except BaseException as exc:

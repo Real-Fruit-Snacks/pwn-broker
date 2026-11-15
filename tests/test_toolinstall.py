@@ -18,6 +18,7 @@ from pwn_broker.toolinstall import (
     python_version,
     release,
     remove_files,
+    remove_stray,
     sh_quote,
 )
 from pwn_broker.toolpkg import Command, ToolError, machine_arch, unpack
@@ -124,9 +125,10 @@ def test_binary_launcher_text(paths, tmp_path):
     assert lines[1] == "# pwn-broker tool: kerbrute"
     assert lines[2] == f"run='{paths.run.as_posix()}'"
     assert (
-        "{ { sed 's/.*) //' \"/proc/$$/stat\" | cut -d' ' -f20; } > \"$run/tools/kerbrute.$$\"; } "
-        "2>/dev/null || true"
+        "{ { command -p sed 's/.*) //' \"/proc/$$/stat\" | command -p cut -d' ' -f20; } "
+        "> \"$run/tools/kerbrute.$$\"; } 2>/dev/null || true"
     ) in lines
+    assert '    box="$(command -p sed -n 1p "$run/box")"' in lines
     assert 'data=' not in text
     assert lines[-2] == f"exec '{folder.as_posix()}/files/kerbrute' \"$@\""
     assert text.endswith("\n")
@@ -168,14 +170,15 @@ def test_launcher_with_data(paths, tmp_path):
     text = launcher_text(paths, manifest, cmd, paths.tools / "kerbrute" / "1")
     lines = text.split("\n")
     assert "data=''" in lines
-    assert 'if [ -n "$box" ]; then data="$box/tooldata/kerbrute"; mkdir -p "$data"; fi' in lines
+    assert (
+        'if [ -n "$box" ]; then data="$box/tooldata/kerbrute"; command -p mkdir -p "$data"; fi'
+    ) in lines
     assert "if [ -n \"$data\" ]; then export HOME_X=\"$data\"'/home'; fi" in lines
     assert "export PLAIN='p'" in lines
     assert "if [ -n \"$data\" ]; then export Q='a'\\''b'\"$data\"'c'; fi" in lines
-    assert "set -- 'last' \"$@\"" in lines
-    assert 'if [ -n "$data" ]; then set -- "$data" "$@"; fi' in lines
-    assert lines.index("set -- 'last' \"$@\"") < lines.index('if [ -n "$data" ]; then set -- "$data" "$@"; fi')
-    assert lines[-2].startswith("exec '") and lines[-2].endswith(" \"$@\"")
+    # an option and its value go in together, or not at all when no box is open
+    assert lines[-3] == 'if [ -n "$data" ]; then set -- \'--out\' "$data" \'last\' "$@"; fi'
+    assert lines[-2].startswith("exec '") and lines[-2].endswith("/files/kerbrute' \"$@\"")
 
 
 def test_launcher_refuses_line_breaks_and_bad_env_names(paths, tmp_path):
@@ -234,6 +237,93 @@ def test_launcher_survives_an_unwritable_marker_folder(paths, tmp_path, shell, s
     script.write_bytes(launcher_text(paths, manifest, cmd, folder).encode())
     (folder / "files" / "kerbrute").write_bytes(b"#!/bin/sh\necho ran\nexit 7\n")
     result = run_sh([script.as_posix()], shell=shell)
+    assert (result.returncode, result.stdout.strip(), result.stderr) == (7, "ran", "")
+
+
+def shell_launcher(paths, tmp_path, cmd, body):
+    manifest = manifest_of(tmp_path)
+    folder = tmp_path / "unpacked"
+    script = tmp_path / "launcher.sh"
+    script.write_bytes(launcher_text(paths, manifest, cmd, folder).encode())
+    (folder / "files" / "kerbrute").write_bytes(body)
+    return script
+
+
+def run_with_box(shell, script, paths, box_dir, *args, env_extra=None):
+    # run/box names the shell that then becomes the launcher, so the box counts as open
+    opener = (
+        f'printf "%s\\n%s\\n" {sh_quote(box_dir.as_posix())} "$$" > '
+        f'{sh_quote(paths.run_box.as_posix())}; exec {shell} {sh_quote(script.as_posix())} "$@"'
+    )
+    return run_sh(["-c", opener, shell, *args], env_extra=env_extra, shell=shell)
+
+
+PRINT_ARGS = b'#!/bin/sh\nfor a in "$@"; do printf "[%s]" "$a"; done\n'
+
+
+@pytest.mark.skipif(not SHELLS, reason="needs sh")
+@pytest.mark.parametrize("shell", SHELLS)
+def test_args_that_need_a_box_are_added_only_while_one_is_open(paths, tmp_path, shell):
+    paths.run.mkdir(parents=True)
+    cmd = Command(
+        "kerbrute", "binary", path="files/kerbrute", args=["--out", "{data}/out.txt", "-q"]
+    )
+    script = shell_launcher(paths, tmp_path, cmd, PRINT_ARGS)
+    alone = run_sh([script.as_posix(), "mine"], shell=shell)
+    assert (alone.returncode, alone.stdout, alone.stderr) == (0, "[mine]", "")
+    box_dir = tmp_path / "boxdir"
+    box_dir.mkdir()
+    opened = run_with_box(shell, script, paths, box_dir, "mine")
+    data = f"{box_dir.as_posix()}/tooldata/kerbrute"
+    assert (opened.returncode, opened.stderr) == (0, "")
+    assert opened.stdout == f"[--out][{data}/out.txt][-q][mine]"
+    assert (box_dir / "tooldata" / "kerbrute").is_dir()
+
+
+@pytest.mark.skipif(not SHELLS, reason="needs sh")
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("state", ["present", "missing", "a file"])
+def test_the_launcher_never_runs_a_sed_cut_or_mkdir_from_path(paths, tmp_path, shell, state):
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    ran = tmp_path / "fake-ran"
+    for name in ("sed", "cut", "mkdir"):
+        tool = fake / name
+        tool.write_bytes(f"#!/bin/sh\necho {name} >> '{ran.as_posix()}'\necho /elsewhere\n".encode())
+        tool.chmod(0o755)
+    paths.run.mkdir(parents=True)
+    if state == "present":
+        (paths.run / "tools").mkdir()
+    elif state == "a file":
+        (paths.run / "tools").write_text("not a folder")
+    cmd = Command("kerbrute", "binary", path="files/kerbrute", env={"OUT": "{data}"})
+    script = shell_launcher(paths, tmp_path, cmd, b'#!/bin/sh\necho "ran $OUT"\nexit 7\n')
+    box_dir = tmp_path / "boxdir"
+    box_dir.mkdir()
+    env = {"PATH": f"{fake.as_posix()}:/usr/bin:/bin"}
+    result = run_with_box(shell, script, paths, box_dir, env_extra=env)
+    data = f"{box_dir.as_posix()}/tooldata/kerbrute"
+    assert (result.returncode, result.stdout.strip(), result.stderr) == (7, f"ran {data}", "")
+    assert not ran.exists()
+    assert (box_dir / "tooldata" / "kerbrute").is_dir()
+    markers = list((paths.run / "tools").glob("kerbrute.*")) if state == "present" else []
+    if state == "present":
+        assert len(markers) == 1
+        assert markers[0].read_text(encoding="utf-8").strip().isdecimal()
+
+
+@posix_only
+@pytest.mark.skipif(not SHELLS, reason="needs sh")
+@pytest.mark.parametrize("shell", SHELLS)
+def test_the_launcher_starts_when_the_marker_folder_is_read_only(paths, tmp_path, shell):
+    (paths.run / "tools").mkdir(parents=True)
+    (paths.run / "tools").chmod(0o500)
+    try:
+        cmd = Command("kerbrute", "binary", path="files/kerbrute")
+        script = shell_launcher(paths, tmp_path, cmd, b"#!/bin/sh\necho ran\nexit 7\n")
+        result = run_sh([script.as_posix()], shell=shell)
+    finally:
+        (paths.run / "tools").chmod(0o700)
     assert (result.returncode, result.stdout.strip(), result.stderr) == (7, "ran", "")
 
 
@@ -426,6 +516,30 @@ def test_manifest_must_match_entry(paths, box, tmp_path):
     with pytest.raises(ToolError, match="not kerbrute 9.9.9-1"):
         do_install(paths, box, entry, zip_path, tmp_path)
     assert_nothing_left(paths)
+
+
+@pytest.mark.parametrize("commands", [[], ["other"], ["kerbrute", "extra"]])
+def test_commands_must_match_the_index_before_anything_is_written(paths, box, tmp_path, commands):
+    zip_path, entry = build(tmp_path)
+    entry.commands = commands
+    fake = FakeRun()
+    with pytest.raises(ToolError, match="commands"):
+        do_install(paths, box, entry, zip_path, tmp_path, run=fake)
+    assert snapshot(paths) == [] and fake.calls == []
+    assert box.tools == []
+
+
+def test_commands_in_another_order_still_match(paths, box, tmp_path):
+    zip_path, entry = build(
+        tmp_path, files={"files/a": SCRIPT, "files/b": SCRIPT},
+        command=[
+            {"name": "first", "type": "binary", "path": "files/a"},
+            {"name": "second", "type": "binary", "path": "files/b"},
+        ],
+    )  # fmt: skip
+    entry.commands = ["second", "first"]
+    item, _c, _i = do_install(paths, box, entry, zip_path, tmp_path)
+    assert item.commands == ["first", "second"]
 
 
 def test_bad_zip_hash(paths, box, tmp_path):
@@ -910,3 +1024,12 @@ def test_real_data_in_env(paths, box, tmp_path):
     # no box open: back to the tool's own defaults
     paths.run_box.unlink()
     assert read_launcher_output(launcher).stdout.strip() == "data=unset"
+
+
+def test_remove_stray_refuses_anything_outside_the_apps_folders(paths, tmp_path):
+    victim = tmp_path / "precious"
+    victim.mkdir()
+    for path in (victim, paths.opt, paths.tools, paths.run / "tools", paths.tools / "a" / "b" / "c"):
+        with pytest.raises(ToolError):
+            remove_stray(paths, path)
+    assert victim.is_dir()

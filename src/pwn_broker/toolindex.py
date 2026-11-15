@@ -6,6 +6,7 @@ import stat
 import threading
 import time
 import tomllib
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -192,9 +193,30 @@ def _parse_bytes(raw: bytes) -> Index:
 # ---- network
 
 
+class _SafeRedirect(urllib.request.HTTPRedirectHandler):
+    # urllib follows a redirect to ftp:// on its own; only http and https are followed here
+    def http_error_302(self, req, fp, code, msg, headers):
+        target = headers.get("location") or headers.get("uri")
+        if target is not None:
+            full = urllib.parse.urljoin(req.full_url, target)
+            if not is_url(full):
+                fp.close()
+                raise ToolError(f"{req.full_url} redirects to {full}, which is not http or https")
+        return super().http_error_302(req, fp, code, msg, headers)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+
+def _opener(*extra: urllib.request.BaseHandler) -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(_SafeRedirect, *extra)
+
+
+_OPENER = _opener()
+
+
 def _open(url: str, timeout: float):
     request = urllib.request.Request(url, headers={"User-Agent": "pwn-broker"})
-    return urllib.request.urlopen(request, timeout=timeout)
+    return _OPENER.open(request, timeout=timeout)
 
 
 def _fetch_index(url: str, timeout: float) -> bytes:
