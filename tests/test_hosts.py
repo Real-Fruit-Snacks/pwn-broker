@@ -587,6 +587,18 @@ def test_write_as_user_run_raising_cleans_up(file, scratch):
     assert list(scratch.iterdir()) == []
 
 
+def test_write_as_user_ctrl_c_at_sudo_is_a_hosts_error_and_cleans_up(file, scratch):
+    before = file.read_bytes()
+
+    def interrupted(argv):
+        raise KeyboardInterrupt
+
+    with pytest.raises(HostsError, match="^sudo was cancelled$"):
+        hosts.write(file, before, b"new\n", root=False, scratch=scratch, run=interrupted)
+    assert file.read_bytes() == before
+    assert list(scratch.iterdir()) == []
+
+
 @pytest.mark.parametrize("root", [True, False])
 def test_write_refuses_when_file_changed_since_read(file, scratch, root):
     before = file.read_bytes()

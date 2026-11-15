@@ -1,7 +1,9 @@
 from pwn_broker import boxes, hostflow, note, targetflow
+from pwn_broker.model import Target
 from pwn_broker.paths import safe_name
 from pwn_broker.questions import ask_target
-from pwn_broker.session import Session, refresh, set_current
+from pwn_broker.recstate import windows
+from pwn_broker.session import Session, recordings, refresh, set_current
 from pwn_broker.shell.commands import command, take_args
 from pwn_broker.targetflow import update_note
 
@@ -81,10 +83,21 @@ def target_edit(session: Session, args: list[str]) -> None:
         hostflow.offer(session, target)
 
 
+def _not_recording(session: Session, target: Target, doing: str) -> None:
+    """A window recording for the target writes into its folder; moving it would break that."""
+    count = sum(1 for found in recordings(session) if found.target == target.name)
+    if count:
+        them = "it" if count == 1 else "them"
+        raise ValueError(
+            f"{windows(count)} still recording for {target.name}. exit {them}, then {doing} it"
+        )
+
+
 @command("target rename", "rename a target and its folder")
 def target_rename(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, ("target name",))
     target = boxes.find_target(session.targets, name)
+    _not_recording(session, target, "rename")
     old = target.name
     new = session.console.ask("new name")
     try:
@@ -109,6 +122,7 @@ def target_rename(session: Session, args: list[str]) -> None:
 def target_remove(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, ("target name",))
     target = boxes.find_target(session.targets, name)
+    _not_recording(session, target, "remove")
     boxes.ensure_removable(session.box, target.name)
     if not session.console.confirm(f"remove target {target.name}?"):
         return

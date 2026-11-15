@@ -71,6 +71,28 @@ PID = 4321
 QUESTION = "the VPN is still up (10.10.14.7). stop it?"
 
 
+def test_ctrl_c_at_sudo_during_the_hosts_undo_still_asks_the_vpn_and_folder_questions(
+    session, system, registered
+):
+    _vpn_running(session, system)
+    box_id = session.box.id
+    session.box.hosts = ["dc01"]
+    text = "127.0.0.1 localhost\n" + MARKED + box_id + "\n"
+    session.hosts_path.write_text(text, encoding="utf-8", newline="")
+    session.is_root = lambda: False
+
+    def interrupted(argv):
+        raise KeyboardInterrupt
+
+    session.run_privileged = interrupted
+    session.console = FakeConsole(["y", "", "n"])
+    assert finish_box(session, **SAVED) is not None
+    assert session.console.asked == ["finish this box?", QUESTION, "remove working folder?"]
+    assert ("warn", "/etc/hosts was not changed: sudo was cancelled") in session.console.lines
+    assert session.hosts_path.read_text(encoding="utf-8") == text
+    assert session.box.status == "finished"
+
+
 def _vpn_running(session, system):
     from pwn_broker.store import write_toml
     from pwn_broker.vpn import Tunnel

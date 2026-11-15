@@ -79,6 +79,20 @@ def test_cancelling_the_question_still_pings(session, system):
     assert session.console.lines[1:] == [("info", "cancelled"), ("ok", "10.10.10.50 answered in 1 ms")]
 
 
+def test_ctrl_c_at_sudo_skips_the_line_and_still_pings(session, system):
+    def interrupted(argv):
+        raise KeyboardInterrupt
+
+    session.is_root = lambda: False
+    session.run_privileged = interrupted
+    session.console = FakeConsole(["y"])
+    targetflow.add(session, WEB, make_current=True)
+    assert session.box.hosts == [] and load_box(session.box.path).hosts == []
+    assert ("info", "add this line yourself:") in session.console.lines
+    assert session.console.lines[-1] == ("ok", "10.10.10.50 answered in 1 ms")
+    assert system.pings == ["10.10.10.50"]
+
+
 def test_a_record_that_cannot_be_saved_is_a_warning_and_the_ping_still_runs(
     session, system, monkeypatch
 ):
@@ -92,7 +106,11 @@ def test_a_record_that_cannot_be_saved_is_a_warning_and_the_ping_still_runs(
     session.console = FakeConsole(["y"])
     targetflow.after_add(session, session.targets[0])
     assert session.box.hosts == []
+    # the file is written before the record is saved; a line the box does not record is
+    # taken out by its next rewrite, or at finish
     assert session.console.lines == [
+        ("ok", "/etc/hosts updated"),
+        ("info", "    10.10.10.161 forest.htb.local"),
         ("warn", "the /etc/hosts line could not be recorded: box.toml: disk full"),
         ("ok", "10.10.10.161 answered in 1 ms"),
     ]

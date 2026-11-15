@@ -360,6 +360,48 @@ def test_target_rename_survives_a_broken_note(session, monkeypatch):
     assert load_box(session.box.path).last_target == "dc"
 
 
+def test_target_rename_refuses_while_a_window_records_for_it(session, system):
+    from casts import recording_now
+
+    cast = recording_now(session, system, "dc01")
+    session.console = FakeConsole(["dc"])
+    dispatch(session, "target rename dc01")
+    assert session.console.lines == [
+        ("fail", "1 window is still recording for dc01. exit it, then rename it")
+    ]
+    assert session.console.asked == []
+    assert cast.exists() and [t.name for t in session.targets] == ["dc01"]
+    recording_now(session, system, "dc01", "2026-11-14_1600", pid=5151)
+    session.console = FakeConsole(["dc"])
+    dispatch(session, "target rename dc01")
+    assert session.console.lines == [
+        ("fail", "2 windows are still recording for dc01. exit them, then rename it")
+    ]
+
+
+def test_target_rename_goes_ahead_while_a_window_records_for_another_target(session, system):
+    from casts import recording_now
+
+    _add(session, "web", "10.10.10.2")
+    recording_now(session, system, "web")
+    session.console = FakeConsole(["dc"])
+    dispatch(session, "target rename dc01")
+    assert ("ok", "target dc01 is now dc") in session.console.lines
+
+
+def test_target_remove_refuses_while_a_window_records_for_it(session, system):
+    from casts import recording_now
+
+    web = _add(session, "web", "10.10.10.2")
+    recording_now(session, system, "web")
+    session.console = FakeConsole(["y"])
+    dispatch(session, "target remove web")
+    assert session.console.lines == [
+        ("fail", "1 window is still recording for web. exit it, then remove it")
+    ]
+    assert session.console.asked == [] and web in session.targets
+
+
 def test_target_remove_checks_emptiness_before_asking(session):
     (session.box.path / "targets" / "dc01" / "loot" / "x.txt").write_text("x")
     session.console = FakeConsole(["y"])

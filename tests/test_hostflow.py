@@ -123,6 +123,47 @@ def test_a_declined_sudo_changes_nothing_and_prints_the_line(session, system):
     assert _text(session) == "127.0.0.1 localhost\n"
 
 
+def _interrupted(argv):
+    raise KeyboardInterrupt
+
+
+def test_ctrl_c_at_sudo_records_nothing_and_prints_the_line(session):
+    session.is_root = lambda: False
+    session.run_privileged = _interrupted
+    session.console = FakeConsole(["y"])
+    hostflow.offer(session, session.targets[0])
+    assert session.box.hosts == [] and _recorded(session) == []
+    assert session.console.lines == [
+        ("warn", "/etc/hosts was not changed: sudo was cancelled"),
+        ("info", "add this line yourself:"),
+        ("raw", _line(session, "10.10.10.161 forest.htb.local")),
+    ]
+    assert _text(session) == "127.0.0.1 localhost\n"
+
+
+def test_the_record_is_saved_only_after_the_file_is_written(session, monkeypatch):
+    seen = []
+
+    def save(box):
+        seen.append((list(box.hosts), _text(session)))
+
+    monkeypatch.setattr(hostflow, "save_box", save)
+    hostflow.file_on(session, session.targets[0])
+    assert seen == [(["dc01"], "127.0.0.1 localhost\n" + _line(session, "10.10.10.161 forest.htb.local") + "\n")]
+
+
+def test_an_interrupt_during_the_write_leaves_nothing_recorded(session, monkeypatch):
+    from pwn_broker import hosts
+
+    def interrupted(path, before, after, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(hosts, "write", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        hostflow.file_on(session, session.targets[0])
+    assert session.box.hosts == [] and _recorded(session) == []
+
+
 def test_a_failed_sync_only_prints_lines_the_file_lacks(session):
     web = _add(session, "web", ["10.10.10.5"], ["web.htb"])
     present = _line(session, "10.10.10.161 forest.htb.local")

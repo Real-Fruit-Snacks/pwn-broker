@@ -176,16 +176,18 @@ def _record(session: Session, target: Target) -> None:
     if target.name in box.hosts:
         sync(session)
         return
+    # the file first: the record follows the file, so a line that was never written is never
+    # recorded, whatever stops the write (a refusal, Ctrl-C, a crash)
     box.hosts.append(target.name)
     try:
-        save_box(box)
+        written = sync(session)
+        if written:
+            save_box(box)
     except BaseException:
         box.hosts.remove(target.name)
         raise
-    if not sync(session):
-        # the record follows the file: nothing was written, so nothing is recorded
+    if not written:
         box.hosts.remove(target.name)
-        save_box(box)
 
 
 def offer(session: Session, target: Target) -> None:

@@ -267,14 +267,19 @@ class _Lines:
     def __init__(self, lines, between=None):
         self.lines = list(lines)
         self.between = between
+        self.ended = False
 
     def __call__(self, *args, **kwargs):
         return self
 
     def prompt(self):
+        if self.ended:
+            # a session that asks again after Ctrl-D would never end
+            raise AssertionError("the prompt asked for a line after the input ended")
         if self.between:
             self.between(len(self.lines))
         if not self.lines:
+            self.ended = True
             raise EOFError
         return self.lines.pop(0)
 
@@ -404,6 +409,71 @@ def test_a_target_that_cannot_be_read_stops_the_command_and_is_retried(session, 
     failures = [text for kind, text in session.console.lines if kind == "fail"]
     assert len(failures) == 2
     assert [t.name for t in session.targets] == ["dc01", "web"]
+
+
+def _corrupt_a_target(session):
+    from pwn_broker.session import mark_seen
+
+    mark_seen(session)
+    file = session.box.path / "targets" / "dc01" / "target.toml"
+    file.write_text("this is [not toml", encoding="utf-8")
+
+
+@pytest.mark.parametrize("lines", [["quit", "run"], []], ids=["quit", "ctrl-d"])
+def test_quit_leaves_a_box_that_cannot_be_read_without_exporting_it(session, loop, lines):
+    ran = []
+    command("quit", "help")(lambda s, a: ran.append("quit handler"))
+    command("run", "help")(lambda s, a: ran.append("run"))
+    _corrupt_a_target(session)
+    loop(lines)
+    assert ran == []
+    assert session.console.lines == [("warn", "forest was not exported because it could not be read")]
+    assert session.console.asked == []
+
+
+def test_other_commands_are_still_refused_while_the_box_cannot_be_read(session, loop):
+    ran = []
+    command("quit", "help")(lambda s, a: ran.append("quit handler"))
+    command("run", "help")(lambda s, a: ran.append("run"))
+    _corrupt_a_target(session)
+    loop(["run", "quit"])
+    assert ran == []
+    [(kind, text), last] = session.console.lines
+    assert kind == "fail" and text.startswith("could not reload the box: ")
+    assert last == ("warn", "forest was not exported because it could not be read")
+
+
+def test_a_tunnel_read_that_fails_is_its_own_fail_line_and_the_command_runs(session, loop):
+    ran = []
+    command("first", "help")(lambda s, a: ran.append("first"))
+    command("second", "help")(lambda s, a: ran.append("second"))
+
+    def broken():
+        raise PermissionError(13, "Permission denied")
+
+    session.tunnel = broken
+    loop(["first", "second"])
+    assert ran == ["first", "second"]
+    failures = [text for kind, text in session.console.lines if kind == "fail"]
+    assert failures == ["could not read the VPN tunnel: [Errno 13] Permission denied"] * 2
+    assert not any("lock" in text for text in failures)
+
+
+def test_a_recording_count_that_fails_is_its_own_fail_line(session, loop, monkeypatch):
+    from pwn_broker.shell import app
+
+    ran = []
+    command("first", "help")(lambda s, a: ran.append("first"))
+
+    def broken(session, *, fresh=False):
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(app, "recording_count", broken)
+    loop(["first"])
+    assert ran == ["first"]
+    assert session.console.lines == [
+        ("fail", "could not count the windows recording: [Errno 5] Input/output error")
+    ]
 
 
 def test_a_lock_file_that_cannot_be_used_does_not_end_the_session(session, loop, monkeypatch):

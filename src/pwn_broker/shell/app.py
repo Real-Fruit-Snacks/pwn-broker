@@ -15,7 +15,7 @@ from pwn_broker.boxes import TARGET_FOLDERS
 from pwn_broker.session import (
     Session, current_tunnel, mark_seen, recording_count, reload_if_changed, rescan,
 )  # fmt: skip
-from pwn_broker.shell.commands import COMMANDS, Quit, dispatch
+from pwn_broker.shell.commands import COMMANDS, Quit, dispatch, resolve
 from pwn_broker.store import StoreError
 from pwn_broker.theme import color_enabled, prompt_style
 
@@ -124,6 +124,18 @@ def shell_style(env: Mapping[str, str]) -> Style | None:
     return prompt_style() if color_enabled(env) else None
 
 
+def _read_status(session: Session) -> None:
+    """Fresh reads for the status bar; one that fails is said and the command still runs."""
+    for what, read in (
+        ("read the VPN tunnel", lambda: current_tunnel(session, fresh=True)),
+        ("count the windows recording", lambda: recording_count(session, fresh=True)),
+    ):
+        try:
+            read()
+        except OSError as exc:
+            session.console.fail(f"could not {what}: {exc}")
+
+
 def run_shell(session: Session) -> None:
     console = session.console
     prompt = PromptSession(
@@ -151,19 +163,28 @@ def run_shell(session: Session) -> None:
                 try:
                     reload_if_changed(session)
                 except (StoreError, OSError) as exc:
+                    if resolve(line) == ("quit", []):
+                        # what could not be read cannot be exported; leaving must still work
+                        console.warn(
+                            f"{session.box.name} was not exported because it could not be read"
+                        )
+                        raise Quit from None
                     # acting on stale data, or marking the new state as seen, would hide the change
                     console.fail(f"could not reload the box: {exc}")
                     continue
                 try:
-                    current_tunnel(session, fresh=True)
-                    recording_count(session, fresh=True)
+                    _read_status(session)
                     try:
                         rescan(session)
                     except (StoreError, OSError) as exc:
                         console.warn(str(exc))
                     dispatch(session, line)
                 finally:
-                    mark_seen(session)
+                    try:
+                        mark_seen(session)
+                    except OSError as exc:
+                        # the next command reads the box again, which costs nothing but time
+                        console.fail(f"could not note the box's files as read: {exc}")
         except boxlock.Busy:
             console.fail("record is adding a target in another window; try again")
         except OSError as exc:

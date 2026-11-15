@@ -255,6 +255,9 @@ def _copy_into_place(path: Path, after: bytes, scratch: Path, run) -> None:
         with os.fdopen(handle, "wb") as stream:
             stream.write(after)
         result = run(["cp", str(staged), str(path)])
+    except KeyboardInterrupt:
+        # Ctrl-C at sudo's password prompt is a no, like any other refusal
+        raise HostsError("sudo was cancelled") from None
     except OSError as exc:
         raise HostsError(f"cannot copy into {path}: {exc.strerror or exc}") from exc
     finally:
