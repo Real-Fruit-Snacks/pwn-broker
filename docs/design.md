@@ -158,6 +158,8 @@ curl -fsSL https://raw.githubusercontent.com/Real-Fruit-Snacks/pwn-broker/main/i
 - Adds `/opt/pwn-broker/bin` to the front of PATH in the user's shell config, and prints that it did.
 - Asks no questions. Defaults are good enough to start a box immediately.
 
+Section 6.13 replaces the second step: a release becomes one file that carries its own Python, its dependencies and asciinema.
+
 ### 6.2 Root and normal user
 
 Root and a normal user are two ways of setting up a VM. They are not two users sharing one box.
@@ -497,6 +499,85 @@ forest/dc01 >
 | `check_updates` | `true` | |
 
 On a fresh VM the file does not exist. The installer takes `--config <path>` to copy one in.
+
+### 6.13 A self-contained release
+
+Not built yet. This section is the design. It replaces how section 6.1 installs the app and how section 7.10 gets asciinema.
+
+**The rule.** The Kali machine only ever downloads files I built and pinned, and nothing inside them fetches anything else. Section 8.12 does this for the tools. This section does it for the app.
+
+**Why.** Today the installer downloads a small wheel and lets `pip` fetch the app's four dependencies from PyPI, at whatever version is newest and with no checksum. It then fetches asciinema from asciinema's own release. The app also runs on Kali's `python3`, so a new Kali Python can break it: the Kali image moved to 3.14 and one of the app's own tests failed there.
+
+**Approaches.**
+
+| Decision | Options | Chosen | Why |
+|---|---|---|---|
+| What a release is | A wheel, with dependencies from PyPI · one file holding everything | One file | No third-party site is contacted at install, every byte is pinned, and a fresh VM installs the same thing every time |
+| The app's Python | Kali's own · its own, inside the release | Its own | A Kali upgrade cannot break the app, and the app needs only `sh`, `tar` and `curl` from Kali. The cost is a larger file and that Python fixes are mine to ship |
+| The app's Python and the tools' runtime | One shared copy · separate copies | Separate | Sharing would make the app need pwn-shop to be reachable, and the two repositories were split so neither shares the other's fate. The cost is a second 100 MB once a Python tool is installed |
+
+**The release file.** One file per release, `pwn-broker-<version>-linux-x86_64.tar.gz`, about 50 MB:
+
+```
+pwn-broker-<version>/
+  python.tar.gz        the upstream Python build, byte for byte
+  wheels/              the app's wheel and the wheel of every dependency
+  wheels.lock          each of those wheels pinned with its SHA-256
+  asciinema            the pinned asciinema binary
+```
+
+- The Python is the same upstream build a runtime package carries (section 8.12): `install_only_stripped` for `x86_64-unknown-linux-gnu` from `astral-sh/python-build-standalone`, pinned in this repository by size and SHA-256.
+- The app's dependencies are pinned in a lock file committed to this repository: every dependency at one version, with the SHA-256 of its wheel. All of them are pure Python, so one set of wheels serves.
+- `wheels.lock` has the strict form the tools' lock has: one exact pin with its hashes per line, and nothing else.
+- asciinema is the binary section 7.10 pins.
+- A release publishes three files: the release file, `SHA256SUMS.txt` naming it, and `install.sh`.
+
+**Installing.**
+
+```
+curl -fsSL https://raw.githubusercontent.com/Real-Fruit-Snacks/pwn-broker/main/install.sh | sh
+sh install.sh --from pwn-broker-0.1.0-linux-x86_64.tar.gz
+```
+
+1. Without `--from`, the installer downloads `SHA256SUMS.txt` and the release file from the latest release and checks the file against it. With `--from`, it uses the file on disk and contacts nothing.
+2. It unpacks the Python into `/opt/pwn-broker/python/`.
+3. That Python makes the virtual environment in `/opt/pwn-broker/app/`, and `pip` installs from `wheels/` with no index, binaries only and every hash required.
+4. It copies asciinema into `app/bin/` and checks it against its pin.
+5. It runs the app's setup, which writes the launchers and the data files as now.
+
+- The installer needs `sh`, `tar`, `gzip`, `curl` and `sha256sum`. It no longer needs `python3` or `python3-venv`.
+- An upgrade replaces `python/` and `app/` and nothing else.
+- `--from` no longer takes a source folder or a wheel. To install from a checkout, build a release file from it first; a script in the repository does that, and CI uses it.
+- `--no-asciinema` goes away: asciinema is always in the file.
+
+**What changes in the app.**
+
+- Setup no longer downloads asciinema, and the launch check for it no longer offers to. A missing or wrong asciinema is a `warn` that says to run the installer again.
+- The launch check that Kali's `python3` can make virtual environments goes away. Tools get their Python from a runtime (section 8.12); a schema 1 Python tool that still needs Kali's Python says so when it is installed.
+- The check for a newer release stays. It asks GitHub about this repository's own releases, never updates anything, and `check_updates = false` turns it off.
+
+**What still reaches out, and to where.**
+
+| When | What | Where |
+|---|---|---|
+| Install without `--from` | The release file and its checksum | This repository's release |
+| `tool install` | Packages and the index | pwn-shop's releases, or a folder on disk |
+| Launch | Whether a newer release exists | This repository's releases; can be turned off |
+
+Nothing else. With `--from` and a folder index, nothing at all.
+
+**Building it.**
+
+- A script in the repository builds the release file from a checkout: it fetches the pinned Python, the pinned wheels and the pinned asciinema, checks each against its pin, builds the app's own wheel, and writes the file. The same inputs give the same file, byte for byte.
+- CI builds the release file on every push. The Kali job installs from that file with the container's network switched off, then runs the whole cycle as now. That proves on every push that an install reaches nothing.
+- The release workflow publishes the file CI built, with `SHA256SUMS.txt` and `install.sh`.
+
+**Accepted trades.**
+
+- A release is about 50 MB, not a wheel of a few hundred kilobytes, and the app takes about 100 MB more on disk.
+- The app's Python and its OpenSSL are fixed when I ship a new release, not when Kali updates.
+- Installing from a checkout takes one more step.
+- x86_64 with glibc only.
 
 ## 7. Phase 2: recording and Kali changes
 
@@ -1145,7 +1226,7 @@ Making the environment runs the runtime's interpreter. That is the one new thing
 - A Python tool's recipe names its runtime in its manifest. `build.py lock` resolves for that runtime's series alone, and the build refuses a wheel that does not fit it. The fixed list of Python versions goes away.
 - The first runtime is `python-3.13`, at CPython 3.13.18. `certipy` and `targetedkerberoast` become build 3, each requiring it.
 - CI builds the runtime with the other packages and installs every tool through pwn-broker's own code, which now installs the runtime from the built index first.
-- A new CI job installs each recipe's current build inside the official Kali image and starts each command with `--help`, so the real tools are run on a real Kali. Publishing waits for it: a published build can never be replaced, so a build that fails on today's Kali is not published. Older builds are not tested there.
+- A new CI job installs each recipe's current build inside the official Kali image, from a folder index and with the container's network switched off, and starts each command with `--help`. So the real tools are run on a real Kali, and an install is shown to reach nothing. Publishing waits for it: a published build can never be replaced, so a build that fails on today's Kali is not published. Older builds are not tested there.
 
 **Testing.**
 
