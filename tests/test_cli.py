@@ -624,3 +624,92 @@ def test_new_box_goes_on_when_the_hosts_record_cannot_be_saved(env, system, monk
     assert system.pings == ["10.10.10.161", "10.10.10.162"]
     assert s.box.hosts == []
     assert env.console.lines[-1] == ("ok", "box forest created")
+
+
+def test_start_offers_to_remove_hosts_lines_left_by_finished_boxes(
+    env, quiet, box, ran, monkeypatch, system
+):
+    from pwn_broker import hostflow
+
+    seen = []
+    monkeypatch.setattr(hostflow, "leftovers", lambda *a, **k: seen.append((a, k)))
+    env.cwd = box.path
+    assert start(env, []) == 0
+    assert seen == [
+        (
+            (env.paths, env.console),
+            dict(
+                hosts_path=env.hosts_path,
+                is_root=env.is_root,
+                run=env.run_privileged,
+            ),
+        )
+    ]
+    assert env.hosts_path == system.hosts_path
+
+
+def test_start_looks_for_no_hosts_leftovers_while_another_prompt_is_open(
+    env, quiet, box, ran, monkeypatch
+):
+    from pwn_broker import hostflow
+
+    seen = []
+    monkeypatch.setattr(hostflow, "leftovers", lambda *a, **k: seen.append(a))
+    monkeypatch.setattr(boxes, "pid_alive", lambda pid: pid == 999)
+    boxes.acquire_open(env.paths, box, pid=999, alive=lambda pid: False)
+    assert start(env, ["new"]) == 1
+    assert seen == []
+
+
+def test_env_and_its_sessions_never_reach_the_real_hosts_file(env, box):
+    from pwn_broker import hosts
+
+    assert env.hosts_path != hosts.DEFAULT_PATH
+    assert env.is_root is not privilege.is_root
+    assert env.run_privileged is not privilege.run_privileged
+    opened = cli._load(env, box)
+    assert opened.hosts_path == env.hosts_path
+    assert opened.is_root is env.is_root
+    assert opened.run_privileged is env.run_privileged
+
+
+def test_start_puts_the_boxes_lines_back_before_the_note_window_opens(
+    env, quiet, box, ran, monkeypatch
+):
+    from pwn_broker import hostflow
+
+    order = []
+    monkeypatch.setattr(hostflow, "on_open", lambda s: order.append(("on_open", s.box.id)))
+    monkeypatch.setattr(notewindow, "open_note", lambda *a: order.append(("note",)) or True)
+    real_acquire = boxes.acquire_open
+    monkeypatch.setattr(
+        boxes, "acquire_open", lambda *a, **k: order.append(("acquire",)) or real_acquire(*a, **k)
+    )
+    env.cwd = box.path
+    assert start(env, []) == 0
+    assert order == [("acquire",), ("on_open", box.id), ("note",)]
+
+
+def test_start_does_not_open_a_box_it_could_not_acquire(env, quiet, box, ran, monkeypatch):
+    from pwn_broker import hostflow
+
+    seen = []
+    monkeypatch.setattr(hostflow, "on_open", seen.append)
+    monkeypatch.setattr(
+        boxes, "acquire_open", lambda *a, **k: (_ for _ in ()).throw(BoxError("busy"))
+    )
+    env.cwd = box.path
+    assert start(env, []) == 1
+    assert seen == []
+
+
+def test_main_registers_the_kali_hooks(tmp_path, monkeypatch):
+    from pwn_broker import hostflow
+
+    for name in ("BLOCK_HOOKS", "SUMMARY_HOOKS", "PRE_PACK_HOOKS", "UNDO_HOOKS", "RESTORE_HOOKS"):
+        monkeypatch.setattr(lifecycle, name, [])
+    monkeypatch.setattr(cli, "start", lambda env, argv: 0)
+    monkeypatch.setenv("PWN_BROKER_OPT", str(tmp_path))
+    assert main([]) == 0
+    assert hostflow.undo in lifecycle.UNDO_HOOKS
+    assert hostflow.summary in lifecycle.SUMMARY_HOOKS

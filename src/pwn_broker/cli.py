@@ -6,7 +6,8 @@ from datetime import datetime
 from pathlib import Path
 
 from pwn_broker import __version__, boxes, checks, config, lifecycle, note, notewindow, privilege
-from pwn_broker import questions, session as sessions, setup, targetflow, toolhooks
+from pwn_broker import hostflow, hosts, kalihooks, questions, session as sessions, setup
+from pwn_broker import targetflow, toolhooks
 from pwn_broker.boxes import BoxError
 from pwn_broker.config import ConfigError, Settings
 from pwn_broker.console import Cancelled, Console, TermConsole
@@ -37,10 +38,18 @@ class Env:
     pid: int
     home: Path
     run: Callable[[Session], None] = run_shell
+    # what the launch and its sessions reach /etc/hosts through; tests give each Env stand-ins
+    hosts_path: Path = hosts.DEFAULT_PATH
+    is_root: Callable[[], bool] = privilege.is_root
+    run_privileged: Callable = privilege.run_privileged
 
 
 def _load(env: Env, box: Box) -> Session:
-    return sessions.load_session(env.paths, env.settings, env.console, box, env.clock)
+    session = sessions.load_session(env.paths, env.settings, env.console, box, env.clock)
+    session.hosts_path = env.hosts_path
+    session.is_root = env.is_root
+    session.run_privileged = env.run_privileged
+    return session
 
 
 def new_box(env: Env) -> Session:
@@ -251,6 +260,13 @@ def _prepare(env: Env) -> int | None:
     # another prompt may be half way through an install: its files are not leftovers
     if not _another_prompt(env):
         toolhooks.leftovers(env.paths, console)
+        hostflow.leftovers(
+            env.paths,
+            console,
+            hosts_path=env.hosts_path,
+            is_root=env.is_root,
+            run=env.run_privileged,
+        )
 
     newer = checks.newer_release_within(env.settings)
     if newer is not None:
@@ -296,6 +312,7 @@ def start(env: Env, argv: list[str]) -> int:
         console.fail(str(exc))
         return 1
     try:
+        hostflow.on_open(session)
         if not notewindow.open_note(env.paths, env.settings, session.box, env.environ):
             command = notewindow.vim_command(env.paths, session.box.path / note.NOTE_NAME)
             console.warn("no note window opened, run: " + " ".join(command))
@@ -315,6 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     import pwn_broker.shell  # noqa: F401  (importing it fills the command registry)
 
     toolhooks.register()
+    kalihooks.register()
 
     try:
         cwd = Path.cwd()

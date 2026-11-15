@@ -1,7 +1,12 @@
 """The box's lines in /etc/hosts, kept in step with box.hosts and the targets."""
 
-from pwn_broker import hosts, toolstate
+from collections.abc import Callable
+from pathlib import Path
+
+from pwn_broker import boxes, hosts, privilege, toolstate
+from pwn_broker.console import Cancelled, Console
 from pwn_broker.model import Target
+from pwn_broker.paths import AppPaths
 from pwn_broker.session import Session
 from pwn_broker.store import save_box
 
@@ -114,6 +119,22 @@ def forget_if_unwanted(session: Session, target: Target) -> None:
         save_box(box)
 
 
+def _update(
+    paths: AppPaths,
+    hosts_path: Path,
+    root: bool,
+    run: Callable,
+    change: Callable[[bytes], bytes],
+) -> tuple[bytes, bytes]:
+    if not root:
+        try:
+            paths.run.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            reason = exc.strerror or exc
+            raise hosts.HostsError(f"cannot use {paths.run}: {reason}") from exc
+    return hosts.update(hosts_path, change, root=root, scratch=paths.run, run=run)
+
+
 def sync(session: Session) -> bool:
     """Rewrite the box's lines from box.hosts; false when the file could not be changed."""
     want = wanted(session)
@@ -126,20 +147,9 @@ def sync(session: Session) -> bool:
         return outcome.text
 
     _left_out(session, want)
-    root = session.is_root()
     try:
-        if not root:
-            try:
-                session.paths.run.mkdir(parents=True, exist_ok=True)
-            except OSError as exc:
-                reason = exc.strerror or exc
-                raise hosts.HostsError(f"cannot use {session.paths.run}: {reason}") from exc
-        before, after = hosts.update(
-            session.hosts_path,
-            change,
-            root=root,
-            scratch=session.paths.run,
-            run=session.run_privileged,
+        before, after = _update(
+            session.paths, session.hosts_path, session.is_root(), session.run_privileged, change
         )
     except hosts.HostsError as exc:
         _not_changed(session, exc, want)
@@ -221,3 +231,109 @@ def listed(session: Session) -> set[str] | None:
         fields = raw.split(b"#", 1)[0].split()
         found.update(field.decode("utf-8", "replace").lower() for field in fields[1:])
     return found
+
+
+# ---- finish, opening a box and launch
+
+
+def _count(lines: int) -> str:
+    return "1 line" if lines == 1 else f"{lines} lines"
+
+
+def _own_lines(session: Session) -> int | None:
+    try:
+        return len(hosts.marked(hosts.read(session.hosts_path)).get(session.box.id, []))
+    except hosts.HostsError:
+        return None
+
+
+def summary(session: Session) -> list[str]:
+    found = _own_lines(session)
+    if not found:
+        return []
+    return [f"hosts     {_count(found)} to remove from {FILE}"]
+
+
+def undo(session: Session) -> None:
+    """Take the box's lines out at finish; a problem is reported, never raised."""
+    if not session.box.hosts and not _own_lines(session):
+        return
+    box_id = session.box.id
+    try:
+        before, after = _update(
+            session.paths,
+            session.hosts_path,
+            session.is_root(),
+            session.run_privileged,
+            lambda text: hosts.strip(text, {box_id}),
+        )
+    except hosts.HostsError as exc:
+        # the box is finished anyway; the next launch offers to remove them again
+        _not_changed(session, exc, [])
+        return
+    if before != after:
+        removed = len(hosts.marked(before).get(box_id, []))
+        session.console.ok(f"removed {_count(removed)} from {FILE}")
+
+
+def on_open(session: Session) -> None:
+    if session.box.hosts:
+        sync(session)
+
+
+def leftovers(
+    paths: AppPaths,
+    console: Console,
+    *,
+    hosts_path: Path = hosts.DEFAULT_PATH,
+    is_root: Callable[[], bool] = privilege.is_root,
+    run: Callable = privilege.run_privileged,
+) -> None:
+    """Offer to remove lines marked with the ID of a box that is finished or gone."""
+    folders, problems = boxes.list_boxes(paths)
+    if problems:
+        return
+    try:
+        found = hosts.marked(hosts.read(hosts_path))
+    except hosts.HostsError:
+        return
+    names = {b.id: b.name for b in folders}
+    active = {b.id for b in folders if b.status == "active"}
+    try:
+        for box_id in sorted(found):
+            if box_id in active:
+                continue
+            lines = found[box_id]
+            label = names.get(box_id, box_id)
+            number, noun = len(lines), "line" if len(lines) == 1 else "lines"
+            question = f"remove {number} {FILE} {noun} left by {label}?"
+            if not console.confirm(question, default=True):
+                continue
+            _remove_left(paths, console, hosts_path, is_root, run, box_id)
+    except Cancelled:
+        pass
+
+
+def _remove_left(
+    paths: AppPaths,
+    console: Console,
+    hosts_path: Path,
+    is_root: Callable[[], bool],
+    run: Callable,
+    box_id: str,
+) -> None:
+    try:
+        before, _after = _update(
+            paths, hosts_path, is_root(), run, lambda text: hosts.strip(text, {box_id})
+        )
+    except hosts.HostsError as exc:
+        console.warn(f"{FILE} was not changed: {_reason(exc)}")
+        try:
+            present = hosts.marked(hosts.read(hosts_path)).get(box_id, [])
+        except hosts.HostsError:
+            present = []
+        for text in present:
+            console.info("remove this line yourself:")
+            console.raw(text)
+        return
+    console.ok(f"removed {_count(len(hosts.marked(before).get(box_id, [])))} from {FILE}")

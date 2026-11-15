@@ -271,3 +271,231 @@ def test_a_name_left_out_of_the_line_is_warned_about_once(session):
     session.targets[0].hostnames.append("crm.forest.htb")
     assert hostflow.sync(session) is True
     assert not any(kind == "warn" for kind, _ in session.console.lines)
+
+
+# ---- finish, opening a box and launch
+
+OTHER_ID = "2026-11-10_htb_cascade"
+LOCALHOST = "127.0.0.1 localhost\n"
+
+
+def _lines(*pairs):
+    return "".join(f"{rest}  # pwn-broker {box_id}\n" for box_id, rest in pairs)
+
+
+def _put(session, text):
+    session.hosts_path.write_text(text, encoding="utf-8", newline="")
+
+
+def _unwritable(session):
+    import subprocess
+
+    session.is_root = lambda: False
+    session.run_privileged = lambda argv: subprocess.CompletedProcess(argv, 1)
+
+
+def test_undo_removes_only_this_boxes_lines(session):
+    box_id = session.box.id
+    session.box.hosts = ["dc01"]
+    _put(
+        session,
+        LOCALHOST
+        + _lines((box_id, "10.10.10.161 forest.htb"), (OTHER_ID, "10.10.10.5 cascade.htb"))
+        + "10.0.0.9 plain.example\n",
+    )
+    hostflow.undo(session)
+    assert _text(session) == (
+        LOCALHOST + _lines((OTHER_ID, "10.10.10.5 cascade.htb")) + "10.0.0.9 plain.example\n"
+    )
+    assert session.console.lines == [("ok", "removed 1 line from /etc/hosts")]
+    assert session.box.hosts == ["dc01"]
+
+
+def test_undo_says_nothing_when_the_box_has_no_lines(session):
+    hostflow.undo(session)
+    assert session.console.lines == []
+    assert _text(session) == LOCALHOST
+
+
+def test_undo_survives_an_unwritable_file_and_prints_the_lines(session):
+    box_id = session.box.id
+    session.box.hosts = ["dc01"]
+    text = LOCALHOST + _lines((box_id, "10.10.10.161 forest.htb"))
+    _put(session, text)
+    _unwritable(session)
+    hostflow.undo(session)
+    assert _text(session) == text
+    assert session.console.lines == [
+        ("warn", "/etc/hosts was not changed: cp exited 1"),
+        ("info", "remove this line yourself:"),
+        ("raw", f"10.10.10.161 forest.htb  # pwn-broker {box_id}"),
+    ]
+
+
+def test_undo_survives_a_missing_file(session):
+    session.box.hosts = ["dc01"]
+    session.hosts_path.unlink()
+    hostflow.undo(session)
+    assert session.console.lines == [
+        ("warn", f"/etc/hosts was not changed: {session.hosts_path} is missing")
+    ]
+
+
+def test_on_open_does_nothing_for_a_box_without_lines(session):
+    hostflow.on_open(session)
+    assert session.console.lines == []
+    assert _text(session) == LOCALHOST
+
+
+def test_on_open_puts_a_missing_line_back(session):
+    session.box.hosts = ["dc01"]
+    hostflow.on_open(session)
+    assert _text(session) == LOCALHOST + _lines((session.box.id, "10.10.10.161 forest.htb.local"))
+    assert session.console.lines[0] == ("ok", "/etc/hosts updated")
+    assert session.console.asked == []
+
+
+def test_on_open_takes_out_another_boxes_clashing_line_with_a_warning(session):
+    session.box.hosts = ["dc01"]
+    _put(session, LOCALHOST + _lines((OTHER_ID, "10.10.10.99 forest.htb.local")))
+    hostflow.on_open(session)
+    assert OTHER_ID not in _text(session)
+    assert _text(session).endswith(_lines((session.box.id, "10.10.10.161 forest.htb.local")))
+    warns = [text for kind, text in session.console.lines if kind == "warn"]
+    assert warns == [
+        f"took out a line of box {OTHER_ID} that names the same host; "
+        f"it returns when {OTHER_ID} is opened"
+    ]
+
+
+def test_summary_counts_the_lines_in_the_file(session):
+    box_id = session.box.id
+    assert hostflow.summary(session) == []
+    _put(session, LOCALHOST + _lines((box_id, "10.10.10.161 a.htb")))
+    assert hostflow.summary(session) == ["hosts     1 line to remove from /etc/hosts"]
+    _put(
+        session,
+        LOCALHOST
+        + _lines(
+            (box_id, "10.10.10.161 a.htb"),
+            (box_id, "10.10.10.6 b.htb"),
+            (OTHER_ID, "10.0.0.1 c.htb"),
+        ),
+    )
+    assert hostflow.summary(session) == ["hosts     2 lines to remove from /etc/hosts"]
+
+
+def test_summary_shows_nothing_when_the_file_cannot_be_read(session):
+    session.hosts_path.unlink()
+    assert hostflow.summary(session) == []
+
+
+class Launch:
+    """What leftovers is given at launch: a hosts file, root and a privileged runner."""
+
+    def __init__(self, paths, path):
+        self.paths, self.path, self.root = paths, path, True
+
+    def run(self, console):
+        import subprocess
+
+        hostflow.leftovers(
+            self.paths,
+            console,
+            hosts_path=self.path,
+            is_root=lambda: self.root,
+            run=lambda argv: subprocess.CompletedProcess(argv, 1),
+        )
+
+    @property
+    def text(self):
+        return self.path.read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def launch(paths, system):
+    return Launch(paths, system.hosts_path)
+
+
+def _finished(session):
+    from pwn_broker.store import save_box
+
+    session.box.status = "finished"
+    save_box(session.box)
+
+
+def test_leftovers_offers_the_lines_of_a_finished_box_by_name(session, launch):
+    box_id = session.box.id
+    _finished(session)
+    _put(session, LOCALHOST + _lines((box_id, "10.10.10.161 a.htb"), (box_id, "10.10.10.6 b.htb")))
+    console = FakeConsole([""])
+    launch.run(console)
+    assert console.asked == ["remove 2 /etc/hosts lines left by forest?"]
+    assert launch.text == LOCALHOST
+    assert console.lines == [("ok", "removed 2 lines from /etc/hosts")]
+
+
+def test_leftovers_offers_the_lines_of_an_id_with_no_folder(session, launch):
+    _put(session, LOCALHOST + _lines(("ghost-id", "10.10.10.7 g.htb")))
+    console = FakeConsole(["y"])
+    launch.run(console)
+    assert console.asked == ["remove 1 /etc/hosts line left by ghost-id?"]
+    assert launch.text == LOCALHOST
+
+
+def test_leftovers_keeps_the_lines_on_no(session, launch):
+    text = LOCALHOST + _lines(("ghost-id", "10.10.10.7 g.htb"))
+    _put(session, text)
+    launch.run(FakeConsole(["n"]))
+    assert launch.text == text
+
+
+def test_leftovers_leaves_an_unfinished_boxes_lines(session, launch):
+    text = LOCALHOST + _lines((session.box.id, "10.10.10.161 a.htb"))
+    _put(session, text)
+    console = FakeConsole()
+    launch.run(console)
+    assert console.asked == [] and console.lines == []
+    assert launch.text == text
+
+
+def test_leftovers_asks_in_sorted_order_and_stops_when_cancelled(session, launch):
+    _put(session, LOCALHOST + _lines(("b-id", "10.0.0.2 b.htb"), ("a-id", "10.0.0.1 a.htb")))
+    console = FakeConsole(["y"])
+    launch.run(console)
+    assert console.asked == [
+        "remove 1 /etc/hosts line left by a-id?",
+        "remove 1 /etc/hosts line left by b-id?",
+    ]
+    assert launch.text == LOCALHOST + _lines(("b-id", "10.0.0.2 b.htb"))
+
+
+def test_leftovers_is_silent_when_a_box_folder_cannot_be_read(session, launch):
+    text = LOCALHOST + _lines(("ghost-id", "10.10.10.7 g.htb"))
+    _put(session, text)
+    (session.paths.active / "broken").mkdir()
+    console = FakeConsole(["y"])
+    launch.run(console)
+    assert console.asked == [] and console.lines == []
+    assert launch.text == text
+
+
+def test_leftovers_is_silent_when_the_file_cannot_be_read(session, launch):
+    launch.path.unlink()
+    console = FakeConsole(["y"])
+    launch.run(console)
+    assert console.asked == [] and console.lines == []
+
+
+def test_leftovers_prints_the_line_when_the_removal_fails(session, launch):
+    text = LOCALHOST + _lines(("ghost-id", "10.10.10.7 g.htb"))
+    _put(session, text)
+    launch.root = False
+    console = FakeConsole([""])
+    launch.run(console)
+    assert launch.text == text
+    assert console.lines == [
+        ("warn", "/etc/hosts was not changed: cp exited 1"),
+        ("info", "remove this line yourself:"),
+        ("raw", "10.10.10.7 g.htb  # pwn-broker ghost-id"),
+    ]

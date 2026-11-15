@@ -120,6 +120,21 @@ def system(tmp_path_factory, monkeypatch):
                 setattr(self, name, getattr(fake, name))
 
     monkeypatch.setattr(Session, "__init__", safe_init)
+
+    from pwn_broker.cli import Env
+
+    env_defaults = {f.name: f.default for f in fields(Env)}
+    env_original = Env.__init__
+
+    def safe_env_init(self, *args, **kwargs):
+        env_original(self, *args, **kwargs)
+        if self.hosts_path == env_defaults["hosts_path"]:
+            self.hosts_path = fake.hosts_path
+        for name in ("is_root", "run_privileged"):
+            if getattr(self, name) is env_defaults[name]:
+                setattr(self, name, getattr(fake, name))
+
+    monkeypatch.setattr(Env, "__init__", safe_env_init)
     return fake
 
 
