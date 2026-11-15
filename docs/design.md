@@ -1127,7 +1127,7 @@ No package in the first batch needs a system package, so the manifest has no fie
 
 ### 8.12 Python runtimes
 
-Not built yet. This section is the design.
+Built. Where the build differs from the first design, this section describes what was built.
 
 **Why.** A Python tool runs on Kali's own `python3`, from wheels bundled for a fixed list of versions. That has two faults. A tool that needs a Python Kali does not have cannot be packaged. And every time Kali moves to a new Python, the Python tools are refused until I rebuild them: the Kali image went to 3.14 and refused both.
 
@@ -1144,7 +1144,7 @@ Not built yet. This section is the design.
 
 ```
 manifest.toml
-LICENSE                     Python's licence
+LICENSE                     Python's licence, then the licences of what the build bundles
 files/python.tar.gz         the upstream build, byte for byte
 ```
 
@@ -1156,7 +1156,7 @@ build = 1
 kind = "runtime"
 description = "CPython 3.13, for the tools that require it"
 upstream = "https://github.com/astral-sh/python-build-standalone"
-licence = "PSF-2.0"
+licence = "PSF-2.0 and others (see LICENSE)"
 arch = "x86_64"
 
 [runtime]
@@ -1166,6 +1166,7 @@ series = "3.13"                      # the Python the requiring tools' wheels ar
 ```
 
 - The source is the `install_only_stripped` build for `x86_64-unknown-linux-gnu` from `astral-sh/python-build-standalone`, pinned in the recipe by size and SHA-256. Upstream publishes its own checksums, so the pin has a second source.
+- The archive carries no licences for the libraries it bundles, so `LICENSE` is more than Python's: CPython's licence, then, each under a heading naming it, the licence of every library the build bundles (OpenSSL, SQLite, zlib, expat, libffi, Tcl/Tk and the others) and those of `pip` and the libraries it vendors, copied byte for byte from upstream's full distribution of the same build and from the archive. The manifest's `licence` reads `PSF-2.0 and others (see LICENSE)`. This is how pwn-shop's `runtimes` branch builds it.
 - A runtime has no `[[command]]`, no `[[upload]]`, no `[data]` and no `[python]`. A manifest with any of them is refused.
 - A runtime puts nothing in `/opt/pwn-broker/bin`. Kali's own `python3` is never shadowed, and the reserved command names do not change.
 - Package names may now hold a dot, so `python-3.13` is a name: lower-case letters, digits, hyphens and dots, starting with a letter or digit, with no two dots together and none at the end. Both repositories apply the same rule.
@@ -1191,41 +1192,47 @@ wheels = "wheels"
 
 ```
 forest/dc01 > tool install certipy
-ok  python-3.13 3.13.18 installed (runtime, 36 MB)
-ok  certipy 5.1.0 installed
+ok    python-3.13 3.13.18 installed (runtime, 34 MB)
+ok    certipy 5.1.0 installed
+run   certipy   from any terminal
 ```
 
-1. The app picks the tool's build and reads what it requires from the index.
-2. For each runtime it requires that is not on the machine, the app takes the latest build of that name from the index, downloads it, checks its size and SHA-256 as for any package, unpacks the zip into `tools/<runtime>/<version>-<build>/`, and unpacks the archive inside it under the rules below. A runtime that is already there, at any build, is used as it is.
-3. The tool's virtual environment is made by the runtime's interpreter, and `pip` installs the bundled wheels into it exactly as now: no index, binaries only, every hash required.
-4. If any step fails, everything the command created is removed, a runtime it installed for this tool included, and nothing is recorded.
+The size is the runtime's zip in MiB, rounded: 34 for this build, which is about 36 million bytes.
 
-Making the environment runs the runtime's interpreter. That is the one new thing that runs during an install, and it is the pinned upstream Python.
+1. The app picks the tool's build and reads what it requires from the index. The checks that do not need the package (a runtime's name, another build already on the box or in use by another box, a command name taken) run first, so a tool that would be refused costs no download.
+2. For each runtime it requires that is not on the machine, the app takes the latest build of that name from the index, downloads it, checks its size and SHA-256 as for any package, unpacks the zip into `tools/<runtime>/<version>-<build>/`, and unpacks the archive under the rules below into a `root/` folder inside it. The interpreter must be a regular file inside `root/`, links followed. The archive file is then deleted; the zip stays in the download cache. A runtime that is already there, at any build, is used as it is. One whose files are missing or damaged is removed and installed again.
+3. The tool's virtual environment is made by the runtime's interpreter, and `pip` installs the bundled wheels into it exactly as now: no index, binaries only, every hash required.
+4. If any step fails, everything the command created is removed, a runtime it installed for this tool included, and nothing is recorded or logged. The app says so for the runtime: `ok    python-3.13 3.13.18 removed (runtime)`, then the line that says why the install failed. A runtime that was there before the command is left alone.
+
+Making the environment runs the runtime's interpreter. That is the one new thing that runs during an install, and it is the pinned upstream Python. The interpreter and `pip` run isolated from the caller: with `-I`, and `pip` with `--isolated`; in the tool's own folder, not the folder the prompt was started in; with every `PYTHON*` and `PIP_*` variable taken out of the environment and `PIP_CONFIG_FILE` set to the null device, so no user or system `pip` configuration is read. Kali's `python3`, which still makes the environment of a schema 1 Python tool and reports its version first, runs the same way.
 
 **Unpacking the archive.** The app does this itself, and refuses the whole runtime if any member breaks a rule:
 
-- Only regular files, folders and symbolic links. No hard links, devices or pipes.
-- A link's target is relative and stays inside the runtime's folder once resolved.
-- No absolute names, no name that leaves the folder, no backslash, colon or control character in a name.
+- Only regular files, folders and symbolic links. No hard links, devices, pipes or sparse files.
+- A link's target is relative and stays inside the runtime's folder once resolved, through the archive's other links too, in at most 40 links.
+- No absolute names, no name that leaves the folder, no backslash, colon or control character in a name or a link's target, no empty or `.` part, and no name twice. Nothing is written through a link or inside a file.
+- Names and link targets are at most 4,096 bytes, and each part of one at most 255.
 - At most 20,000 members and 1 GiB unpacked.
+- Every header is read and checked before anything is written. A damaged or cut-short archive is refused then: the tar must end as a tar does, and the gzip stream's checksum and length must match. What is decompressed is bounded too: no more than each entry's declared size plus a small allowance for its headers is ever read, so an archive cannot make the app decompress more than 1 GiB and that allowance per entry.
 - Modes become 644 or 755, and everything belongs to me.
-- It is unpacked beside its final place and renamed in, so a half-unpacked runtime is never used.
+- It is unpacked into a temporary folder beside `root/` and renamed in, so a half-unpacked runtime is never used. If anything fails, the temporary folder is removed.
+- The app writes each file itself rather than through `tarfile`'s extraction, whose filters differ across Python 3.11 patch releases.
 
 **Sharing and removal.**
 
 - One build of a runtime is on the machine at a time, shared by every tool that requires it.
 - A runtime is needed while any installed tool requires it. The app works that out from the installed tools; a runtime has no list of users of its own.
-- At `finish` and at `tool remove`, after the tools are gone, any runtime no installed tool requires is removed. The check for files left behind at launch covers runtimes too.
+- At `finish` and at `tool remove`, after the tools are gone, any runtime no installed tool requires is removed: `ok    python-3.13 3.13.18 removed (runtime)`. While a box folder cannot be read, it may hold a tool that requires the runtime, so nothing is removed and a `warn` line names the box. The launch checks offer to remove a runtime no installed tool requires, and the check for files left behind covers runtimes too.
 - `box.toml` records, with each tool, the runtime it was built on: name, version, build and SHA-256. It is a note of what ran, not a pin: any build of a runtime serves any tool built for its series.
-- `import`, and reopening a finished box, install the tools again as now, and with them whatever runtime they require: the one already on the machine, or the latest build in the index. When that is not the build the box recorded, the app says so and carries on.
+- `import`, and reopening a finished box, install the tools again as now, and with them whatever runtime they require: the one already on the machine, or the latest build in the index. When that is not the build the box recorded, the app says so and carries on: `ok    certipy now runs on python-3.13 3.13.18-2; this box used 3.13.18-1 before`.
 - A newer build of a runtime in the index does not replace one that is installed. It is used the next time none is.
 
 **Commands.**
 
 - `tool list` and `tool search` show tools, not runtimes. `status` counts tools.
-- `tool info <tool>` gains a line: `requires  python-3.13 (36 MB, not installed)`.
+- `tool info <tool>` gains a line: `requires    python-3.13 (34 MB, not installed)`. It names what the build this box has installed requires, or, when the box does not have the tool, what the latest build requires.
 - `tool install` and `tool remove` refuse a runtime's name: `python-3.13 is a runtime; it is installed with the tools that need it`.
-- `finish`'s summary lists the runtimes it will remove beside the tools.
+- `finish`'s summary lists the runtimes it will remove beside the tools: `runtimes  python-3.13 3.13.18   (will be removed)`.
 
 **In pwn-shop.**
 
@@ -1240,7 +1247,7 @@ Making the environment runs the runtime's interpreter. That is the one new thing
 - The archive rules, one test per refusal, on every platform.
 - `requires` in a manifest and in the index; the install order and what is removed when a step fails; removal after the last tool; a runtime left behind; `import`.
 - On Linux, a stand-in runtime: a small archive whose `python3` is a script that runs the machine's own Python, so a real environment is made from it.
-- The real runtime runs in pwn-shop's CI, on Ubuntu and in the Kali image.
+- The real runtime runs in pwn-shop's CI, on Ubuntu and in the Kali image, and in this repository's `kali` job, which wraps the pinned upstream archive in a test runtime package and installs a small Python test tool on it.
 
 **Accepted trades.**
 
@@ -1252,7 +1259,7 @@ Making the environment runs the runtime's interpreter. That is the one new thing
 
 ### 8.13 Tool history
 
-Not built yet. This section is the design.
+Built. Where the build differs from the first design, this section describes what was built.
 
 **Why.** A box records the tools it has, and that record goes into its archive. But `tool remove` deletes the tool's line, so a tool I tried and took off leaves no trace. And nothing spans boxes: to find which boxes used a tool, and at which version, I would have to open every archive.
 
@@ -1262,7 +1269,8 @@ Not built yet. This section is the design.
 - A tool installed again after a removal gets a new line; the removed one stays.
 - Everything that asks what the box has now (the lists, the count, `finish`, `import`) looks only at the lines with no removal time.
 - `finish` does not mark anything removed. A finished box keeps its tools on record as current, so reopening it can offer them again.
-- `tool history` shows the box's whole record: each tool with its version and build, when it was installed, when it was removed, and the runtime it ran on.
+- The same build installed again while its line is current (reopening the box, `import`) keeps that line, with the new install's time and runtime. The install time stamps the tool's data in the box, so each install's copy of that data is kept apart from the others. The log keeps a line for every install.
+- `tool history` shows the box's whole record: each tool with its version and build, when it was installed (for a current line, the latest install), when it was removed, and the runtime it ran on.
 
 **Across boxes.** One log, `~/pwn-broker/tools.log`, beside `active/` and `wrapped/`:
 
@@ -1272,12 +1280,13 @@ Not built yet. This section is the design.
 2026-11-15T16:05:41+00:00  remove   forest (4412e505-2998-424f-855d-1fbaaabe2894)  certipy 5.1.0-3  sha256:a380...
 ```
 
-- One line for each tool installed, each one removed with `tool remove`, and each one taken off at `finish`, with the runtimes installed and removed beside them.
-- Each line holds the time, what happened, the box by name and ID, the tool with its version and build, and the package's SHA-256.
+- One line for each tool installed, each one removed with `tool remove`, and each one taken off at `finish`, with the runtimes installed and removed beside them. A runtime's line ends in `runtime`.
+- Only what a box did is logged. A `finish` line is written only for a tool the box still held on the machine, not for one a declined reopen left uninstalled. A runtime installed for a tool that then failed, and taken away again, gets no line, and nor does the tool. Removals by the leftover checks at launch are not logged: they belong to no box.
+- Each line holds the time, what happened, the box by name and ID, the tool with its version and build, and the package's SHA-256. In the box's name, a control character is written as `?` and a run of spaces as one, since the name may come from someone else's archive.
 - It lives with my boxes, not under `/opt/pwn-broker`, so reinstalling or removing the app does not lose it. It follows the `home` setting.
 - It is only ever added to. The app never reads it back, and never trims it.
-- If it cannot be written, the app warns once and carries on: a log must never stop an install.
-- It is readable only by me.
+- If it cannot be written, the app warns once a session and carries on: a log must never stop an install.
+- It is readable only by me: mode 600, set again each time a line is added. Each line is added in one write, not through the app's usual replace-the-file save.
 
 ## 9. What finish puts back
 
@@ -1299,7 +1308,7 @@ These could not be checked while designing. Each was meant to be confirmed befor
 - The terminal reports focus changes to vim, so the note can save on leaving and reload on return. Fallback: a short reload timer. Still open: the Kali run has no real desktop.
 - `x-terminal-emulator` exists and accepts a command to run. Confirmed in the Kali image, where it is `lxterm`, Debian's wrapper around xterm, and takes `-e`. Still open for the terminal a Kali desktop opens by default.
 - How vim signals unsaved changes in a way the app can detect before `finish`. Still open: the Kali run never leaves the note unsaved.
-- `python3 -m venv` works on a fresh Kali, and its Python is 3.12 or 3.13, the versions the bundled wheels cover. The first half is confirmed in the Kali image. The second is not: Kali's Python is now 3.14 (3.14.8 in the Kali 2026.3 image), which build 1 of the two Python tools, `certipy` and `targetedkerberoast`, does not cover, so `tool install` refuses it there. Build 2 of each covers Python 3.12, 3.13 and 3.14.
+- `python3 -m venv` works on a fresh Kali, and its Python is 3.12 or 3.13, the versions the bundled wheels cover. The first half is confirmed in the Kali image. The second is not: Kali's Python is now 3.14 (3.14.8 in the Kali 2026.3 image), which build 1 of the two Python tools, `certipy` and `targetedkerberoast`, does not cover, so `tool install` refuses it there. Build 2 of each covers Python 3.12, 3.13 and 3.14. Build 3 of each, built in pwn-shop but not yet published, requires the `python-3.13` runtime and does not use Kali's Python at all (8.12); the `kali` job installs a small Python test tool on that runtime.
 - The pinned `asciinema` runs on Kali, and writes to disk as it records rather than at the end. Confirmed in the Kali image: the real-asciinema tests pass there as root, and the run records a window and plays it back.
 - The `[rec <target>]` prefix shows with Kali's own zsh settings, survives its prompt toggle, and leaves the rest of my shell setup as it was. That it shows, in front of Kali's own two-line prompt, is confirmed in the Kali image. The prompt toggle and the rest of the shell setup are still open.
 - The text copy of a real session on Kali reads cleanly: command lines as typed, with zsh's suggestions and highlighting gone. Still open: the Kali run records two short commands, and its text copy has the timed output line, but not a session with suggestions and highlighting.
