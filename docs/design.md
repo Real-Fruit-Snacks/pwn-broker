@@ -524,6 +524,7 @@ pwn-broker-<version>/
   wheels/              the app's wheel and the wheel of every dependency
   wheels.lock          each of those wheels pinned with its SHA-256
   asciinema            the pinned asciinema binary
+  licences/            the licence of each thing in the file, and where its source is
 ```
 
 - The Python is the same upstream build a runtime package carries (section 8.12): `install_only_stripped` for `x86_64-unknown-linux-gnu` from `astral-sh/python-build-standalone`, pinned in this repository by size and SHA-256.
@@ -531,13 +532,16 @@ pwn-broker-<version>/
 - `wheels.lock` has the strict form the tools' lock has: one exact pin with its hashes per line, and nothing else.
 - asciinema is the binary section 7.10 pins.
 - A release publishes three files: the release file, `SHA256SUMS.txt` naming it, and `install.sh`.
+- The file now distributes other people's programs: CPython, asciinema (GPL-3.0-or-later), `pyte` (LGPL-3.0) and the other dependencies. `licences/` holds each one's licence text and a note naming the exact upstream source each was built from, with its address.
 
 **Installing.**
 
 ```
-curl -fsSL https://raw.githubusercontent.com/Real-Fruit-Snacks/pwn-broker/main/install.sh | sh
+curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/download/install.sh | sh
 sh install.sh --from pwn-broker-0.1.0-linux-x86_64.tar.gz
 ```
+
+The installer comes from the release it installs, not from `main`, so the two always match.
 
 1. Without `--from`, the installer downloads `SHA256SUMS.txt` and the release file from the latest release and checks the file against it. With `--from`, it uses the file on disk and contacts nothing.
 2. It unpacks the Python into `/opt/pwn-broker/python/`.
@@ -547,6 +551,7 @@ sh install.sh --from pwn-broker-0.1.0-linux-x86_64.tar.gz
 
 - The installer needs `sh`, `tar`, `gzip`, `curl` and `sha256sum`. It no longer needs `python3` or `python3-venv`.
 - An upgrade replaces `python/` and `app/` and nothing else.
+- The release file is what is trusted. Downloaded, it is checked against `SHA256SUMS.txt`. Given with `--from`, it is mine to vouch for: the installer prints its SHA-256 so I can compare it with the release page. The installer holds no pins of its own and does not check the Python inside the file again. The wheels are checked by `pip` against `wheels.lock`, and asciinema by the app's setup against the app's pin.
 - `--from` no longer takes a source folder or a wheel. To install from a checkout, build a release file from it first; a script in the repository does that, and CI uses it.
 - `--no-asciinema` goes away: asciinema is always in the file.
 
@@ -569,8 +574,10 @@ Nothing else. With `--from` and a folder index, nothing at all.
 **Building it.**
 
 - A script in the repository builds the release file from a checkout: it fetches the pinned Python, the pinned wheels and the pinned asciinema, checks each against its pin, builds the app's own wheel, and writes the file. The same inputs give the same file, byte for byte.
-- CI builds the release file on every push. The Kali job installs from that file with the container's network switched off, then runs the whole cycle as now. That proves on every push that an install reaches nothing.
-- The release workflow publishes the file CI built, with `SHA256SUMS.txt` and `install.sh`.
+- The tools that build the app's wheel are pinned too. CI builds the release file twice and fails if the two differ.
+- CI builds the release file on every push. The Kali job prepares its container, switches the container's network off, installs from that file, switches the network back on, and runs the whole cycle as now. That proves on every push that an install reaches nothing.
+- The Kali job still runs the unit tests on Kali's own Python as well, as an early warning of the next one. The cycle runs the app on its bundled Python.
+- The release workflow builds the file itself with the same script, installs it and runs the tests against it, then publishes it with `SHA256SUMS.txt` and `install.sh`.
 
 **Accepted trades.**
 
