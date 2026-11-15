@@ -1,3 +1,4 @@
+import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -126,7 +127,15 @@ def _resolve_alive(alive: Callable[[int], bool] | None) -> Callable[[int], bool]
 
 def write_open_box(paths: AppPaths, folder: Path, pid: int) -> None:
     # a plain two-line file: launcher scripts read it with sed -n 1p and sed -n 2p
-    write_text(paths.run_box, f"{folder.resolve().as_posix()}\n{pid}\n")
+    text = folder.resolve().as_posix()
+    if "\n" in text or "\r" in text:
+        # a line break would push the pid off line 2; no file is better than a wrong one
+        try:
+            paths.run_box.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise OSError(f"{text!r} holds a line break and cannot go in {paths.run_box}")
+    write_text(paths.run_box, f"{text}\n{pid}\n")
 
 
 def _read_open_box(paths: AppPaths) -> tuple[str, int] | None:
@@ -135,7 +144,9 @@ def _read_open_box(paths: AppPaths) -> tuple[str, int] | None:
     except (OSError, UnicodeDecodeError):
         return None
     lines = text.split("\n")
-    if len(lines) < 2 or not lines[0] or not lines[1].strip().isdecimal():
+    if len(lines) < 2 or not lines[0] or "\r" in lines[0]:
+        return None
+    if not (lines[1].isascii() and lines[1].isdecimal()):
         return None
     pid = int(lines[1])
     if pid < 1:
@@ -169,8 +180,10 @@ def running(
     tools: Iterable[str] | None = None,
     *,
     alive: Callable[[int], bool] | None = None,
+    started: Callable[[int], str | None] | None = None,
 ) -> list[tuple[str, int]]:
     check = _resolve_alive(alive)
+    start_of = started if started is not None else process_start
     wanted = None if tools is None else set(tools)
     try:
         markers = sorted(paths.run_tools.iterdir())
@@ -185,10 +198,15 @@ def running(
             continue
         if wanted is not None and tool not in wanted:
             continue
-        if check(pid):
-            found.append((tool, pid))
-        else:
+        if not check(pid):
             _discard(marker)
+            continue
+        recorded = _recorded_start(marker)
+        now = start_of(pid) if recorded else None
+        if recorded and now is not None and recorded != now:
+            _discard(marker)  # the pid now belongs to another process
+            continue
+        found.append((tool, pid))
     return sorted(found)
 
 
@@ -197,3 +215,29 @@ def _discard(marker: Path) -> None:
         marker.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def _recorded_start(marker: Path) -> str:
+    try:
+        return marker.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def parse_start_time(line: str) -> str | None:
+    # the command name may hold spaces and parentheses, so count from the last ")"
+    _head, close, rest = line.rpartition(")")
+    fields = rest.split()
+    if not close or len(fields) < 20:
+        return None
+    return fields[19]
+
+
+def process_start(pid: int) -> str | None:
+    if sys.platform == "win32":
+        return None
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as fh:
+            return parse_start_time(fh.read())
+    except OSError:
+        return None

@@ -199,3 +199,73 @@ def test_unfinished_boxes(paths, box, other):
     (broken / "box.toml").write_text("nope [", encoding="utf-8")
     assert unfinished_boxes(paths) == {box.id: box.name}
     assert isinstance(box, Box)
+
+
+def test_write_open_box_refuses_newline_in_folder(paths, tmp_path):
+    write_open_box(paths, tmp_path, 42)
+    with pytest.raises(OSError, match="line break"):
+        write_open_box(paths, tmp_path / "a\nb", 42)
+    assert not paths.run_box.exists()
+    with pytest.raises(OSError):
+        write_open_box(paths, tmp_path / "a\rb", 42)
+
+
+def test_failed_write_in_acquire_removes_old_run_box(paths, box, monkeypatch, tmp_path):
+    write_open_box(paths, tmp_path, 9)
+
+    def boom(*args):
+        raise OSError("no")
+
+    monkeypatch.setattr(toolstate, "write_open_box", boom)
+    acquire_open(paths, box, pid=100, alive=yes)
+    assert not paths.run_box.exists()
+    assert (paths.run / "open.toml").exists()
+
+
+def test_open_box_rejects_forms_the_writer_never_makes(paths):
+    paths.run.mkdir(parents=True)
+    for text in ("/x\n 5\n", "/x\n5 \n", "/x\r\n5\r\n", "/x\r\n5\n", "/x\n５\n"):
+        paths.run_box.write_text(text, encoding="utf-8", newline="")
+        assert open_box(paths, alive=yes) is None
+    paths.run_box.write_text("/x\n5\n", encoding="utf-8", newline="")
+    assert open_box(paths, alive=yes).as_posix() == "/x"
+
+
+def _marker(paths, name, content):
+    paths.run_tools.mkdir(parents=True, exist_ok=True)
+    path = paths.run_tools / name
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def test_running_start_time_match_is_reported(paths):
+    _marker(paths, "t.5", "777\n")
+    assert running(paths, alive=yes, started=lambda pid: "777") == [("t", 5)]
+
+
+def test_running_start_time_mismatch_is_stale(paths):
+    path = _marker(paths, "t.5", "777")
+    assert running(paths, alive=yes, started=lambda pid: "999") == []
+    assert not path.exists()
+
+
+def test_running_empty_marker_or_unknown_start_falls_back_to_liveness(paths):
+    _marker(paths, "a.5", "")
+    _marker(paths, "b.6", "123")
+    assert running(paths, alive=yes, started=lambda pid: "1" if pid == 5 else None) == [
+        ("a", 5),
+        ("b", 6),
+    ]
+
+
+def test_parse_start_time():
+    rest = ["S"] + [str(n) for n in range(1, 19)] + ["424242", "0", "0"]
+    line = "1234 (my (odd) name) " + " ".join(rest) + "\n"
+    assert toolstate.parse_start_time(line) == "424242"
+    assert toolstate.parse_start_time("1234 no parens here") is None
+    assert toolstate.parse_start_time("1234 (x) S 1 2") is None
+    assert toolstate.parse_start_time("") is None
+
+
+def test_process_start_is_none_for_missing_process():
+    assert toolstate.process_start(2**22 + 12345) is None

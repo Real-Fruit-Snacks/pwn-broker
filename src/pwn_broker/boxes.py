@@ -290,7 +290,11 @@ def acquire_open(
     try:
         toolstate.write_open_box(paths, box.path, pid)
     except OSError:
-        pass  # launchers fall back to no open box; that must not stop a box opening
+        # a box must still open; drop any older file so it cannot stand in for this box
+        try:
+            paths.run_box.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def release_open(paths: AppPaths, *, pid: int) -> None:
