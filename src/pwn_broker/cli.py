@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from pwn_broker import __version__, boxes, checks, config, lifecycle, note, notewindow, privilege
-from pwn_broker import questions, session as sessions, setup, toolhooks
+from pwn_broker import questions, session as sessions, setup, targetflow, toolhooks
 from pwn_broker.boxes import BoxError
 from pwn_broker.config import ConfigError, Settings
 from pwn_broker.console import Cancelled, Console, TermConsole
@@ -95,6 +95,8 @@ def new_box(env: Env) -> Session:
         sessions.set_current(session, targets[0] if targets else None)
         sessions.refresh(session)
         config.save_state(env.paths.state_file, config.State(last_platform=answers.platform))
+        for target in targets:
+            targetflow.after_add(session, target)
     except (StoreError, OSError) as exc:
         # the box, its note and its targets are on disk and can be resumed
         raise BoxError(f"box {box.path.name} was created but not finished: {exc}") from exc

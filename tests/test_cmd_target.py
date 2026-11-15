@@ -180,9 +180,9 @@ def test_target_use_prefix_and_ambiguous(session):
 
 
 def test_target_edit_keeps_name_and_updates_lists(session):
-    session.console = FakeConsole(["10.10.10.200", "", ""])
+    session.console = FakeConsole(["10.10.10.200", "", "", "n"])
     dispatch(session, "target edit dc01")
-    assert session.console.asked == ["ip", "hostname", "scope"]
+    assert session.console.asked == ["ip", "hostname", "scope", "add dc01's hostnames to /etc/hosts?"]
     assert load_targets(session.box)[0].ips == ["10.10.10.200"]
     text = (session.box.path / "notes.md").read_text(encoding="utf-8")
     assert "#    dc01   10.10.10.200   forest.htb.local   external " in text
@@ -196,7 +196,7 @@ def test_target_edit_leaves_a_title_the_user_changed(session):
     path = session.box.path / "notes.md"
     text = path.read_text(encoding="utf-8").replace("Target: dc01   10.10", "Target: dc01 the DC   10.10")
     path.write_text(text, encoding="utf-8", newline="")
-    session.console = FakeConsole(["10.10.10.200", "", ""])
+    session.console = FakeConsole(["10.10.10.200", "", "", "n"])
     dispatch(session, "target edit dc01")
     after = path.read_text(encoding="utf-8")
     assert after.split(FOLD_START, 1)[1] == text.split(FOLD_START, 1)[1]
@@ -207,7 +207,7 @@ def test_target_edit_with_no_change_does_not_rewrite_the_note(session):
     path = session.box.path / "notes.md"
     before = path.read_bytes()
     os.utime(path, ns=(1_000_000_000_000_000_000, 1_000_000_000_000_000_000))
-    session.console = FakeConsole(["", "", ""])
+    session.console = FakeConsole(["", "", "", "n"])
     dispatch(session, "target edit dc01")
     assert ("ok", "target dc01 updated") in session.console.lines
     assert path.read_bytes() == before
@@ -216,7 +216,7 @@ def test_target_edit_with_no_change_does_not_rewrite_the_note(session):
 
 def test_target_edit_survives_a_broken_note(session, monkeypatch):
     _break_note_writes(monkeypatch)
-    session.console = FakeConsole(["10.10.10.200", "", ""])
+    session.console = FakeConsole(["10.10.10.200", "", "", "n"])
     dispatch(session, "target edit dc01")
     kinds = [kind for kind, _ in session.console.lines]
     assert kinds.count("warn") == 1
@@ -373,3 +373,71 @@ def test_ask_target_dash_clears_a_field_when_editing(dc01):
     a = ask_target(console, taken=set(), defaults=dc01, ask_name=False)
     assert a.ips == ["10.10.10.7"]
     assert len(_fails(console)) == 1
+
+
+def _hosts_line(session, rest):
+    return f"{rest}  # pwn-broker {session.box.id}"
+
+
+def _hosts_text(session):
+    return session.hosts_path.read_text(encoding="utf-8")
+
+
+def test_target_add_offers_the_hosts_line_and_pings(session, system):
+    session.console = FakeConsole(["10.10.10.50", "web.htb", "", "web01", ""])
+    dispatch(session, "target add")
+    assert session.console.asked[-1] == "add web01's hostnames to /etc/hosts?"
+    assert _hosts_line(session, "10.10.10.50 web.htb") in _hosts_text(session)
+    assert load_box(session.box.path).hosts == ["web01"]
+    assert system.pings == ["10.10.10.50"]
+    assert session.console.lines[0] == ("ok", "target web01 created")
+    assert session.console.lines[-1] == ("ok", "10.10.10.50 answered in 1 ms")
+
+
+def test_target_edit_offers_the_line_when_the_target_has_none(session):
+    session.console = FakeConsole(["", "", "", ""])
+    dispatch(session, "target edit dc01")
+    assert load_box(session.box.path).hosts == ["dc01"]
+    assert _hosts_line(session, "10.10.10.161 forest.htb.local") in _hosts_text(session)
+
+
+def test_target_edit_rewrites_the_line_without_asking(session):
+    session.console = FakeConsole(["", "", "", ""])
+    dispatch(session, "target edit dc01")
+    session.console = FakeConsole(["10.10.10.200", "dc01.htb.local", ""])
+    dispatch(session, "target edit dc01")
+    assert session.console.asked == ["ip", "hostname", "scope"]
+    assert _hosts_text(session) == "127.0.0.1 localhost\n" + _hosts_line(
+        session, "10.10.10.200 dc01.htb.local"
+    ) + "\n"
+
+
+def test_target_rename_keeps_the_line(session):
+    session.console = FakeConsole(["", "", "", ""])
+    dispatch(session, "target edit dc01")
+    before = _hosts_text(session)
+    session.console = FakeConsole(["dc"])
+    dispatch(session, "target rename dc01")
+    assert load_box(session.box.path).hosts == ["dc"]
+    assert _hosts_text(session) == before
+    assert session.console.lines == [("ok", "target dc01 is now dc")]
+
+
+def test_target_remove_takes_the_line_out(session):
+    session.console = FakeConsole(["", "", "", ""])
+    dispatch(session, "target edit dc01")
+    session.console = FakeConsole(["y"])
+    dispatch(session, "target remove dc01")
+    assert load_box(session.box.path).hosts == []
+    assert _hosts_text(session) == "127.0.0.1 localhost\n"
+    assert session.console.lines == [("ok", "target dc01 removed"), ("ok", "/etc/hosts updated")]
+
+
+def test_target_remove_of_a_target_without_a_line_leaves_the_file(session):
+    web = _add(session, "web", "10.10.10.2")
+    before = session.hosts_path.read_bytes()
+    session.console = FakeConsole(["y"])
+    dispatch(session, "target remove web")
+    assert web not in session.targets
+    assert session.console.lines == [("ok", "target web removed")]
+    assert session.hosts_path.read_bytes() == before

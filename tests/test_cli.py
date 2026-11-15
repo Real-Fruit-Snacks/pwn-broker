@@ -14,7 +14,7 @@ from pwn_broker.cli import box_for_cwd, choose, main, new_box, start
 from pwn_broker.config import Settings, load_state
 from pwn_broker.console import Cancelled, FakeConsole
 from pwn_broker.questions import BoxAnswers, ask_box
-from pwn_broker.store import StoreError, save_box
+from pwn_broker.store import StoreError, load_box, save_box
 
 
 @pytest.fixture
@@ -86,6 +86,28 @@ def test_new_box_with_two_targets(env):
     assert s.current.name == "dc01"
     assert env.console.lines[-1] == ("ok", "box forest created")
     assert ("ok", "target dc01 created") in env.console.lines
+
+
+def test_new_box_offers_the_hosts_line_and_pings_each_target(env, system):
+    env.console = FakeConsole(
+        ["forest", "", "", "windows", "easy",
+         "", "10.10.10.161", "forest.htb.local", "", "dc01",
+         "y", "10.10.10.162", "", "internal", "",
+         "", ""]
+    )  # fmt: skip
+    s = new_box(env)
+    assert env.console.asked[-2:] == ["add another?", "add dc01's hostnames to /etc/hosts?"]
+    assert system.pings == ["10.10.10.161", "10.10.10.162"]
+    assert s.box.hosts == ["dc01"] and load_box(s.box.path).hosts == ["dc01"]
+    assert f"forest.htb.local  # pwn-broker {s.box.id}" in system.hosts_path.read_text()
+    tail = [line for line in env.console.lines if line[0] != "info"][-5:]
+    assert tail == [
+        ("ok", "target 10.10.10.162 created"),
+        ("ok", "/etc/hosts updated"),
+        ("ok", "10.10.10.161 answered in 1 ms"),
+        ("ok", "10.10.10.162 answered in 1 ms"),
+        ("ok", "box forest created"),
+    ]
 
 
 def test_new_box_with_no_targets(env):

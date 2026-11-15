@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from pwn_broker import hosts, privilege
 from pwn_broker.config import Settings
 from pwn_broker.console import Console
 from pwn_broker.filescan import scan
@@ -10,6 +11,7 @@ from pwn_broker.lists import ListSummary, rebuild_lists
 from pwn_broker.model import Box, Cred, FileRecord, Target
 from pwn_broker.note import NOTE_NAME, NoteError, read_note, render_note, update_box, write_note
 from pwn_broker.paths import AppPaths
+from pwn_broker.ping import Result as PingResult, once as ping_once
 from pwn_broker.setup import load_template
 from pwn_broker.store import (
     load_box,
@@ -42,6 +44,13 @@ class Session:
     copied_in_full: set[Path] = field(default_factory=set)
     # stamp(box) as of the last read or write by this prompt; a different stamp means another program wrote
     seen: tuple = ()
+    # what the session reaches outside the box through; tests give each session stand-ins
+    hosts_path: Path = hosts.DEFAULT_PATH
+    is_root: Callable[[], bool] = privilege.is_root
+    run_privileged: Callable = privilege.run_privileged
+    ping: Callable[[str], PingResult] = ping_once
+    # things said once per session
+    notices: set[str] = field(default_factory=set)
 
 
 def load_session(

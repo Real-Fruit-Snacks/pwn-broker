@@ -262,3 +262,40 @@ def test_refresh_after_reload_keeps_the_new_target_in_note_and_lists(session):
         p.read_text(encoding="utf-8") for p in (mine.box.path / "lists").iterdir() if p.is_file()
     )
     assert "10.10.10.2" in listed
+
+
+def test_a_reload_keeps_the_seams_and_notices(session):
+    from pwn_broker.session import reload_if_changed
+
+    seams = (session.hosts_path, session.is_root, session.run_privileged, session.ping)
+    session.notices.add("ping")
+    add_target(
+        session.box, [], ips=["10.10.10.2"], hostnames=[],
+        scope="external", name="web", now=NOW + timedelta(minutes=1),
+    )  # fmt: skip
+    assert reload_if_changed(session) is True
+    assert (session.hosts_path, session.is_root, session.run_privileged, session.ping) == seams
+    assert session.notices == {"ping"}
+
+
+def test_a_session_has_real_seams_by_default(paths, box):
+    from dataclasses import fields
+
+    from pwn_broker import hosts, ping, privilege
+    from pwn_broker.session import Session
+
+    defaults = {f.name: f.default for f in fields(Session)}
+    assert defaults["hosts_path"] == hosts.DEFAULT_PATH
+    assert defaults["is_root"] is privilege.is_root
+    assert defaults["run_privileged"] is privilege.run_privileged
+    assert defaults["ping"] is ping.once
+
+
+def test_test_sessions_never_reach_the_system(paths, box, system):
+    from pwn_broker import hosts, ping, privilege
+
+    built = load_session(paths, Settings(), FakeConsole(), box, lambda: NOW)
+    assert built.hosts_path == system.hosts_path != hosts.DEFAULT_PATH
+    assert built.is_root is not privilege.is_root
+    assert built.run_privileged is not privilege.run_privileged
+    assert built.ping is not ping.once

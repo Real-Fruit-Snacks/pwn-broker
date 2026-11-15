@@ -18,7 +18,10 @@ from pwn_broker.store import StoreError
 from pwn_broker.theme import color_enabled, prompt_style
 
 # These commands come from later tasks, so their names live here rather than in the registry.
-TARGET_ARG_COMMANDS = ("target use", "target show", "target edit", "target rename", "target remove")
+TARGET_ARG_COMMANDS = (
+    "target use", "target show", "target edit", "target rename", "target remove",
+    "host file on", "host file off",
+)  # fmt: skip
 PATH_COMMAND = "path"
 PATH_FOLDERS = tuple(sorted({*TARGET_FOLDERS, "lists", "screenshots"}))
 IMPORT_COMMAND = "cred import "
@@ -29,6 +32,7 @@ _TARGET_ARG = re.compile(r"(" + "|".join(TARGET_ARG_COMMANDS) + r") (\S*)")
 _TOOL_INDEX_ARG = re.compile(r"(tool install|tool info) (\S*)")
 _TOOL_BOX_ARG = re.compile(r"(tool remove) (\S*)")
 _PATH_ARG = re.compile(re.escape(PATH_COMMAND) + r" (\S*)")
+_HOST_REMOVE_ARG = re.compile(r"(host remove (?:\S+ +)*)(\S*)")
 
 
 def prompt_text(session: Session) -> str:
@@ -82,6 +86,14 @@ def completions(session: Session, text: str) -> list[str]:
     if match:
         found.update(
             f"{PATH_COMMAND} {folder}" for folder in PATH_FOLDERS if folder.startswith(match[1])
+        )
+    match = _HOST_REMOVE_ARG.fullmatch(text)
+    if match and session.current is not None:
+        typed = set(match[1].split()[2:])
+        found.update(
+            match[1] + name
+            for name in session.current.hostnames
+            if name.startswith(match[2]) and name not in typed
         )
     return sorted(found)
 

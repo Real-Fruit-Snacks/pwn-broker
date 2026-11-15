@@ -217,6 +217,30 @@ def test_completions_commands_and_targets(session, registry):
     assert completions(session, "target add d") == []
 
 
+def test_completions_host_remove_offers_the_current_targets_hostnames(session, registry):
+    session.targets[0].hostnames = ["forest.htb.local", "crm.forest.htb"]
+    _second_target(session)
+    assert completions(session, "host remove ") == [
+        "host remove crm.forest.htb", "host remove forest.htb.local",
+    ]  # fmt: skip
+    assert completions(session, "host remove f") == ["host remove forest.htb.local"]
+    assert completions(session, "host remove forest.htb.local c") == [
+        "host remove forest.htb.local crm.forest.htb"
+    ]
+    assert completions(session, "host remove forest.htb.local ") == [
+        "host remove forest.htb.local crm.forest.htb"
+    ]
+    session.current = None
+    assert completions(session, "host remove ") == []
+
+
+@pytest.mark.parametrize("command", ["host file on", "host file off"])
+def test_completions_host_file_offers_target_names(session, registry, command):
+    _second_target(session)
+    assert completions(session, f"{command} ") == [f"{command} dc01", f"{command} web"]
+    assert completions(session, f"{command} w") == [f"{command} web"]
+
+
 def test_completions_path_folders(session, registry):
     assert completions(session, "path lo") == ["path loot"]
     assert completions(session, "path li") == ["path lists"]
