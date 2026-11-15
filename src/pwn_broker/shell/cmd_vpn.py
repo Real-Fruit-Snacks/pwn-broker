@@ -63,6 +63,8 @@ def vpn_start(session: Session, args: list[str]) -> None:
             session.paths,
             session.box,
             source,
+            copy=copy,
+            before=found,
             run=session.run_privileged,
             tunnel=lambda: current_tunnel(session, fresh=True),
             clock=session.clock,

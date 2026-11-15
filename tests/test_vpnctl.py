@@ -45,12 +45,25 @@ class Machine:
         self.die_after: int | None = None  # tunnel reads before the process dies
         self.reads = 0
         self.writes_pid = True
+        self.writes_log = True
+        # what the log and pid file looked like when openvpn was run
+        self.found: dict[str, tuple] = {}
 
     def run(self, argv):
         self.calls.append(list(argv))
         if argv[0] == "openvpn":
             log = Path(argv[argv.index("--log") + 1])
-            log.write_text(self.log, encoding="utf-8")
+            for option in ("--log", "--writepid"):
+                path = Path(argv[argv.index(option) + 1])
+                info = path.stat() if path.exists() else None
+                self.found[option] = (
+                    (info.st_size, info.st_mode & 0o777, getattr(info, "st_uid", None))
+                    if info else None
+                )  # fmt: skip
+            if self.writes_log:
+                # openvpn opens the log it is given and writes into it, never replacing it
+                with open(log, "r+", encoding="utf-8") as fh:
+                    fh.write(self.log)
             if self.status == 0 and self.writes_pid:
                 Path(argv[argv.index("--writepid") + 1]).write_text(f"{self.pid}\n")
                 self.alive_now = True
@@ -92,6 +105,8 @@ def machine(paths):
 
 
 def start(paths, box, source, machine, **overrides):
+    if "copy" not in overrides:
+        overrides["copy"] = vpnctl.copy_into_box(box, source)
     options = dict(
         run=machine.run, tunnel=machine.tunnel, clock=lambda: LATER, sleep=machine.sleep,
         which=machine.which, **machine.checks,
@@ -223,6 +238,9 @@ def test_start_returns_no_tunnel_after_wait(paths, box, tmp_path, machine):
     marker, found = start(paths, box, ovpn(tmp_path / "dl"), machine, wait=2.0)
     assert found is None and marker.pid == PID
     assert machine.sleeps == [0.5] * 4 and machine.reads == 5
+    # still trying: the marker and the record stay
+    assert vpnctl.ours(paths, **machine.checks) == marker
+    assert len(load_box(box.path).vpn) == 1
 
 
 def test_start_removes_an_old_pid_file_first(paths, box, tmp_path, machine):
@@ -232,7 +250,8 @@ def test_start_removes_an_old_pid_file_first(paths, box, tmp_path, machine):
     machine.writes_pid = False
     with pytest.raises(VpnError, match="process ID"):
         start(paths, box, ovpn(tmp_path / "dl"), machine)
-    assert not old.exists()
+    # an old process ID is never adopted: the file is now this start's, still empty
+    assert old.read_text() == ""
 
 
 def test_start_raises_with_the_log_tail_when_openvpn_fails(paths, box, tmp_path, machine):
@@ -260,11 +279,67 @@ def test_start_raises_with_the_log_tail_when_the_process_dies_while_waiting(
     with pytest.raises(VpnError, match="ended before the tunnel came up") as caught:
         start(paths, box, ovpn(tmp_path / "dl"), machine)
     assert caught.value.log == ["a", "b", "c", "d", "e"]
+    # a VPN that never came up is not recorded and leaves no marker
+    assert box.vpn == [] and load_box(box.path).vpn == []
+    assert not (paths.run_vpn / "marker.toml").exists()
+
+
+def test_start_hands_openvpn_an_empty_log_and_pid_file_of_my_own(paths, box, tmp_path, machine):
+    paths.run_vpn.mkdir(parents=True)
+    (paths.run_vpn / "openvpn.log").write_text("old\n")
+    (paths.run_vpn / "openvpn.pid").write_text("999\n")
+    machine.tunnel_after = 0
+    start(paths, box, ovpn(tmp_path / "dl"), machine)
+    for option in ("--log", "--writepid"):
+        size, mode, uid = machine.found[option]
+        assert size == 0, option
+        if sys.platform != "win32":
+            assert mode == 0o600 and uid == os.getuid(), option
+
+
+def test_a_failed_start_shows_none_of_an_earlier_log(paths, box, tmp_path, machine):
+    machine.tunnel_after = 0
+    start(paths, box, ovpn(tmp_path / "dl"), machine)
+    # sudo fails, so openvpn never writes its log this time
+    machine.status, machine.writes_log = 1, False
+    with pytest.raises(VpnError, match="status 1") as caught:
+        start(paths, box, ovpn(tmp_path / "dl"), machine)
+    assert caught.value.log == []
+
+
+def test_start_waits_for_a_tunnel_other_than_the_one_already_up(paths, box, tmp_path, machine):
+    other = Tunnel("tun0", "10.10.14.99")
+    reads = []
+
+    def tunnel():
+        reads.append(1)
+        return other if len(reads) < 3 else TUN
+
+    _, found = start(paths, box, ovpn(tmp_path / "dl"), machine, tunnel=tunnel, before=other)
+    assert found == TUN and len(reads) == 3
+
+
+def test_start_with_only_the_earlier_tunnel_is_not_up(paths, box, tmp_path, machine):
+    machine.tunnel_after = 0
+    _, found = start(paths, box, ovpn(tmp_path / "dl"), machine, before=TUN, wait=1.0)
+    assert found is None and machine.sleeps == [0.5, 0.5]
+
+
+def test_start_uses_the_copy_it_is_given(paths, box, tmp_path, machine):
+    source = ovpn(tmp_path / "dl")
+    copy = vpnctl.copy_into_box(box, source)
+    source.write_bytes(b"changed since the copy\n")
+    machine.tunnel_after = 0
+    marker, _ = start(paths, box, source, machine, copy=copy)
+    assert marker.file == "lab_user.ovpn"
+    assert (paths.run_vpn / "config.ovpn").read_bytes() == CONTENT
+    assert sorted(p.name for p in copy.parent.iterdir()) == ["lab_user.ovpn"]
 
 
 def test_start_without_openvpn_says_how_to_install_it(paths, box, tmp_path, machine):
+    source = ovpn(tmp_path / "dl")
     with pytest.raises(VpnError, match="apt install openvpn"):
-        start(paths, box, ovpn(tmp_path / "dl"), machine, which=lambda name: None)
+        start(paths, box, source, machine, which=lambda name: None, copy=source)
     assert machine.calls == [] and not (box.path / "vpn").exists()
 
 
@@ -411,4 +486,5 @@ def test_tests_cannot_reach_the_real_process_checks_or_openvpn(paths, box, tmp_p
     with pytest.raises(AssertionError, match="real"):
         vpnctl.ours(paths)
     with pytest.raises(AssertionError, match="real"):
-        vpnctl.start(paths, box, ovpn(tmp_path / "dl"), tunnel=lambda: None, clock=lambda: NOW)
+        source = ovpn(tmp_path / "dl")
+        vpnctl.start(paths, box, source, copy=source, tunnel=lambda: None, clock=lambda: NOW)

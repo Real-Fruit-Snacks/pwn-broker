@@ -154,10 +154,30 @@ def test_start_when_a_tunnel_not_ours_is_up_keeps_it_on_enter(session, system, o
 
 def test_start_when_a_tunnel_not_ours_is_up_starts_another_on_yes(session, system, openvpn, source):
     system.tunnel_found = TUN
+    openvpn.comes_up = False
     session.console = FakeConsole(["y", str(source)])
     dispatch(session, "vpn start")
     assert session.console.asked == ["start another?", "vpn file"]
     assert openvpn.calls[0][0] == "openvpn"
+    # the tunnel that was up before is not the new one
+    assert lines(session)[-1] == ("warn", "not up after 15 s; see: vpn log")
+
+
+def test_start_copies_the_file_once(session, openvpn, source, monkeypatch):
+    from pwn_broker import vpnctl
+
+    copies = []
+    real = vpnctl.copy_into_box
+
+    def counted(box, path):
+        copies.append(path)
+        return real(box, path)
+
+    monkeypatch.setattr(vpnctl, "copy_into_box", counted)
+    session.console = FakeConsole([str(source)])
+    dispatch(session, "vpn start")
+    assert copies == [source]
+    assert ("ok", "vpn up, 10.10.14.7 on tun0") in lines(session)
 
 
 def test_start_says_when_the_tunnel_is_not_up_after_15_s(session, system, openvpn, source):

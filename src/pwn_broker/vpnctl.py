@@ -201,15 +201,26 @@ def _tail(paths: AppPaths) -> list[str]:
     return log_tail(paths, LOG_LINES)
 
 
-def _remove_old_pid(paths: AppPaths, run: Callable) -> None:
-    pid_file = _pid_path(paths)
+def _fresh_file(path: Path, run: Callable) -> None:
+    """Replace whatever an earlier run left with an empty file of my own, mode 600.
+
+    Run through sudo, openvpn would create its log and pid file as root, and with a strict umask
+    neither could be read back. It opens an existing file without O_EXCL, so mine keeps my owner
+    while root writes to it. Made here with O_EXCL, the file holds only what this start writes.
+    """
     try:
-        pid_file.unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
     except OSError:
         # left by a root openvpn in a folder this user cannot change
-        run(["rm", "-f", str(pid_file)])
-    if os.path.lexists(pid_file):
-        raise VpnError(f"cannot remove the old {pid_file}")
+        run(["rm", "-f", str(path)])
+    if os.path.lexists(path):
+        raise VpnError(f"cannot remove the old {path}")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        os.chmod(path, 0o600)
+    finally:
+        os.close(fd)
 
 
 def _read_pid(paths: AppPaths) -> int | None:
@@ -238,6 +249,8 @@ def start(
     box: Box,
     source: Path,
     *,
+    copy: Path,
+    before: Tunnel | None = None,
     run: Callable = privilege.run_privileged,
     tunnel: Callable[[], Tunnel | None],
     clock: Callable[[], datetime],
@@ -250,14 +263,18 @@ def start(
 ) -> tuple[Marker, Tunnel | None]:
     if which(COMMAND) is None:
         raise VpnError(INSTALL)
+    """Start openvpn from the box's copy, in the original file's folder.
+
+    `before` is the tunnel that was up already, if any: only a different one counts as this VPN.
+    """
     checks = dict(alive=alive, started=started, comm=comm)
-    copy = copy_into_box(box, source)
     data = copy.read_bytes()
     folder = paths.run_vpn
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     config = _config_path(paths)
     _write_private(config, data)
-    _remove_old_pid(paths, run)
+    _fresh_file(_log_path(paths), run)
+    _fresh_file(_pid_path(paths), run)
     argv = [
         COMMAND, "--cd", str(source.absolute().parent), "--config", str(config),
         "--daemon", DAEMON_NAME, "--writepid", str(_pid_path(paths)),
@@ -276,18 +293,31 @@ def start(
     sha256 = hashlib.sha256(data).hexdigest()
     marker = Marker(pid, begun, box.id, box.name, copy.name, sha256, clock())
     write_toml(_marker_path(paths), asdict(marker))
-    box.vpn.append(VpnRecord(marker.file, marker.sha256, marker.started))
+    record = VpnRecord(marker.file, marker.sha256, marker.started)
+    box.vpn.append(record)
     save_box(box)
     polls = math.ceil(wait / POLL)
     for attempt in range(polls + 1):
         found = tunnel()
-        if found is not None:
+        if found is not None and found != before:
             return marker, found
         if ours(paths, **checks) is None:
+            # a VPN that never came up is neither running nor something the box used
+            _forget(paths, box, record)
             raise VpnError("openvpn ended before the tunnel came up", _tail(paths))
         if attempt < polls:
             sleep(POLL)
     return marker, None
+
+
+def _forget(paths: AppPaths, box: Box, record: VpnRecord) -> None:
+    try:
+        _marker_path(paths).unlink(missing_ok=True)
+    except OSError:
+        pass
+    if box.vpn and box.vpn[-1] is record:
+        box.vpn.pop()
+        save_box(box)
 
 
 def stop(
