@@ -785,7 +785,7 @@ No package in the first batch needs a system package, so the manifest has no fie
 - `box.toml` records each tool: name, version, build, SHA-256 and when it was installed.
 - The status bar and `status` show how many tools the box has.
 - `finish` and `export` gain a step before archiving, and `finish` a step after, for tool data and removal. `finish` checks for running tools before it asks.
-- The launch checks confirm that `python3 -m venv` works, and offer to remove tools left behind by finished boxes.
+- The launch checks warn when `python3-venv` is missing (Python tools need it; nothing else does), and offer to remove tools left behind by finished boxes and files left by an interrupted install.
 
 ### 8.10 Testing
 
