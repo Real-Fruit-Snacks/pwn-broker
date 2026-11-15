@@ -26,6 +26,8 @@ def shop(tmp_path, session, monkeypatch):
     home = tmp_path / "user"
     home.mkdir()
     monkeypatch.setattr(toolhooks, "user_home", lambda: home)
+    # root's home is a folder that does not exist, whoever runs the tests
+    monkeypatch.setattr(toolhooks.tooldata, "_root_home", lambda: tmp_path / "no-root-home")
     monkeypatch.setattr(cmd_tool, "_lookup", lambda command, path=None: None)
     entries = []
     for version in ("1.0.2", "1.0.3"):
@@ -390,12 +392,70 @@ def test_remove_keeps_the_files_while_a_box_cannot_be_read(session, shop):
     assert (session.paths.bin / "kerbrute").exists()
 
 
-def test_remove_leaves_home_data_alone(session, shop):
-    run(session, "tool install kerbrute")
+def kerb_result(shop):
     (shop.home / ".kerb").mkdir()
     (shop.home / ".kerb" / "found.txt").write_text("result")
-    run(session, "tool remove kerbrute", "y")
+
+
+def test_remove_by_the_last_user_moves_the_home_data_into_the_box(session, shop):
+    run(session, "tool install kerbrute")
+    kerb_result(shop)
+    shown = []
+    console = FakeConsole(["y"])
+    original = console.confirm
+    console.confirm = lambda q, default=False: shown.extend(console.lines) or original(q, default)
+    session.console = console
+    dispatch(session, "tool remove kerbrute")
+    assert shown == [("info", f"home      {shop.home / '.kerb'}   (will be deleted)")]
+    copy = session.box.path / "tooldata" / "kerbrute" / "home" / ".kerb" / "found.txt"
+    assert copy.read_text() == "result"
+    assert not (shop.home / ".kerb").exists()
+    assert lines(console, "ok")[-1] == "kerbrute removed; its files are deleted"
+    assert lines(console, "warn") == []
+    run(session, "tool install kerbrute")
+    assert toolstate.load_installed(session.paths)["kerbrute"].home == {".kerb": False}
+
+
+def test_remove_keeps_home_data_another_box_still_uses(session, shop, other):
+    install_for(other, shop, shop.entries[1], session.paths)
+    run(session, "tool install kerbrute")
+    kerb_result(shop)
+    console = run(session, "tool remove kerbrute", "y")
+    assert lines(console, "info") == []
     assert (shop.home / ".kerb" / "found.txt").read_text() == "result"
+    assert not (session.box.path / "tooldata").exists()
+
+
+def test_remove_keeps_a_home_path_that_was_there_before(session, shop):
+    kerb_result(shop)
+    run(session, "tool install kerbrute")
+    console = run(session, "tool remove kerbrute", "y")
+    assert lines(console, "warn") == [
+        f"{shop.home / '.kerb'}   existed before kerbrute was installed; kept"
+    ]
+    assert (shop.home / ".kerb" / "found.txt").read_text() == "result"
+    assert not (session.box.path / "tooldata").exists()
+
+
+def test_remove_keeps_a_home_path_not_copied_in_full(session, shop, monkeypatch):
+    run(session, "tool install kerbrute")
+    kerb_result(shop)
+
+    def denied(src, dst, **kw):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(toolhooks.tooldata.shutil, "copy2", denied)
+    console = run(session, "tool remove kerbrute", "y")
+    assert lines(console, "warn") == [f"{shop.home / '.kerb'} was not copied in full; kept"]
+    assert (shop.home / ".kerb" / "found.txt").exists()
+    assert toolstate.load_installed(session.paths) == {}
+
+
+def test_remove_by_the_last_user_warns_when_roots_home_cannot_be_read(session, shop, monkeypatch):
+    run(session, "tool install kerbrute")
+    monkeypatch.setattr(toolhooks.tooldata, "root_unchecked", lambda h, **k: True)
+    console = run(session, "tool remove kerbrute", "y")
+    assert lines(console, "warn") == ["root's home could not be checked for kerbrute's data"]
 
 
 def test_remove_shows_a_failed_removal_as_one_fail_line(session, shop, monkeypatch):
@@ -508,7 +568,7 @@ def test_completions_survive_a_failing_lookup(session, monkeypatch):
     assert completions(session, "tool install ") == []
 
 
-# ---- review fixes
+# ---- guards
 
 
 def break_a_box(session):

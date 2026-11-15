@@ -1,6 +1,6 @@
 import sys
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from pwn_broker.paths import AppPaths
@@ -22,6 +22,9 @@ class Installed:
     needs_root: bool
     users: list[str]
     home: dict[str, bool]
+    # whether each home entry existed in root's home before install; only recorded when that
+    # is a different folder from the user's and could be read
+    root_home: dict[str, bool] = field(default_factory=dict)
 
 
 _STRINGS = ("name", "version", "sha256", "folder")
@@ -48,6 +51,9 @@ def _installed(row: object) -> Installed:
     home = row["home"]
     if not isinstance(home, dict) or not all(isinstance(v, bool) for v in home.values()):
         raise TypeError("home must map paths to true or false")
+    root_home = row.get("root_home", {})
+    if not isinstance(root_home, dict) or not all(isinstance(v, bool) for v in root_home.values()):
+        raise TypeError("root_home must map paths to true or false")
     return Installed(
         name=row["name"],
         version=row["version"],
@@ -59,6 +65,7 @@ def _installed(row: object) -> Installed:
         needs_root=row["needs_root"],
         users=list(row["users"]),
         home=dict(home),
+        root_home=dict(root_home),
     )
 
 
@@ -70,6 +77,9 @@ def load_installed(paths: AppPaths) -> dict[str, Installed]:
         data = read_toml(path)
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
+    if "schema" not in data:
+        # an empty or cut-short file, not one from a newer version
+        raise ToolError(f"{path} cannot be read")
     if data.get("schema") != SCHEMA:
         raise ToolError(f"{path}: unsupported schema {data.get('schema')!r}; upgrade pwn-broker")
     rows = data.get("tool", [])
@@ -100,6 +110,7 @@ def save_installed(paths: AppPaths, installed: dict[str, Installed]) -> None:
             "needs_root": t.needs_root,
             "users": list(t.users),
             "home": dict(t.home),
+            "root_home": dict(t.root_home),
         }
         for t in installed.values()
     ]

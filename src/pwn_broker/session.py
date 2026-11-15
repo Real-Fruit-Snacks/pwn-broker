@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 from pwn_broker.config import Settings
 from pwn_broker.console import Console
@@ -29,6 +30,8 @@ class Session:
     clock: Callable[[], datetime]
     # paths already reported as skipped, so a periodic rescan does not repeat itself
     warned: set[str] = field(default_factory=set)
+    # home paths the last copy before archiving took in full; only these may be deleted after
+    copied_in_full: set[Path] = field(default_factory=set)
 
 
 def load_session(

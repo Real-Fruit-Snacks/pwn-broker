@@ -1,6 +1,7 @@
 import errno
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -45,6 +46,10 @@ def root_home(tmp_path):
     folder = tmp_path / "rootdir"
     folder.mkdir()
     return folder
+
+
+def collect(box, item, homes, installed=NOW):
+    return [c.dest for c in tooldata.collect(box, item, homes, installed)]
 
 
 def write(path: Path, text: str = "x") -> Path:
@@ -92,7 +97,7 @@ def test_collect_copies_a_file_and_a_folder(tmp_path, home):
     write(home / ".config" / "burp" / "a.txt", "a")
     write(home / ".config" / "burp" / "sub" / "b.txt", "b")
     item = make_item(home={".burp.cfg": False, ".config/burp": False})
-    copied = tooldata.collect(box, item, [home])
+    copied = collect(box, item, [home])
     assert copied == [
         "tooldata/burp/home/.burp.cfg",
         "tooldata/burp/home/.config/burp",
@@ -103,21 +108,196 @@ def test_collect_copies_a_file_and_a_folder(tmp_path, home):
     assert (base / ".config" / "burp" / "sub" / "b.txt").read_text() == "b"
 
 
-def test_collect_replaces_an_earlier_copy(tmp_path, home):
-    box = make_box(tmp_path)
-    write(home / "d" / "new.txt", "new")
-    old = write(box.path / "tooldata" / "burp" / "home" / "d" / "old.txt", "old")
-    tooldata.collect(box, make_item(home={"d": False}), [home])
-    assert not old.exists()
-    assert (box.path / "tooldata" / "burp" / "home" / "d" / "new.txt").exists()
+LATER = NOW + timedelta(days=2)
 
 
-def test_collect_replaces_an_earlier_file_copy(tmp_path, home):
+def test_collect_keeps_a_copy_from_an_earlier_install(tmp_path, home):
+    # export on one VM, import on another, install again, finish: both runs stay in the box
     box = make_box(tmp_path)
+    item = make_item(home={"d": False})
+    write(home / "d" / "first.txt", "first")
+    collect(box, item, [home], NOW)
+    (home / "d" / "first.txt").unlink()
+    write(home / "d" / "second.txt", "second")
+    assert collect(box, item, [home], LATER) == ["tooldata/burp/home/d"]
+    base = box.path / "tooldata" / "burp"
+    assert (base / "home-1" / "d" / "first.txt").read_text() == "first"
+    assert (base / "home" / "d" / "second.txt").read_text() == "second"
+    assert not (base / "home" / "d" / "first.txt").exists()
+    assert (base / ".install").read_text(encoding="utf-8") == LATER.isoformat()
+
+
+def test_collect_keeps_a_copy_with_no_stamp_and_takes_the_next_free_number(tmp_path, home):
+    box = make_box(tmp_path)
+    base = box.path / "tooldata" / "burp"
+    write(base / "home" / "f", "unstamped")
+    write(base / "home-1" / "f", "older")
+    write(base / "home-root" / "f", "root")
     write(home / "f", "new")
-    write(box.path / "tooldata" / "burp" / "home" / "f", "old")
-    tooldata.collect(box, make_item(home={"f": False}), [home])
-    assert (box.path / "tooldata" / "burp" / "home" / "f").read_text() == "new"
+    collect(box, make_item(home={"f": False}), [home])
+    assert (base / "home-1" / "f").read_text() == "older"
+    assert (base / "home-2" / "f").read_text() == "unstamped"
+    assert (base / "home-root-1" / "f").read_text() == "root"
+    assert not (base / "home-root").exists()
+    assert (base / "home" / "f").read_text() == "new"
+    assert (base / ".install").read_text(encoding="utf-8") == NOW.isoformat()
+
+
+def test_two_collects_in_one_install_leave_one_copy_with_the_latest_files(tmp_path, home):
+    box = make_box(tmp_path)
+    item = make_item(home={"d": False, "f": False})
+    write(home / "d" / "old.txt", "old")
+    write(home / "f", "one")
+    collect(box, item, [home])
+    (home / "d" / "old.txt").unlink()
+    write(home / "d" / "new.txt", "new")
+    write(home / "f", "two")
+    collect(box, item, [home])
+    base = box.path / "tooldata" / "burp"
+    assert sorted(p.name for p in base.iterdir()) == [".install", "home"]
+    assert sorted(p.name for p in (base / "home" / "d").iterdir()) == ["new.txt"]
+    assert (base / "home" / "f").read_text() == "two"
+    assert sorted(p.name for p in (base / "home").iterdir()) == ["d", "f"]
+
+
+def test_a_partial_second_copy_leaves_the_first_in_place(tmp_path, home, monkeypatch):
+    box = make_box(tmp_path)
+    item = make_item(home={"d": False})
+    write(home / "d" / "a.txt", "a1")
+    write(home / "d" / "b.txt", "b1")
+    assert [c.full for c in tooldata.collect(box, item, [home], NOW)] == [True]
+    write(home / "d" / "a.txt", "a2")
+    write(home / "d" / "b.txt", "b2")
+    real = tooldata.shutil.copy2
+
+    def flaky(src, dst, **kw):
+        if Path(src).name == "b.txt":
+            raise PermissionError("denied")
+        return real(src, dst, **kw)
+
+    monkeypatch.setattr(tooldata.shutil, "copy2", flaky)
+    again = tooldata.collect(box, item, [home], NOW)
+    assert [(c.dest, c.full) for c in again] == [("tooldata/burp/home/d", False)]
+    base = box.path / "tooldata" / "burp" / "home" / "d"
+    assert (base / "a.txt").read_text() == "a1" and (base / "b.txt").read_text() == "b1"
+    assert sorted(p.name for p in base.parent.iterdir()) == ["d"]
+
+
+def test_collect_says_which_entries_were_copied_in_full(tmp_path, home, monkeypatch):
+    box = make_box(tmp_path)
+    write(home / "d" / "bad.txt", "bad")
+    write(home / "d" / "good.txt", "good")
+    write(home / "f", "f")
+    real = tooldata.shutil.copy2
+
+    def flaky(src, dst, **kw):
+        if Path(src).name == "bad.txt":
+            raise PermissionError("denied")
+        return real(src, dst, **kw)
+
+    monkeypatch.setattr(tooldata.shutil, "copy2", flaky)
+    got = tooldata.collect(box, make_item(home={"d": False, "f": False}), [home], NOW)
+    assert [(c.source, c.dest, c.full) for c in got] == [
+        (home / "d", "tooldata/burp/home/d", False),
+        (home / "f", "tooldata/burp/home/f", True),
+    ]
+
+
+def test_an_unlistable_subfolder_means_not_full(tmp_path, home, monkeypatch):
+    box = make_box(tmp_path)
+    write(home / "d" / "sub" / "f", "x")
+    write(home / "d" / "ok", "y")
+    real = os.scandir
+
+    def deny(path):
+        if Path(path).name == "sub":
+            raise PermissionError("denied")
+        return real(path)
+
+    monkeypatch.setattr(tooldata.os, "scandir", deny)
+    assert [c.full for c in tooldata.collect(box, make_item(home={"d": False}), [home], NOW)] == [
+        False
+    ]
+
+
+@posix_only
+def test_a_link_inside_a_folder_means_not_full(tmp_path, home):
+    box = make_box(tmp_path)
+    write(home / "d" / "real.txt", "r")
+    (home / "d" / "link.txt").symlink_to(home / "d" / "real.txt")
+    assert [c.full for c in tooldata.collect(box, make_item(home={"d": False}), [home], NOW)] == [
+        False
+    ]
+
+
+def test_collect_leaves_no_temporary_copy_after_running_out_of_space(tmp_path, home, monkeypatch):
+    box = make_box(tmp_path)
+    write(home / "d" / "a", "a")
+
+    def full(src, dst, **kw):
+        raise OSError(errno.ENOSPC, "no space")
+
+    monkeypatch.setattr(tooldata.shutil, "copy2", full)
+    with pytest.raises(ToolError):
+        collect(box, make_item(home={"d": False}), [home])
+    assert sorted(p.name for p in (box.path / "tooldata" / "burp" / "home").iterdir()) == []
+
+
+# root's home
+
+
+def test_collect_uses_roots_own_answers_for_roots_home(tmp_path, home, root_home):
+    box = make_box(tmp_path)
+    for folder in (home, root_home):
+        write(folder / "was", "w")
+        write(folder / "new", "n")
+        write(folder / "unasked", "u")
+    item = make_item(
+        home={"was": False, "new": False, "unasked": False},
+        root_home={"was": True, "new": False},
+    )
+    assert collect(box, item, [home, root_home]) == [
+        "tooldata/burp/home-root/new",
+        "tooldata/burp/home-root/unasked",
+        "tooldata/burp/home/new",
+        "tooldata/burp/home/unasked",
+        "tooldata/burp/home/was",
+    ]
+
+
+def test_to_delete_and_kept_use_roots_own_answers(home, root_home):
+    for folder in (home, root_home):
+        for name in ("was", "new", "unasked"):
+            write(folder / name)
+    item = make_item(
+        home={"was": False, "new": False, "unasked": False},
+        root_home={"was": True, "new": False},
+    )
+    assert tooldata.to_delete(item, [home, root_home], False) == sorted(
+        [home / "was", home / "new", home / "unasked", root_home / "new"]
+    )
+    # with no answer recorded for root's home, its copy counts as having been there before
+    assert tooldata.kept(item, [home, root_home]) == sorted([root_home / "was", root_home / "unasked"])
+
+
+def test_root_unchecked_only_for_a_different_unreadable_root_home(home, root_home, tmp_path, monkeypatch, on_linux):
+    assert tooldata.root_unchecked(home, root_home=root_home) is False
+    assert tooldata.root_unchecked(home, root_home=home) is False
+    assert tooldata.root_unchecked(home, root_home=tmp_path / "nope") is False
+    monkeypatch.setattr(tooldata.os, "access", lambda path, mode: False)
+    assert tooldata.root_unchecked(home, root_home=root_home) is True
+    assert tooldata.root_unchecked(home, root_home=home) is False
+
+
+def test_root_unchecked_is_false_on_windows(home, root_home, monkeypatch):
+    monkeypatch.setattr(tooldata, "_posix", lambda: False)
+    monkeypatch.setattr(tooldata.os, "access", lambda path, mode: False)
+    assert tooldata.root_unchecked(home, root_home=root_home) is False
+
+
+def test_roots_home_is_looked_up_not_assumed(home, root_home, monkeypatch, on_linux):
+    monkeypatch.setattr(tooldata, "_root_home", lambda: root_home)
+    assert tooldata.homes(home) == [home, root_home]
 
 
 def test_collect_leaves_alone_what_existed_before_or_is_unlisted(tmp_path, home):
@@ -126,21 +306,21 @@ def test_collect_leaves_alone_what_existed_before_or_is_unlisted(tmp_path, home)
     write(home / "unlisted", "2")
     write(home / "new", "3")
     item = make_item(home={"before": True, "new": False})
-    assert tooldata.collect(box, item, [home]) == ["tooldata/burp/home/new"]
+    assert collect(box, item, [home]) == ["tooldata/burp/home/new"]
     assert not (box.path / "tooldata" / "burp" / "home" / "before").exists()
     assert not (box.path / "tooldata" / "burp" / "home" / "unlisted").exists()
 
 
 def test_collect_skips_missing_paths(tmp_path, home):
     box = make_box(tmp_path)
-    assert tooldata.collect(box, make_item(home={"gone": False}), [home]) == []
+    assert collect(box, make_item(home={"gone": False}), [home]) == []
 
 
 def test_collect_keeps_the_two_homes_apart(tmp_path, home, root_home):
     box = make_box(tmp_path)
     write(home / "cfg", "user")
     write(root_home / "cfg", "root")
-    copied = tooldata.collect(box, make_item(home={"cfg": False}), [home, root_home])
+    copied = collect(box, make_item(home={"cfg": False}), [home, root_home])
     assert copied == ["tooldata/burp/home-root/cfg", "tooldata/burp/home/cfg"]
     base = box.path / "tooldata" / "burp"
     assert (base / "home" / "cfg").read_text() == "user"
@@ -161,7 +341,7 @@ def test_collect_survives_an_unreadable_file(tmp_path, home, monkeypatch):
 
     monkeypatch.setattr(tooldata.shutil, "copy2", flaky)
     item = make_item(home={"d": False, "other": False})
-    copied = tooldata.collect(box, item, [home])
+    copied = collect(box, item, [home])
     assert copied == ["tooldata/burp/home/d"]
     base = box.path / "tooldata" / "burp" / "home"
     assert (base / "d" / "good.txt").read_text() == "good"
@@ -176,7 +356,7 @@ def test_collect_skips_symlinks_inside_a_folder_and_special_files(tmp_path, home
     (home / "d" / "link.txt").symlink_to(secret)
     (home / "d" / "linkdir").symlink_to(tmp_path)
     os.mkfifo(home / "d" / "pipe")
-    tooldata.collect(box, make_item(home={"d": False}), [home])
+    collect(box, make_item(home={"d": False}), [home])
     copied = box.path / "tooldata" / "burp" / "home" / "d"
     assert sorted(p.name for p in copied.iterdir()) == ["real.txt"]
 
@@ -189,7 +369,7 @@ def test_collect_skips_a_symlink_entry_and_one_below_a_symlink(tmp_path, home):
     (home / "link").symlink_to(outside)
     (home / "filelink").symlink_to(outside / "inner.txt")
     item = make_item(home={"link": False, "link/inner.txt": False, "filelink": False})
-    assert tooldata.collect(box, item, [home]) == []
+    assert collect(box, item, [home]) == []
 
 
 # to_delete and kept
@@ -216,7 +396,8 @@ def test_to_delete_ignores_unlisted_entries(home):
 def test_to_delete_covers_both_homes(home, root_home):
     write(home / "a")
     write(root_home / "a")
-    got = tooldata.to_delete(make_item(home={"a": False}), [home, root_home], False)
+    item = make_item(home={"a": False}, root_home={"a": False})
+    got = tooldata.to_delete(item, [home, root_home], False)
     assert got == sorted([home / "a", root_home / "a"])
 
 
@@ -319,7 +500,7 @@ def test_bad_entries_touch_nothing(tmp_path, home, entry):
     sentinel2 = write(box.path / "root.txt", "r")
     outside = write(tmp_path / "b", "b")
     item = make_item(home={entry: False})
-    assert tooldata.collect(box, item, [home]) == []
+    assert collect(box, item, [home]) == []
     assert tooldata.to_delete(item, [home], False) == []
     assert tooldata.kept(make_item(home={entry: True}), [home]) == []
     assert sentinel.exists() and sentinel2.exists() and outside.exists()
@@ -332,7 +513,7 @@ def test_bad_tool_name(tmp_path, home, name):
     write(home / "f")
     item = make_item(name=name, home={"f": False})
     with pytest.raises(ToolError):
-        tooldata.collect(box, item, [home])
+        collect(box, item, [home])
     assert tooldata.to_delete(item, [home], False) == []
     assert tooldata.kept(make_item(name=name, home={"f": True}), [home]) == []
     assert sorted(p.name for p in tmp_path.iterdir()) == ["box", "home"]
@@ -355,7 +536,7 @@ def test_collect_refuses_a_linked_destination(tmp_path, home, link):
             (box.path / Path(*parts[:-1])).mkdir(parents=True)
         (box.path / Path(*parts)).symlink_to(target, target_is_directory=True)
     with pytest.raises(ToolError):
-        tooldata.collect(box, make_item(home={"d": False}), [home])
+        collect(box, make_item(home={"d": False}), [home])
     assert victim.read_text() == "keep" and victim2.read_text() == "keep"
     assert not (target / "d" / "f").exists()
 
@@ -371,7 +552,7 @@ def test_enospc_stops_collect_and_leaves_no_partial_file(tmp_path, home, monkeyp
 
     monkeypatch.setattr(tooldata.shutil, "copy2", full)
     with pytest.raises(ToolError):
-        tooldata.collect(box, make_item(home={"a": False, "b": False}), [home])
+        collect(box, make_item(home={"a": False, "b": False}), [home])
     base = box.path / "tooldata" / "burp" / "home"
     assert not (base / "a").exists() and not (base / "b").exists()
 
@@ -389,7 +570,7 @@ def test_other_oserror_removes_partial_file_and_does_not_report_it(tmp_path, hom
         return real(src, dst, **kw)
 
     monkeypatch.setattr(tooldata.shutil, "copy2", flaky)
-    copied = tooldata.collect(box, make_item(home={"a": False, "b": False}), [home])
+    copied = collect(box, make_item(home={"a": False, "b": False}), [home])
     assert copied == ["tooldata/burp/home/b"]
     assert not (box.path / "tooldata" / "burp" / "home" / "a").exists()
 
@@ -405,7 +586,7 @@ def test_unlistable_folder_is_not_created_or_reported(tmp_path, home, monkeypatc
         return real(path)
 
     monkeypatch.setattr(tooldata.os, "scandir", deny)
-    assert tooldata.collect(box, make_item(home={"d": False}), [home]) == []
+    assert collect(box, make_item(home={"d": False}), [home]) == []
     assert not (box.path / "tooldata" / "burp" / "home" / "d").exists()
 
 
@@ -421,7 +602,7 @@ def test_unlistable_subfolder_is_not_created(tmp_path, home, monkeypatch):
         return real(path)
 
     monkeypatch.setattr(tooldata.os, "scandir", deny)
-    assert tooldata.collect(box, make_item(home={"d": False}), [home]) == ["tooldata/burp/home/d"]
+    assert collect(box, make_item(home={"d": False}), [home]) == ["tooldata/burp/home/d"]
     base = box.path / "tooldata" / "burp" / "home" / "d"
     assert (base / "ok").exists() and not (base / "sub").exists()
 
@@ -431,9 +612,9 @@ def test_depth_limit(tmp_path, home, monkeypatch):
     write(home / "d" / "a" / "b" / "c" / "f", "x")
     monkeypatch.setattr(tooldata, "_MAX_DEPTH", 2)
     with pytest.raises(ToolError):
-        tooldata.collect(box, make_item(home={"d": False}), [home])
+        collect(box, make_item(home={"d": False}), [home])
     monkeypatch.setattr(tooldata, "_MAX_DEPTH", 3)
-    assert tooldata.collect(box, make_item(home={"d": False}), [home])
+    assert collect(box, make_item(home={"d": False}), [home])
 
 
 def test_nested_homes_are_dropped(tmp_path, home, on_linux):

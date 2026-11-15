@@ -1,3 +1,4 @@
+import shutil
 import sys
 import tarfile
 from dataclasses import replace
@@ -34,6 +35,7 @@ def user(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setattr(toolhooks, "user_home", lambda: home)
     monkeypatch.setattr(toolhooks.tooldata, "homes", lambda h, **k: [h])
+    monkeypatch.setattr(toolhooks.tooldata, "root_unchecked", lambda h, **k: False)
     return home
 
 
@@ -209,6 +211,7 @@ def test_pre_pack_skips_a_tool_that_is_not_installed(session, registered, user):
 
 
 def test_undo_releases_the_tool_and_deletes_new_home_paths(tooled, user):
+    toolhooks.pre_pack(tooled)
     toolhooks.undo(tooled)
     assert load_installed(tooled.paths) == {}
     assert not (user / ".kerb").exists()
@@ -559,7 +562,7 @@ def tooled_sha(session):
     return session.box.tools[0].sha256
 
 
-# ---- review fixes
+# ---- unreadable boxes and lists
 
 
 def break_box(box_dir):
@@ -622,6 +625,7 @@ def test_a_loaded_finished_box_still_does_not_count_while_another_is_unreadable(
     item = load_installed(tooled.paths)["kerbrute"]
     item.users += [done.id]
     toolstate.save_installed(tooled.paths, {"kerbrute": item})
+    toolhooks.pre_pack(tooled)
     toolhooks.undo(tooled)
     assert load_installed(tooled.paths) == {}
     assert not (user / ".kerb").exists()
@@ -678,3 +682,184 @@ def test_restore_keeps_a_user_the_listing_could_not_load(tooled, other):
     toolhooks.restore(tooled)
     users = load_installed(tooled.paths)["kerbrute"].users
     assert "lost-box" in users and tooled.box.id in users
+
+
+# ---- home data copied in full
+
+
+def deny_copy(monkeypatch, name):
+    real = toolhooks.tooldata.shutil.copy2
+
+    def flaky(src, dst, **kw):
+        if str(src).replace("\\", "/").endswith(name):
+            raise PermissionError("denied")
+        return real(src, dst, **kw)
+
+    monkeypatch.setattr(toolhooks.tooldata.shutil, "copy2", flaky)
+
+
+def test_finish_keeps_a_home_folder_that_was_not_copied_in_full(tooled, user, monkeypatch):
+    (user / ".kerb" / "locked.txt").write_text("root's")
+    deny_copy(monkeypatch, ".kerb/locked.txt")
+    say(tooled, "y", "n")
+    path = finish_box(tooled, **SAVED)
+    assert path is not None
+    assert (user / ".kerb" / "locked.txt").read_text() == "root's"
+    assert (user / ".kerb" / "found.txt").exists()
+    assert f"{user / '.kerb'} was not copied in full; kept" in lines(tooled, "warn")
+    names = archive_names(path)
+    assert any(n.endswith("tooldata/kerbrute/home/.kerb/found.txt") for n in names)
+    assert not any(n.endswith("locked.txt") for n in names)
+    assert load_installed(tooled.paths) == {}
+
+
+def test_undo_deletes_nothing_when_nothing_was_copied_first(tooled, user):
+    toolhooks.undo(tooled)
+    assert (user / ".kerb" / "found.txt").exists()
+    assert f"{user / '.kerb'} was not copied in full; kept" in lines(tooled, "warn")
+    assert load_installed(tooled.paths) == {}
+
+
+def test_pre_pack_remembers_only_what_was_copied_in_full(tooled, user, monkeypatch):
+    assert tooled.copied_in_full == set()
+    toolhooks.pre_pack(tooled)
+    assert tooled.copied_in_full == {user / ".kerb"}
+    deny_copy(monkeypatch, "found.txt")
+    toolhooks.pre_pack(tooled)
+    assert tooled.copied_in_full == set()
+
+
+def test_a_reinstall_keeps_the_earlier_installs_copy_in_the_box(tooled, shop, user):
+    assert export_box(tooled, fix=lambda p: 0) is not None
+    # as on a second VM: the tool and its home data are not there until installed again
+    wipe(tooled)
+    tooled.box.tools = []
+    shutil.rmtree(user / ".kerb")
+    later = NOW.replace(year=NOW.year + 1)
+    toolinstall.install(
+        tooled.paths, tooled.box, shop.entry, shop.zip,
+        installed={}, unfinished={tooled.box.id: tooled.box.name},
+        home=user, console=FakeConsole(), now=later, on_path=lambda n: None,
+    )  # fmt: skip
+    (user / ".kerb").mkdir()
+    (user / ".kerb" / "second.txt").write_text("second run")
+    say(tooled, "y", "n")
+    path = finish_box(tooled, **SAVED)
+    names = archive_names(path)
+    assert any(n.endswith("tooldata/kerbrute/home-1/.kerb/found.txt") for n in names)
+    assert any(n.endswith("tooldata/kerbrute/home/.kerb/second.txt") for n in names)
+    assert not (user / ".kerb").exists()
+
+
+# ---- root's home
+
+
+@pytest.fixture
+def rootdir(tmp_path, monkeypatch, user):
+    folder = tmp_path / "rootdir"
+    folder.mkdir()
+    monkeypatch.setattr(toolhooks.tooldata, "homes", lambda h, **k: [h, folder])
+    return folder
+
+
+def install_kerbrute(session, shop, user):
+    session.settings = replace(session.settings, tools_index=str(shop.folder))
+    toolinstall.install(
+        session.paths, session.box, shop.entry, shop.zip,
+        installed={}, unfinished={session.box.id: session.box.name},
+        home=user, console=FakeConsole(), now=NOW, on_path=lambda n: None,
+    )  # fmt: skip
+
+
+def test_a_path_that_was_in_roots_home_before_is_kept(session, shop, user, rootdir, registered):
+    (rootdir / ".kerb").mkdir()
+    (rootdir / ".kerb" / "mine.txt").write_text("root had it")
+    install_kerbrute(session, shop, user)
+    assert load_installed(session.paths)["kerbrute"].root_home == {".kerb": True, ".old": False}
+    (user / ".kerb").mkdir()
+    (user / ".kerb" / "found.txt").write_text("user run")
+    say(session, "y", "n")
+    path = finish_box(session, **SAVED)
+    names = archive_names(path)
+    assert any(n.endswith("tooldata/kerbrute/home/.kerb/found.txt") for n in names)
+    assert (rootdir / ".kerb" / "mine.txt").read_text() == "root had it"
+    assert not (user / ".kerb").exists()
+    assert f"{rootdir / '.kerb'}   existed before kerbrute was installed; kept" in lines(session, "warn")
+
+
+def test_a_path_made_in_roots_home_after_install_is_collected_and_deleted(
+    session, shop, user, rootdir, registered
+):
+    install_kerbrute(session, shop, user)
+    (rootdir / ".kerb").mkdir()
+    (rootdir / ".kerb" / "found.txt").write_text("sudo run")
+    say(session, "y", "n")
+    path = finish_box(session, **SAVED)
+    assert any(
+        n.endswith("tooldata/kerbrute/home-root/.kerb/found.txt") for n in archive_names(path)
+    )
+    assert not (rootdir / ".kerb").exists()
+
+
+def test_finish_warns_when_roots_home_cannot_be_read(tooled, monkeypatch):
+    monkeypatch.setattr(toolhooks.tooldata, "root_unchecked", lambda h, **k: True)
+    say(tooled, "y", "n")
+    assert finish_box(tooled, **SAVED) is not None
+    assert "root's home could not be checked for kerbrute's data" in lines(tooled, "warn")
+
+
+def test_a_user_whose_home_is_roots_sees_no_difference(session, shop, tmp_path, monkeypatch, registered):
+    home = tmp_path / "user"
+    home.mkdir()
+    monkeypatch.setattr(toolhooks, "user_home", lambda: home)
+    monkeypatch.setattr(toolhooks.tooldata, "_posix", lambda: True)
+    monkeypatch.setattr(toolhooks.tooldata, "_root_home", lambda: home)
+    install_kerbrute(session, shop, home)
+    assert load_installed(session.paths)["kerbrute"].root_home == {}
+    (home / ".kerb").mkdir()
+    (home / ".kerb" / "found.txt").write_text("result")
+    say(session, "y", "n")
+    path = finish_box(session, **SAVED)
+    assert any(n.endswith("tooldata/kerbrute/home/.kerb/found.txt") for n in archive_names(path))
+    assert not (home / ".kerb").exists()
+    assert not any("root's home" in t for t in lines(session, "warn"))
+
+
+# ---- undo always saves the box
+
+
+def test_undo_goes_on_after_any_error_and_still_saves_every_record(tooled, shop, user, monkeypatch):
+    other_command = [{"name": "other-tool", "type": "binary", "path": "files/kerbrute"}]
+    zip2, entry2 = toolkit.make_entry(
+        shop.folder.parent / "pkg2", {"name": "other-tool", "command": other_command}
+    )
+    toolinstall.install(
+        tooled.paths, tooled.box, entry2, zip2,
+        installed=load_installed(tooled.paths), unfinished={tooled.box.id: "forest"},
+        home=user, console=FakeConsole(), now=NOW, on_path=lambda n: None,
+    )  # fmt: skip
+    real = toolinstall.release
+
+    def release(paths, box, name, **kw):
+        if name == "kerbrute":
+            raise ValueError("odd value")
+        return real(paths, box, name, **kw)
+
+    monkeypatch.setattr(toolhooks.toolinstall, "release", release)
+    with pytest.raises(ToolError, match="kerbrute: odd value"):
+        toolhooks.undo(tooled)
+    assert "other-tool" not in load_installed(tooled.paths)
+    assert [t.name for t in load_box(tooled.box.path).tools] == ["kerbrute", "other-tool"]
+
+
+def test_undo_saves_the_records_even_when_interrupted(tooled, monkeypatch):
+    real = toolinstall.release
+
+    def interrupt(*a, **k):
+        real(*a, **k)  # the record is dropped and saved, then the interrupt lands
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(toolhooks.toolinstall, "release", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        toolhooks.undo(tooled)
+    assert [t.name for t in load_box(tooled.box.path).tools] == ["kerbrute"]

@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+from pwn_broker import tooldata
 from pwn_broker.console import Console
 from pwn_broker.model import Box, ToolRecord
 from pwn_broker.paths import AppPaths
@@ -177,6 +178,10 @@ def _show(
         console.info(f"files {folder}   {'  '.join(item.uploads)}")
 
 
+def _existing(folder: Path, entries: list[str]) -> dict[str, bool]:
+    return {p: os.path.lexists(folder / Path(*p.split("/"))) for p in entries}
+
+
 def _record(box: Box, record: ToolRecord) -> None:
     box.tools = [t for t in box.tools if t.name != record.name] + [record]
 
@@ -266,6 +271,7 @@ def install(
         if manifest.uploads:
             made_uploads = True
             _copy_uploads(manifest, folder, uploads_dir)
+        found = tooldata.homes(home)
         item = Installed(
             name=name,
             version=entry.version,
@@ -276,7 +282,9 @@ def install(
             uploads=[u.as_name for u in manifest.uploads],
             needs_root=manifest.needs_root,
             users=[box.id],
-            home={p: os.path.lexists(home / Path(*p.split("/"))) for p in manifest.home},
+            home=_existing(home, manifest.home),
+            # root's home is only asked about when it is a different folder that can be read
+            root_home=_existing(found[1], manifest.home) if len(found) > 1 else {},
         )
         _record(box, ToolRecord(name, entry.version, entry.build, entry.sha256, now))
         installed[name] = item

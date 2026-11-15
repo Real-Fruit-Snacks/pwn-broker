@@ -3,7 +3,7 @@ import re
 import shutil
 from pathlib import Path
 
-from pwn_broker import toolhooks, toolindex, toolinstall, toolstate
+from pwn_broker import tooldata, toolhooks, toolindex, toolinstall, toolstate
 from pwn_broker.session import Session
 from pwn_broker.shell.commands import command, take_args
 from pwn_broker.toolindex import BuildEntry, Index, ToolEntry
@@ -259,12 +259,27 @@ def tool_remove(session: Session, args: list[str]) -> None:
     found = toolstate.running(session.paths, tools=[name])
     if found:
         raise ToolError(toolhooks.running_text(session.paths, *found[0]))
+    installed = toolstate.load_installed(session.paths)
+    holding = toolstate.holding_boxes(session.paths, installed, excluding=box.id)
+    item = installed.get(name)
+    # the last box to let go takes the tool's home data with it, as finish does
+    last = item is not None and bool(item.home) and not any(u in holding for u in item.users)
+    homes = toolhooks.user_homes() if last else []
+    named = tooldata.to_delete(item, homes, False) if last else []
+    for path in named:
+        console.info(f"home      {path}   (will be deleted)")
     if not console.confirm(f"remove {name}?"):
         console.info("nothing removed")
         return
-    installed = toolstate.load_installed(session.paths)
-    holding = toolstate.holding_boxes(session.paths, installed, excluding=box.id)
+    doomed: list[Path] = []
+    if last:
+        full: set[Path] = set()
+        if named:
+            record = next(t for t in box.tools if t.name == name)
+            full = toolhooks.collect_tool(box, item, record, homes, console)
+        doomed = toolhooks.home_to_delete(console, item, homes, False, full)
     gone = toolinstall.release(session.paths, box, name, installed=installed, unfinished=holding)
+    tooldata.delete(doomed, homes)
     item = installed.get(name)
     if gone or item is None or not item.users:
         console.ok(f"{name} removed; its files are deleted" if gone else f"{name} removed from {box.name}")

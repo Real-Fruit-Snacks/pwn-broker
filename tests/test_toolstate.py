@@ -1,4 +1,7 @@
+import tomllib
+
 import pytest
+import tomli_w
 
 from pwn_broker import toolstate
 from pwn_broker.boxes import acquire_open, release_open
@@ -76,6 +79,34 @@ def test_installed_bad_schema_duplicate_and_types(paths):
         load_installed(paths)
     paths.tools_state.write_text(text.replace("build = 3", "build = true"), encoding="utf-8")
     with pytest.raises(ToolError, match="installed.toml"):
+        load_installed(paths)
+
+
+def test_installed_keeps_roots_answers_and_reads_a_file_without_them(paths):
+    one = item("one")
+    one.root_home = {".cache/x": True}
+    save_installed(paths, {"one": one})
+    assert load_installed(paths)["one"].root_home == {".cache/x": True}
+    data = tomllib.loads(paths.tools_state.read_text(encoding="utf-8"))
+    del data["tool"][0]["root_home"]
+    paths.tools_state.write_text(tomli_w.dumps(data), encoding="utf-8")
+    older = load_installed(paths)["one"]
+    assert older.root_home == {} and older.home == one.home
+
+
+@pytest.mark.parametrize("text", ["", "tool = []\n"])
+def test_installed_without_a_schema_cannot_be_read(paths, text):
+    paths.tools_state.parent.mkdir(parents=True)
+    paths.tools_state.write_text(text, encoding="utf-8")
+    with pytest.raises(ToolError) as err:
+        load_installed(paths)
+    assert str(err.value) == f"{paths.tools_state} cannot be read"
+
+
+def test_installed_with_another_schema_says_to_upgrade(paths):
+    paths.tools_state.parent.mkdir(parents=True)
+    paths.tools_state.write_text("schema = 2\n", encoding="utf-8")
+    with pytest.raises(ToolError, match="unsupported schema 2; upgrade pwn-broker"):
         load_installed(paths)
 
 
