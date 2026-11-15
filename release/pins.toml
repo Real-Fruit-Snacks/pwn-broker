@@ -1,0 +1,7 @@
+# The upstream Python build a release carries, byte for byte. asciinema's pin is in
+# src/pwn_broker/recorder.py.
+[python]
+version = "3.13.18"
+url = "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.13.18+20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+size = 35596130
+sha256 = "f2d2199eb25880e07863b391cf7124e7ffa1338b0d65600dfcec117c4223a7fb"
