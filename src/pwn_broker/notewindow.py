@@ -16,9 +16,10 @@ def has_display(env: Mapping[str, str]) -> bool:
     return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
 
 
-def _spawn(argv: list[str]) -> None:
+def _spawn(argv: list[str], cwd: Path) -> None:
     subprocess.Popen(
         argv,
+        cwd=cwd,
         start_new_session=True,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -31,13 +32,13 @@ def open_note(
     settings: Settings,
     box: Box,
     env: Mapping[str, str],
-    spawn: Callable[[list[str]], None] = _spawn,
+    spawn: Callable[[list[str], Path], None] = _spawn,
 ) -> bool:
     if not has_display(env):
         return False
     argv = [settings.terminal, "-e", *vim_command(paths, box.path / NOTE_NAME)]
     try:
-        spawn(argv)
+        spawn(argv, box.path)
     except OSError:
         return False
     return True

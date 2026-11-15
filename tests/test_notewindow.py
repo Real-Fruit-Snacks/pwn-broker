@@ -22,18 +22,22 @@ def test_has_display():
 
 def test_open_note_spawns_terminal(paths, box):
     seen = []
-    ok = open_note(paths, Settings(terminal="xterm"), box, {"DISPLAY": ":0"}, spawn=seen.append)
-    assert ok and seen == [["xterm", "-e", *vim_command(paths, box.path / "notes.md")]]
+    ok = open_note(
+        paths, Settings(terminal="xterm"), box, {"DISPLAY": ":0"},
+        spawn=lambda argv, cwd: seen.append((argv, cwd)),
+    )  # fmt: skip
+    assert ok
+    assert seen == [(["xterm", "-e", *vim_command(paths, box.path / "notes.md")], box.path)]
 
 
 def test_open_note_without_display(paths, box):
     seen = []
-    assert open_note(paths, Settings(), box, {}, spawn=seen.append) is False
+    assert open_note(paths, Settings(), box, {}, spawn=lambda a, c: seen.append(a)) is False
     assert seen == []
 
 
 def test_open_note_terminal_missing(paths, box):
-    def boom(argv):
+    def boom(argv, cwd):
         raise OSError("no such terminal")
 
     assert open_note(paths, Settings(), box, {"DISPLAY": ":0"}, spawn=boom) is False
@@ -44,4 +48,12 @@ def test_note_unsaved(box):
     (box.path / ".note-state").write_text("1\n")
     assert note_unsaved(box) is True
     (box.path / ".note-state").write_text("0\n")
+    assert note_unsaved(box) is False
+
+
+def test_note_unsaved_ignores_garbage(box):
+    state = box.path / ".note-state"
+    state.write_bytes(b"\xff\xfe\x00garbage")
+    assert note_unsaved(box) is False
+    state.write_text("yes please")
     assert note_unsaved(box) is False

@@ -1,5 +1,7 @@
 import importlib.resources
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -104,11 +106,13 @@ def test_load_template_falls_back_to_packaged(paths):
 def test_vimrc_has_autocmds_and_lf_only():
     raw = importlib.resources.files("pwn_broker.data").joinpath("vimrc").read_bytes()
     assert b"\r" not in raw
-    assert raw.endswith(b"augroup END\n")
+    assert raw.endswith(b"endif\n")
     text = raw.decode("utf-8")
-    assert "autocmd TextChanged,TextChangedI * call s:Mark(1)" in text
-    assert "autocmd BufWritePost * call s:Mark(0)" in text
-    assert "autocmd VimLeave * silent! call delete(s:state)" in text
+    assert "autocmd TextChanged,TextChangedI notes.md call s:Mark(1)" in text
+    assert "autocmd BufWritePost notes.md call s:Mark(0)" in text
+    assert "fnamemodify(argc() > 0 ? argv(0) : expand('%'), ':p:h')" in text
+    assert "timer_start(1000" in text
+    assert "silent! call delete(s:state)" in text
 
 
 def test_nightshift_palette():
@@ -119,3 +123,40 @@ def test_nightshift_palette():
     assert "let g:colors_name = 'nightshift'" in text
     assert text.startswith("set background=dark\nhighlight clear\n")
     assert "#FF6A3D" in text.upper()
+
+
+@pytest.mark.skipif(shutil.which("vim") is None, reason="vim not installed")
+def test_vimrc_writes_state_beside_the_note_not_the_cwd(tmp_path):
+    folder = tmp_path / "box"
+    elsewhere = tmp_path / "cwd"
+    folder.mkdir()
+    elsewhere.mkdir()
+    note = folder / "notes.md"
+    note.write_text("hi\n", encoding="utf-8")
+    state = folder / ".note-state"
+    vimrc = Path(str(importlib.resources.files("pwn_broker.data").joinpath("vimrc")))
+    seen = tmp_path / "seen"
+
+    def peek(tag):
+        return f"call writefile([join(readfile('{state.as_posix()}'))], '{seen.as_posix()}.{tag}')"
+
+    # Ex mode never reaches the main loop, so TextChanged is fired by hand; the path logic is what is under test
+    subprocess.run(
+        [
+            "vim", "-u", vimrc.as_posix(), "-N", "-es",
+            "-c", "normal! ihello",
+            "-c", "doautocmd TextChanged notes.md",
+            "-c", peek("dirty"),
+            "-c", "write",
+            "-c", peek("clean"),
+            "-c", "qa!",
+            note.as_posix(),
+        ],
+        cwd=elsewhere,
+        stdin=subprocess.DEVNULL,
+        timeout=30,
+        check=True,
+    )  # fmt: skip
+    assert Path(f"{seen}.dirty").read_text().strip() == "1"
+    assert Path(f"{seen}.clean").read_text().strip() == "0"
+    assert not (elsewhere / ".note-state").exists()

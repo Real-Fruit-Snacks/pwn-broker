@@ -8,21 +8,32 @@ set termguicolors
 syntax on
 execute 'source ' . fnameescape(expand('<sfile>:p:h') . '/nightshift.vim')
 
-let s:state = expand('%:p:h') . '/.note-state'
+let s:state = ''
 let s:dirty = -1
 function! s:Mark(value) abort
+  if s:state ==# ''
+    let s:state = fnamemodify(argc() > 0 ? argv(0) : expand('%'), ':p:h') . '/.note-state'
+  endif
   if s:dirty != a:value
     let s:dirty = a:value
     silent! call writefile([string(a:value)], s:state)
   endif
 endfunction
 
+function! s:Reload(timer) abort
+  silent! checktime
+endfunction
+
 augroup pwn_broker
   autocmd!
-  autocmd TextChanged,TextChangedI * call s:Mark(1)
-  autocmd BufWritePost * call s:Mark(0)
+  autocmd TextChanged,TextChangedI notes.md call s:Mark(1)
+  autocmd BufWritePost notes.md call s:Mark(0)
   autocmd FocusLost,CursorHold,CursorHoldI * silent! update
-  autocmd FocusGained,CursorHold,CursorHoldI * silent! checktime
+  autocmd FocusGained * silent! checktime
   autocmd VimEnter * call s:Mark(0)
-  autocmd VimLeave * silent! call delete(s:state)
+  autocmd VimLeave * if s:state !=# '' | silent! call delete(s:state) | endif
 augroup END
+
+if has('timers')
+  call timer_start(1000, function('s:Reload'), {'repeat': -1})
+endif
