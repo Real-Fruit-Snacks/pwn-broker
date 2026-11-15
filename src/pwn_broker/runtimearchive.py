@@ -1,16 +1,19 @@
 """Unpacking a runtime's archive: a gzip tar holding a self-contained Python.
 
-Every member is checked before anything is written, and each one is then written here rather
-than by tarfile's extraction, whose filters differ across Python 3.11 patch releases.
+The whole archive is read and every member checked before anything is written, and each one is
+then written here rather than by tarfile's extraction, whose filters differ across Python 3.11
+patch releases.
 """
 
+import gzip
 import os
 import shutil
 import tarfile
 import tempfile
 import unicodedata
 import zlib
-from collections.abc import Iterable
+from collections import deque
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
@@ -20,13 +23,39 @@ MAX_MEMBERS = 20_000
 MAX_BYTES = 1024**3
 # as many links as Linux follows in one lookup
 MAX_LINK_HOPS = 40
+# the Linux limits on a path and on one part of it
+MAX_PATH_BYTES = 4096
+MAX_PART_BYTES = 255
+# what an entry may take beyond its own data: its headers, a PAX record holding a name and a
+# target at the limits, and the padding and end blocks after the last entry
+_HEADER_ALLOWANCE = 16 * 1024
 
 _CHUNK = 1024 * 1024
+_BLOCK = tarfile.BLOCKSIZE
 _READ_ERRORS = (tarfile.TarError, OSError, EOFError, zlib.error)
+
+
+def _shown(text: str) -> str:
+    return repr(text) if len(text) <= 100 else f"{text[:100]!r}..."
 
 
 def _bad_characters(text: str) -> bool:
     return any(c in "\\:" or unicodedata.category(c) == "Cc" for c in text)
+
+
+def _byte_length(text: str) -> int:
+    try:
+        return len(text.encode("utf-8", "surrogateescape"))
+    except UnicodeEncodeError:
+        return len(text.encode("utf-8", "surrogatepass"))
+
+
+def _too_long(text: str) -> str | None:
+    if _byte_length(text) > MAX_PATH_BYTES:
+        return f"longer than {MAX_PATH_BYTES} bytes"
+    if any(_byte_length(part) > MAX_PART_BYTES for part in text.split("/")):
+        return f"a part longer than {MAX_PART_BYTES} bytes"
+    return None
 
 
 def _is_file(member: tarfile.TarInfo) -> bool:
@@ -37,6 +66,8 @@ def _is_file(member: tarfile.TarInfo) -> bool:
 def _check_name(member: tarfile.TarInfo) -> str:
     # judged as text; returns the name without a folder's trailing slash
     name = member.name
+    if fault := _too_long(name):
+        raise ToolError(f"runtime archive entry {_shown(name)} has a name {fault}")
     bare = name[:-1] if name.endswith("/") and member.isdir() else name
     parts = bare.split("/")
     if name.startswith("/") or ".." in parts:
@@ -54,6 +85,8 @@ def _check_name(member: tarfile.TarInfo) -> str:
 def _check_target(name: str, target: str) -> None:
     if not target:
         raise ToolError(f"runtime archive link {name!r} has an empty target")
+    if fault := _too_long(target):
+        raise ToolError(f"runtime archive link {name!r} has a target {fault}")
     if target.startswith("/"):
         raise ToolError(f"runtime archive link {name!r} has the absolute target {target!r}")
     if _bad_characters(target):
@@ -63,34 +96,56 @@ def _check_target(name: str, target: str) -> None:
         )
 
 
-def _resolve(name: str, links: dict[str, str]) -> None:
+# A tree of the archive's links by path part: each node maps a part to the node below it, and a
+# link's node holds its target under the key None. Each step of a resolution is then one lookup.
+_Node = dict
+
+
+def _link_tree(links: dict[str, str]) -> _Node:
+    root: _Node = {}
+    for name, target in links.items():
+        node = root
+        for part in name.split("/"):
+            node = node.setdefault(part, {})
+        node[None] = target
+    return root
+
+
+def _resolve(name: str, root: _Node) -> None:
     """Follows the link `name` as the system would, through the archive's other links, as text.
 
     A `..` that would climb above the destination, or a result that is the destination itself,
     is refused, so the link can only reach a place inside the destination.
     """
     outside = f"runtime archive link {name!r} points outside the runtime's folder"
-    resolved = name.split("/")[:-1]
-    pending = links[name].split("/")
+    # the node of each part resolved so far; None once the path leaves every link's folder
+    stack: list[_Node | None] = [root]
+    *folder, last = name.split("/")
+    node = root
+    for part in folder:
+        # the link's own folder is in the tree, since the link is
+        node = node[part]
+        stack.append(node)
+    pending = deque(node[last][None].split("/"))
     hops = 1
     while pending:
-        part = pending.pop(0)
+        part = pending.popleft()
         if part in ("", "."):
             continue
         if part == "..":
-            if not resolved:
+            if len(stack) == 1:
                 raise ToolError(outside)
-            resolved.pop()
+            stack.pop()
             continue
-        resolved.append(part)
-        target = links.get("/".join(resolved))
-        if target is not None:
+        node = stack[-1].get(part) if stack[-1] is not None else None
+        if node is not None and None in node:
             hops += 1
             if hops > MAX_LINK_HOPS:
                 raise ToolError(f"runtime archive link {name!r} goes through too many links")
-            resolved.pop()
-            pending = target.split("/") + pending
-    if not resolved:
+            pending.extendleft(reversed(node[None].split("/")))
+            continue
+        stack.append(node)
+    if len(stack) == 1:
         raise ToolError(outside)
 
 
@@ -102,7 +157,7 @@ def _checked(members: Iterable[tarfile.TarInfo]) -> dict[str, tarfile.TarInfo]:
             raise ToolError(f"runtime archive has too many entries; the limit is {MAX_MEMBERS}")
         if not (_is_file(member) or member.isdir() or member.issym()):
             raise ToolError(
-                f"runtime archive entry {member.name!r} is not a regular file, folder or "
+                f"runtime archive entry {_shown(member.name)} is not a regular file, folder or "
                 "symbolic link"
             )
         bare = _check_name(member)
@@ -138,9 +193,74 @@ def _check_all(members: Iterable[tarfile.TarInfo]) -> dict[str, tarfile.TarInfo]
                 raise ToolError(f"runtime archive entry {bare!r} sits inside the file {parent!r}")
             parent = parent.rpartition("/")[0]
     links = {bare: m.linkname for bare, m in seen.items() if m.issym()}
+    root = _link_tree(links)
     for bare in links:
-        _resolve(bare, links)
+        _resolve(bare, root)
     return seen
+
+
+# ---- reading
+
+
+class _Bounded:
+    """The archive's decompressed bytes, which may not be read or skipped past `limit`.
+
+    The limit starts at one entry's allowance and moves on only as each entry passes the
+    checks, so no header, however large it claims to be, is read beyond what an entry may take,
+    and no archive makes the app decompress more than MAX_BYTES plus an allowance per entry.
+    """
+
+    def __init__(self, stream: gzip.GzipFile):
+        self._stream = stream
+        self.limit = _HEADER_ALLOWANCE
+
+    def _allow(self, end: int) -> None:
+        if end > self.limit:
+            raise ToolError("runtime archive holds more data than its entries declare")
+
+    def tell(self) -> int:
+        return self._stream.tell()
+
+    def seek(self, pos: int, whence: int = os.SEEK_SET) -> int:
+        if whence != os.SEEK_SET:
+            raise ValueError("only absolute seeks are supported")
+        self._allow(pos)
+        return self._stream.seek(pos)
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            raise ValueError("reads must name a size")
+        self._allow(self.tell() + size)
+        return self._stream.read(size)
+
+    def read_to_end(self) -> None:
+        # the gzip stream's CRC and length are checked as its end is read
+        while (room := self.limit - self.tell()) > 0:
+            if not self._stream.read(min(_CHUNK, room)):
+                return
+        if self._stream.read(1):
+            raise ToolError("runtime archive holds more data than its entries declare")
+
+
+def _allowing(tar: tarfile.TarFile, reader: _Bounded) -> Iterator[tarfile.TarInfo]:
+    for member in tar:
+        yield member
+        # the member passed the checks: its data, and the next header, may now be read
+        data = -(-member.size // _BLOCK) * _BLOCK if _is_file(member) else 0
+        reader.limit = member.offset_data + data + _HEADER_ALLOWANCE
+
+
+def _read_all(tar: tarfile.TarFile, reader: _Bounded) -> dict[str, tarfile.TarInfo]:
+    seen = _check_all(_allowing(tar, reader))
+    # tarfile ends quietly at a damaged header or at a cut, so the end is checked here
+    reader.seek(tar.offset)
+    if reader.read(_BLOCK) != bytes(_BLOCK):
+        raise ToolError("runtime archive is incomplete or damaged: it does not end as a tar does")
+    reader.read_to_end()
+    return seen
+
+
+# ---- writing
 
 
 def _make_folder(root: Path, parts: list[str]) -> Path:
@@ -189,25 +309,62 @@ def _extract(tar: tarfile.TarFile, seen: dict[str, tarfile.TarInfo], root: Path)
                 raise ToolError(f"cannot make the link {bare!r}: {exc}") from exc
 
 
+def _remove(tmp: Path) -> str | None:
+    try:
+        shutil.rmtree(tmp)
+    except OSError as exc:
+        return f"the temporary folder {tmp} could not be removed ({exc})"
+    return None
+
+
 def unpack(archive: Path, dest: Path) -> None:
-    """Unpacks the runtime's gzip tar into dest, which must not exist, or leaves nothing."""
+    """Unpacks the runtime's gzip tar into dest, which must not exist, or leaves nothing.
+
+    The archive is unpacked into a temporary folder beside dest and renamed into place. The
+    caller must own dest's parent folder and hold the install for itself, as the app's commands
+    do, and no one else may be able to write to that folder: on Linux a rename replaces an empty
+    folder, so a dest made by someone else between the check and the rename would be replaced.
+    """
     if os.path.lexists(dest):
         raise ToolError(f"{dest} already exists")
     tmp: Path | None = None
     try:
-        with tarfile.open(archive, "r:gz") as tar:
-            # iterating the archive reads one header at a time, so the member limit stops a
-            # huge archive before all of it is read
-            seen = _check_all(tar)
-            tmp = Path(tempfile.mkdtemp(prefix=TEMP_PREFIX, suffix=TEMP_SUFFIX, dir=dest.parent))
-            tmp.chmod(0o755)
-            _extract(tar, seen, tmp)
-        if os.path.lexists(dest):
-            raise ToolError(f"{dest} already exists")
-        os.rename(tmp, dest)
+        try:
+            raw = open(archive, "rb")
+        except OSError as exc:
+            raise ToolError(f"cannot unpack {archive.name}: {exc}") from exc
+        with raw, gzip.GzipFile(fileobj=raw, mode="rb") as stream:
+            reader = _Bounded(stream)
+            damaged = f"cannot unpack {archive.name}: the archive is incomplete or damaged"
+            try:
+                tar = tarfile.open(fileobj=reader, mode="r:")
+            except _READ_ERRORS as exc:
+                raise ToolError(f"{damaged} ({exc})") from exc
+            with tar:
+                try:
+                    seen = _read_all(tar, reader)
+                except _READ_ERRORS as exc:
+                    raise ToolError(f"{damaged} ({exc})") from exc
+                try:
+                    tmp = Path(
+                        tempfile.mkdtemp(prefix=TEMP_PREFIX, suffix=TEMP_SUFFIX, dir=dest.parent)
+                    )
+                    tmp.chmod(0o755)
+                    # every header has been read, so this reads only the files' data
+                    _extract(tar, seen, tmp)
+                except _READ_ERRORS as exc:
+                    raise ToolError(f"cannot unpack {archive.name}: {exc}") from exc
+        try:
+            if os.path.lexists(dest):
+                raise ToolError(f"{dest} already exists")
+            os.rename(tmp, dest)
+        except OSError as exc:
+            raise ToolError(f"cannot unpack {archive.name}: {exc}") from exc
     except BaseException as exc:
-        if tmp is not None:
-            shutil.rmtree(tmp, ignore_errors=True)
-        if isinstance(exc, ToolError) or not isinstance(exc, Exception):
+        failed = _remove(tmp) if tmp is not None else None
+        if failed is None:
             raise
-        raise ToolError(f"cannot unpack {archive.name}: {exc}") from exc
+        if isinstance(exc, ToolError):
+            raise ToolError(f"{exc}; {failed}") from exc
+        exc.add_note(failed)
+        raise

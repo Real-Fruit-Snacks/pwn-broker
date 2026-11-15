@@ -1,9 +1,11 @@
+import gzip
 import io
 import os
 import random
 import stat
 import sys
 import tarfile
+import time
 from pathlib import Path
 
 import pytest
@@ -333,6 +335,10 @@ def sample_members():
         folder("python/share/terminfo/a"),
         file("python/share/terminfo/a/adm1178"),
         link("python/share/terminfo/1/1178", "../a/adm1178"),
+        file("python/bin/setuid", mode=0o4755),
+        file("python/bin/setgid", mode=0o2755),
+        folder("python/tmp", 0o1777),
+        file("python/lib/open.txt", mode=0o666),
     ]
 
 
@@ -384,6 +390,10 @@ def test_unpack_sets_modes(tmp_path):
     assert mode("python/lib/tool.sh") == 0o755
     assert mode("python/lib/os.py") == 0o644
     assert mode("python/share/terminfo/a/adm1178") == 0o644
+    assert mode("python/bin/setuid") == 0o755
+    assert mode("python/bin/setgid") == 0o755
+    assert mode("python/tmp") == 0o755
+    assert mode("python/lib/open.txt") == 0o644
 
 
 def test_unpack_writes_files_and_folders_on_any_platform(tmp_path):
@@ -441,12 +451,23 @@ REFUSALS = {
 }
 
 
+def forbid_writing(monkeypatch):
+    """Fails the test if unpack makes its temporary folder or opens a file for writing."""
+
+    def made(*args, **kwargs):
+        pytest.fail("unpack began writing before the archive was refused")
+
+    monkeypatch.setattr(runtimearchive.tempfile, "mkdtemp", made)
+    monkeypatch.setattr(runtimearchive.os, "open", made)
+
+
 @pytest.mark.parametrize("case", sorted(REFUSALS))
-def test_each_refusal_leaves_nothing(tmp_path, case):
+def test_each_refusal_leaves_nothing(tmp_path, monkeypatch, case):
     # files come first, so a refusal later in the archive proves nothing was written early
     members = [folder("python"), file("python/first"), *REFUSALS[case]]
     archive = make_tar(tmp_path / "rt.tar.gz", members)
     dest = tmp_path / "python-3.13"
+    forbid_writing(monkeypatch)
     with pytest.raises(ToolError, match="^runtime archive"):
         unpack(archive, dest)
     assert leftovers(tmp_path) == ["rt.tar.gz"]
@@ -594,3 +615,205 @@ def test_an_interrupt_leaves_nothing(tmp_path, monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         unpack(archive, tmp_path / "rt")
     assert leftovers(tmp_path) == ["rt.tar.gz"]
+
+
+# ---- damaged archives
+
+
+def ustar(members, data=None) -> bytes:
+    buf = io.BytesIO()
+    data = data or {}
+    with tarfile.open(fileobj=buf, mode="w", format=tarfile.USTAR_FORMAT) as tar:
+        for info in members:
+            body = data.get(info.name, b"x")
+            info.size = len(body)
+            tar.addfile(info, io.BytesIO(body))
+    return buf.getvalue()
+
+
+def write_gz(path: Path, raw: bytes) -> Path:
+    path.write_bytes(gzip.compress(raw, mtime=0))
+    return path
+
+
+def three_files() -> bytes:
+    # each member is a 512-byte header and one 512-byte block of data
+    return ustar([file("python/a"), file("python/b"), file("python/c")])
+
+
+def test_a_damaged_header_after_the_first_is_refused(tmp_path, monkeypatch):
+    raw = bytearray(three_files())
+    third = 2 * 1024
+    raw[third + 148 : third + 156] = b"0000000\0"  # the checksum field no longer matches
+    archive = write_gz(tmp_path / "rt.tar.gz", bytes(raw))
+    forbid_writing(monkeypatch)
+    with pytest.raises(ToolError, match="incomplete or damaged"):
+        unpack(archive, tmp_path / "rt")
+    assert leftovers(tmp_path) == ["rt.tar.gz"]
+
+
+def test_a_tar_cut_at_a_header_boundary_is_refused(tmp_path, monkeypatch):
+    archive = write_gz(tmp_path / "rt.tar.gz", three_files()[: 2 * 1024])
+    forbid_writing(monkeypatch)
+    with pytest.raises(ToolError, match="incomplete or damaged"):
+        unpack(archive, tmp_path / "rt")
+    assert leftovers(tmp_path) == ["rt.tar.gz"]
+
+
+def test_a_gzip_stream_with_a_bad_crc_is_refused(tmp_path, monkeypatch):
+    packed = bytearray(gzip.compress(three_files(), mtime=0))
+    packed[-8] ^= 0xFF  # the first byte of the CRC-32 in the gzip trailer
+    archive = tmp_path / "rt.tar.gz"
+    archive.write_bytes(bytes(packed))
+    forbid_writing(monkeypatch)
+    with pytest.raises(ToolError, match="incomplete or damaged"):
+        unpack(archive, tmp_path / "rt")
+    assert leftovers(tmp_path) == ["rt.tar.gz"]
+
+
+def test_a_whole_ustar_archive_unpacks(tmp_path):
+    archive = write_gz(tmp_path / "rt.tar.gz", three_files())
+    unpack(archive, tmp_path / "rt")
+    assert sorted(p.name for p in (tmp_path / "rt/python").iterdir()) == ["a", "b", "c"]
+
+
+# ---- reading is bounded
+
+
+def test_a_large_pax_header_is_refused_before_it_is_read(tmp_path, monkeypatch):
+    big = file("python/a", 1)
+    big.pax_headers = {"comment": "x" * 2_000_000}
+    archive = make_tar(tmp_path / "rt.tar.gz", [big])
+    requested = []
+    real = gzip.GzipFile.read
+
+    def watch(self, size=-1):
+        requested.append(size)
+        return real(self, size)
+
+    monkeypatch.setattr(gzip.GzipFile, "read", watch)
+    forbid_writing(monkeypatch)
+    with pytest.raises(ToolError, match="more data than its entries declare"):
+        unpack(archive, tmp_path / "rt")
+    assert 0 < max(requested) <= runtimearchive._HEADER_ALLOWANCE
+    assert leftovers(tmp_path) == ["rt.tar.gz"]
+
+
+def test_a_gzip_bomb_is_refused(tmp_path, monkeypatch):
+    archive = write_gz(tmp_path / "rt.tar.gz", b"\0" * (64 * 1024 * 1024))
+    forbid_writing(monkeypatch)
+    with pytest.raises(ToolError, match="more data than its entries declare"):
+        unpack(archive, tmp_path / "rt")
+    assert leftovers(tmp_path) == ["rt.tar.gz"]
+
+
+def test_zeros_after_the_end_of_the_tar_are_refused(tmp_path, monkeypatch):
+    archive = write_gz(tmp_path / "rt.tar.gz", three_files() + b"\0" * (8 * 1024 * 1024))
+    forbid_writing(monkeypatch)
+    with pytest.raises(ToolError, match="more data than its entries declare"):
+        unpack(archive, tmp_path / "rt")
+    assert leftovers(tmp_path) == ["rt.tar.gz"]
+
+
+def test_headers_at_the_length_limits_fit_the_allowance(tmp_path, monkeypatch):
+    # a link with the longest name and target there may be; nothing is written, so this runs
+    # where such paths could not be made
+    member = link(path_of(4096), path_of(4096))
+    archive = make_tar(tmp_path / "rt.tar.gz", [member])
+    monkeypatch.setattr(runtimearchive, "_extract", lambda tar, seen, root: None)
+    unpack(archive, tmp_path / "rt")
+    assert (tmp_path / "rt").is_dir()
+
+
+# ---- lengths
+
+
+def path_of(length: int) -> str:
+    """A relative path of exactly `length` characters, in parts of at most 199."""
+    return (("a" * 199 + "/") * 30)[: length - 1] + "b"
+
+
+def test_the_path_helper():
+    assert all(len(path_of(n)) == n for n in (1, 199, 200, 201, 4096, 4097))
+    assert all(0 < len(p) <= 200 for p in path_of(4097).split("/"))
+
+
+def test_a_name_of_4096_bytes_passes_and_one_more_is_refused():
+    check([file(path_of(4096))])
+    refused([file(path_of(4097))], "longer than 4096 bytes")
+
+
+def test_a_name_part_of_255_bytes_passes_and_one_more_is_refused():
+    check([file("python/" + "a" * 255)])
+    refused([file("python/" + "a" * 256)], "longer than 255 bytes")
+
+
+def test_a_name_is_measured_in_bytes():
+    check([file("python/" + "é" * 127)])  # 254 bytes
+    refused([file("python/" + "é" * 128)], "longer than 255 bytes")
+
+
+def test_a_target_of_4096_bytes_passes_and_one_more_is_refused():
+    check([link("python/x", path_of(4096))])
+    refused([link("python/x", path_of(4097))], "longer than 4096 bytes")
+
+
+def test_a_target_part_of_255_bytes_passes_and_one_more_is_refused():
+    check([link("python/x", "a" * 255)])
+    refused([link("python/x", "a" * 256)], "longer than 255 bytes")
+
+
+def test_long_targets_through_a_chain_are_resolved_quickly():
+    # targets of 2,000 short parts, followed through a chain of 40 links
+    chain = [link(f"python/l{i}", "/".join(["."] * 2000) + f"/l{i + 1}") for i in range(39)]
+    deep = "/".join(["d"] * 800) + "/" + "/".join([".."] * 800)
+    started = time.perf_counter()
+    check(chain + [link(f"python/x{i}", deep) for i in range(200)])
+    assert time.perf_counter() - started < 5
+
+
+# ---- failures while unpacking
+
+
+def test_a_failed_cleanup_is_reported(tmp_path, monkeypatch):
+    def refuse_rename(src, dst):
+        raise OSError("rename refused")
+
+    def refuse_removal(path, *args, **kwargs):
+        raise OSError("busy")
+
+    monkeypatch.setattr(runtimearchive.os, "rename", refuse_rename)
+    monkeypatch.setattr(runtimearchive.shutil, "rmtree", refuse_removal)
+    archive = make_tar(tmp_path / "rt.tar.gz", [file("python/a")])
+    with pytest.raises(ToolError) as caught:
+        unpack(archive, tmp_path / "rt")
+    [tmp] = [p for p in tmp_path.iterdir() if p.name.startswith(TEMP_PREFIX)]
+    assert "rename refused" in str(caught.value)
+    assert f"the temporary folder {tmp} could not be removed (busy)" in str(caught.value)
+
+
+def test_a_programming_error_is_not_dressed_as_a_tool_error(tmp_path, monkeypatch):
+    def broken(tar, seen, root):
+        raise ValueError("a bug")
+
+    monkeypatch.setattr(runtimearchive, "_extract", broken)
+    archive = make_tar(tmp_path / "rt.tar.gz", [file("python/a")])
+    with pytest.raises(ValueError, match="a bug"):
+        unpack(archive, tmp_path / "rt")
+    assert leftovers(tmp_path) == ["rt.tar.gz"]
+
+
+def test_a_failed_cleanup_after_another_error_is_noted(tmp_path, monkeypatch):
+    def broken(tar, seen, root):
+        raise ValueError("a bug")
+
+    def refuse_removal(path, *args, **kwargs):
+        raise OSError("busy")
+
+    monkeypatch.setattr(runtimearchive, "_extract", broken)
+    monkeypatch.setattr(runtimearchive.shutil, "rmtree", refuse_removal)
+    archive = make_tar(tmp_path / "rt.tar.gz", [file("python/a")])
+    with pytest.raises(ValueError) as caught:
+        unpack(archive, tmp_path / "rt")
+    [tmp] = [p for p in tmp_path.iterdir() if p.name.startswith(TEMP_PREFIX)]
+    assert caught.value.__notes__ == [f"the temporary folder {tmp} could not be removed (busy)"]
