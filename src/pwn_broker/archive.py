@@ -68,11 +68,6 @@ def _raise(exc: OSError) -> None:
     raise exc
 
 
-def _check_name(name: str) -> None:
-    if "\\" in name:
-        raise ArchiveError(f"{name!r} has a backslash in its name and could not be unpacked; rename it")
-
-
 def _entries(root: Path) -> tuple[list[tuple[str, Path]], list[str]]:
     # also returns the links and special files, which are never packed
     found = [("", root)]
@@ -83,7 +78,6 @@ def _entries(root: Path) -> tuple[list[tuple[str, Path]], list[str]]:
         for name in dirs:
             rel = (here / name).relative_to(root).as_posix()
             if stat.S_ISDIR(os.lstat(here / name).st_mode):
-                _check_name(name)
                 keep.append(name)
                 found.append((rel, here / name))
             else:
@@ -94,7 +88,6 @@ def _entries(root: Path) -> tuple[list[tuple[str, Path]], list[str]]:
             if _left_out(rel):
                 continue
             if stat.S_ISREG(os.lstat(here / name).st_mode):
-                _check_name(name)
                 found.append((rel, here / name))
             else:
                 special.append(rel)
@@ -224,10 +217,15 @@ def verify(archive: Path) -> None:
         raise ArchiveError(f"{archive}: cannot read archive ({exc})") from exc
 
 
+def _backslash_separates() -> bool:
+    # on Linux a backslash is an ordinary file name character; elsewhere it separates paths
+    return os.sep == "\\"
+
+
 def _check_member(member: tarfile.TarInfo) -> None:
     name = member.name
     parts = name.split("/")
-    if name.startswith("/") or "\\" in name or ".." in parts:
+    if name.startswith("/") or (_backslash_separates() and "\\" in name) or ".." in parts:
         raise ArchiveError(f"archive entry {name!r} would write outside the destination")
     if not (member.isreg() or member.isdir()):
         raise ArchiveError(f"archive entry {name!r} is not a regular file or folder")

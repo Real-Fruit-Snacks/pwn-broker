@@ -776,10 +776,36 @@ def test_verify_rejects_an_oversized_manifest(tmp_path, monkeypatch):
         verify(toml_archive(tmp_path, b"schema = 1\n"))
 
 
+def backslash_archive(tmp_path):
+    return hand_archive(tmp_path / "a.tar.gz", {"a\\b.txt": b"data"})
+
+
+def test_member_check_accepts_a_backslash_where_it_is_a_file_name_character(tmp_path, monkeypatch):
+    monkeypatch.setattr(archive, "_backslash_separates", lambda: False)
+    with tarfile.open(backslash_archive(tmp_path), "r:gz") as tar:
+        for member in tar.getmembers():
+            archive._check_member(member)
+
+
+def test_unpack_refuses_a_backslash_where_it_separates_paths(tmp_path, monkeypatch):
+    monkeypatch.setattr(archive, "_backslash_separates", lambda: True)
+    active = tmp_path / "active"
+    with pytest.raises(ArchiveError, match="outside the destination"):
+        unpack(backslash_archive(tmp_path), active)
+    assert not active.exists() or os.listdir(active) == []
+
+
 @posix_only
-def test_pack_refuses_a_name_with_a_backslash(filled, tmp_path):
-    (filled.path / "bad\name.txt").write_text("x")
+def test_a_file_name_with_a_backslash_survives_pack_verify_and_unpack(box, tmp_path):
+    loot = box.path / "targets/dc01/loot"
+    loot.mkdir(parents=True)
+    data = b"\x00odd\r\nbytes"
+    (loot / "a\\b.txt").write_bytes(data)
+    records = scan(box, [], now=NOW)
+    save_files(box, records)
+    write_manifest(box, records, kind="exported", now=NOW)
     dest = tmp_path / "forest.tar.gz"
-    with pytest.raises(ArchiveError, match="rename"):
-        pack(filled, dest)
-    assert not dest.exists() and not part_of(dest).exists()
+    pack(box, dest)
+    verify(dest)
+    folder = unpack(dest, tmp_path / "elsewhere")
+    assert (folder / "targets/dc01/loot/a\\b.txt").read_bytes() == data

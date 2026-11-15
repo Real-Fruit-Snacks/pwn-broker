@@ -102,7 +102,7 @@ Edits made by hand to these files are overwritten at the next rebuild.
 
 ## Tested on
 
-- The unit tests, on Windows 11 with Python 3.13: 689 passed, 15 skipped. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer).
+- The unit tests, on Windows 11 with Python 3.13: 721 passed, 15 skipped. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer).
 - *Not* tested: Kali Linux. The app has not been run there.
 - *Not* tested: `install.sh`. It passes `sh -n`, its help and option handling are tested, and so is how it treats an existing `app/` folder (with a stand-in for `python3`), but it has not been run end to end.
 - *Not* tested: the note window and the prompt on a real terminal.
@@ -111,7 +111,6 @@ Edits made by hand to these files are overwritten at the next rebuild.
 
 - Recording and tool install are not in this release. They are later phases in `docs/design.md`.
 - No release has been published, so the `curl` install line does not work yet. Install from a clone.
-- A file whose name contains a backslash stops `finish` and `export` until it is renamed.
 - `cred list` marks a secret it cannot show exactly (a tab, another control character, or a space at either end) with `*` after the number. `cred show` prints it unchanged.
 - Links and special files (named pipes, sockets, devices) in a box are not archived. `export` and `finish` list them, and `finish` says how many will go when the folder is removed.
 
