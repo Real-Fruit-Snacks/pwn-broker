@@ -109,6 +109,29 @@ def test_target_add_updates_everything(session):
     assert ("ok", "target web01 created") in session.console.lines
 
 
+def test_target_add_refuses_a_hostname_another_target_has(session, system):
+    session.console = FakeConsole(["10.10.10.50", "web.htb FOREST.htb.local", "", "web01"])
+    dispatch(session, "target add")
+    assert _fails(session.console) == ["FOREST.htb.local is already a hostname of dc01"]
+    assert [kind for kind, _ in session.console.lines] == ["fail"]
+    assert not (session.box.path / "targets" / "web01").exists()
+    assert [t.name for t in load_targets(session.box)] == ["dc01"]
+    assert system.pings == []
+
+
+def test_target_edit_refuses_a_hostname_another_target_has(session):
+    add_target(
+        session.box, session.targets, ips=["10.10.10.2"], hostnames=["web.htb"],
+        scope="external", name="web", now=NOW,
+    )  # fmt: skip
+    session.console = FakeConsole(["", "forest.htb.local web.htb", ""])
+    dispatch(session, "target edit dc01")
+    assert [kind for kind, _ in session.console.lines] == ["fail"]
+    assert _fails(session.console) == ["web.htb is already a hostname of web"]
+    assert session.targets[0].hostnames == ["forest.htb.local"]
+    assert load_targets(session.box)[0].hostnames == ["forest.htb.local"]
+
+
 def test_target_add_writes_the_note_once(session, monkeypatch):
     from pwn_broker import session as session_module
 

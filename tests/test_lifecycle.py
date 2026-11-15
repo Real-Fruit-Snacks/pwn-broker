@@ -273,6 +273,21 @@ def test_loot_with_common_names_survives_export_and_import(session, tmp_path):
         assert (box.path / "targets" / "dc01" / "loot" / name).read_bytes() == (loot / name).read_bytes()
 
 
+def test_import_of_an_archive_whose_targets_share_a_hostname(session, tmp_path):
+    # made before a hostname belonged to one target of a box
+    from pwn_broker.store import save_target
+
+    twin = replace(session.targets[0], name="twin", ips=["10.10.10.162"])
+    (session.box.path / "targets" / "twin").mkdir()
+    save_target(session.box, twin)
+    archive = export_box(session, **NOFIX)
+    console = FakeConsole()
+    box = import_box(fresh_home(tmp_path), Settings(), console, archive, lambda: NOW)
+    assert box is not None
+    assert [t.hostnames for t in load_targets(box)] == [["forest.htb.local"], ["forest.htb.local"]]
+    assert ("ok", "2 targets") in console.lines
+
+
 def test_import_of_finished_archive_reopens(session, tmp_path):
     answers(session, "y", "n")
     archive = finish_box(session, **SAVED)

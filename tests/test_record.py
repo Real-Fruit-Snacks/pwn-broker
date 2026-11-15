@@ -289,6 +289,16 @@ def test_an_unknown_hostname_is_prefilled_as_the_hostname(make_env, opened, dc01
     assert system.pings == []
 
 
+def test_an_added_target_may_not_take_another_targets_hostname(make_env, opened, dc01, asciinema, system):
+    # yes, the IP as given, dc01's hostname typed in, scope and name
+    env = make_env(["y", "", "Forest.htb.local", "", "new"])
+    assert record.run(env, ["10.10.10.200"]) == 1
+    assert fails(env) == ["could not add the target: Forest.htb.local is already a hostname of dc01"]
+    assert [t.name for t in load_targets(load_box(opened.path))] == ["dc01"]
+    assert not (opened.path / "targets" / "new").exists()
+    assert asciinema.calls == [] and system.pings == []
+
+
 def test_an_added_target_goes_through_the_hosts_offer(make_env, opened, dc01, asciinema, system):
     # yes, the IP as given, a hostname typed in, scope and name, then yes to /etc/hosts
     env = make_env(["y", "", "new.htb", "", "new", "y"])

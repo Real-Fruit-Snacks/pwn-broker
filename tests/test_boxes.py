@@ -127,6 +127,40 @@ def test_target_rejects_bad_ip_scope_and_duplicate_name(box):
     assert len(targets) == 1
 
 
+def test_add_target_refuses_a_hostname_another_target_has(box):
+    targets = []
+    add(box, targets, "web", hostnames=["Board.htb"])
+    with pytest.raises(BoxError, match="^board.HTB is already a hostname of web$"):
+        add(box, targets, "crm", ips=["10.0.0.2"], hostnames=["crm.board.htb", "board.HTB"])
+    assert [t.name for t in targets] == ["web"]
+    assert not (box.path / "targets" / "crm").exists()
+
+
+def test_edit_target_refuses_a_hostname_another_target_has(box, dc01):
+    targets = [dc01]
+    add(box, targets, "web", hostnames=["web.htb"])
+    with pytest.raises(BoxError, match="^WEB.htb is already a hostname of web$"):
+        edit_target(box, targets, "dc01", ips=["10.10.10.161"], hostnames=["WEB.htb"], scope="external")
+    assert dc01.hostnames == ["forest.htb.local"]
+    assert load_targets(box)[0].hostnames == ["forest.htb.local"]
+    # its own hostnames, in any case, are no clash
+    edit_target(box, targets, "dc01", ips=["10.10.10.161"], hostnames=["FOREST.htb.local"], scope="external")
+    assert dc01.hostnames == ["FOREST.htb.local"]
+
+
+def test_targets_that_already_share_a_hostname_on_disk_still_load(box, dc01):
+    from dataclasses import replace
+
+    from pwn_broker.store import save_target
+
+    twin = replace(dc01, name="twin", ips=["10.10.10.162"])
+    (box.path / "targets" / "twin").mkdir()
+    save_target(box, twin)
+    assert [(t.name, t.hostnames) for t in load_targets(box)] == [
+        ("dc01", ["forest.htb.local"]), ("twin", ["forest.htb.local"]),
+    ]  # fmt: skip
+
+
 def test_parse_values():
     assert parse_values("  a  b\tc ") == ["a", "b", "c"] and parse_values("") == []
 

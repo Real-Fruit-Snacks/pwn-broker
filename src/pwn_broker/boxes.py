@@ -108,6 +108,20 @@ def _validate(ips: list[str], hostnames: list[str], scope: str) -> None:
         raise BoxError(f"scope must be external or internal, not {scope}")
 
 
+def check_hostnames_free(targets: list[Target], hostnames: list[str], *, own: Target | None = None) -> None:
+    """Within a box a hostname belongs to one target: refuse one another target has, in any case.
+
+    Checked when a target is added or edited, never when a box is read, so an older box whose
+    targets share a hostname still loads.
+    """
+    owners = {
+        name.lower(): other.name for other in targets if other is not own for name in other.hostnames
+    }
+    for name in hostnames:
+        if name.lower() in owners:
+            raise BoxError(f"{name} is already a hostname of {owners[name.lower()]}")
+
+
 def _safe_target_name(text: str) -> str:
     try:
         return safe_name(text)
@@ -129,6 +143,7 @@ def add_target(
     name = _safe_target_name(name if name else (hostnames or ips)[0])
     if any(t.name == name for t in targets):
         raise BoxError(f"a target named {name} already exists")
+    check_hostnames_free(targets, hostnames)
     target = Target(
         box_id=box.id,
         box=box.name,
@@ -151,6 +166,7 @@ def edit_target(
 ) -> Target:
     target = find_target(targets, name)
     _validate(ips, hostnames, scope)
+    check_hostnames_free(targets, hostnames, own=target)
     target.ips = list(ips)
     target.hostnames = list(hostnames)
     target.scope = scope

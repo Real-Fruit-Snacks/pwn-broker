@@ -49,18 +49,11 @@ def _set_hostnames(session: Session, target: Target, hostnames: list[str]) -> No
 def host_add(session: Session, args: list[str]) -> None:
     target = _current(session)
     names = _names(args)
-    owners = {
-        name.lower(): other.name
-        for other in session.targets
-        if other is not target
-        for name in other.hostnames
-    }
     # every name is checked before anything changes
     for name in names:
         if not hosts.valid_hostname(name):
             raise ValueError(f"not a plain hostname: {name}")
-        if name.lower() in owners:
-            raise ValueError(f"{name} is already a hostname of {owners[name.lower()]}")
+    boxes.check_hostnames_free(session.targets, names, own=target)
     hostnames = list(target.hostnames)
     have = {name.lower() for name in hostnames}
     for name in names:

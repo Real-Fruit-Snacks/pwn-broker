@@ -97,7 +97,8 @@ def test_target_lists(box, dc01):
 
 
 def test_target_lists_dedupe_across_targets(box, dc01):
-    web01 = add_target(box, [dc01], ips=["10.10.10.161", "10.10.10.9"], hostnames=["forest.htb.local"], scope="external", name="web01", now=NOW)
+    # two targets sharing a hostname, as a box made before a hostname belonged to one target can
+    web01 = add_target(box, [], ips=["10.10.10.161", "10.10.10.9"], hostnames=["forest.htb.local"], scope="external", name="web01", now=NOW)
     rebuild_lists(box, [dc01, web01], [])
     assert read(box, "ips.txt") == "10.10.10.161\n10.10.10.9\n"
     assert read(box, "hostnames.txt") == "forest.htb.local\n"

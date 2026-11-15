@@ -537,6 +537,20 @@ def test_new_box_keeps_going_when_one_target_fails(env, monkeypatch):
     assert len(lines(env, "fail")) == 1 and "disk full" in lines(env, "fail")[0]
 
 
+def test_new_box_refuses_a_second_target_with_a_hostname_the_first_has(env):
+    env.console = FakeConsole(
+        ["forest", "", "", "", "",
+         "", "10.10.10.1", "forest.htb", "", "one",
+         "y", "10.10.10.2", "FOREST.htb", "", "two",
+         "n", "n"]
+    )  # fmt: skip
+    s = new_box(env)
+    assert [t.name for t in s.targets] == ["one"]
+    assert not (s.box.path / "targets" / "two").exists()
+    assert lines(env, "fail") == ["could not add the target: FOREST.htb is already a hostname of one"]
+    assert env.console.lines[-1] == ("ok", "box forest created")
+
+
 def test_new_box_survives_a_note_that_cannot_be_written(env, monkeypatch):
     def boom(box, text):
         raise OSError("read-only")
