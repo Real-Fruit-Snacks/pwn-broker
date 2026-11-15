@@ -130,7 +130,7 @@ p { margin: 0 0 var(--space-s); text-wrap: pretty; }
 @media (hover: hover) { .copy:hover { background: var(--ember-hover); } }
 .copy:active { background: var(--ember-press); }
 /* the working install sits right under the line that does not work yet; Amber is the warning, the words say it */
-.caveat { margin-top: var(--space-s); padding-left: var(--space-s); border-left: 3px solid var(--amber); }
+.caveat { margin-top: var(--space-s); padding-top: var(--space-s); border-top: 2px solid var(--amber); }
 .caveat p { margin-bottom: var(--space-2xs); }
 .caveat b { font-weight: 600; }
 .cmd-block { border-color: var(--line); }
