@@ -158,17 +158,40 @@ def test_pack_members_sorted_under_one_folder(filled, tmp_path):
     assert not any("\\" in n for n in names)
 
 
-def test_pack_excludes_swap_and_temp_files(filled, tmp_path):
-    junk = (".a.swp", ".a.swo", "x.part", "x.tmp", "backup~", ".note-state")
-    for name in junk:
+def test_pack_leaves_out_only_the_apps_transient_files(filled, tmp_path):
+    transient = (".note-state", ".notes.md.swp", ".notes.md.swo", ".pwn-broker-k3j9.tmp")
+    for name in transient:
         (filled.path / name).write_text("junk")
-    (filled.path / "targets/dc01/loot/deep.swp").write_text("junk")
+    (filled.path / "targets/dc01/loot/.pwn-broker-a1b2.tmp").write_text("junk")
+    kept = (".history", ".a.swp", "x.part", "x.tmp", "backup~", "targets/dc01/.note-state",
+            "targets/dc01/.notes.md.swp")  # fmt: skip
+    for rel in kept:
+        (filled.path / rel).write_text("kept")
     dest = tmp_path / "forest.tar.gz"
     pack(filled, dest)
     names = inside(dest)
-    assert names.isdisjoint(junk)
-    assert "targets/dc01/loot/deep.swp" not in names
-    assert "notes.md" in names
+    assert names.isdisjoint(transient) and "targets/dc01/loot/.pwn-broker-a1b2.tmp" not in names
+    assert {"notes.md", "files.toml", "manifest.toml", *kept} <= names
+
+
+LOOT_NAMES = (".index.php.swp", "config.php~", "backup.tmp", "x.part", "files.toml")
+
+
+def test_loot_with_common_names_is_packed_listed_and_verified(box, tmp_path):
+    loot = box.path / "targets/dc01/loot"
+    loot.mkdir(parents=True)
+    for name in LOOT_NAMES:
+        (loot / name).write_bytes(f"loot {name}".encode())
+    records = scan(box, [], now=NOW)
+    save_files(box, records)
+    write_manifest(box, records, kind="exported", now=NOW)
+    dest = tmp_path / "forest.tar.gz"
+    pack(box, dest)
+    verify(dest)
+    wanted = {f"targets/dc01/loot/{n}" for n in LOOT_NAMES}
+    assert wanted <= {r.path for r in records}
+    assert wanted <= inside(dest)
+    assert wanted <= {f["path"] for f in read_toml(box.path / "manifest.toml")["file"]}
 
 
 @posix_only

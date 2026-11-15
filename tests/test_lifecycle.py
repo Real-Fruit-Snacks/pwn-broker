@@ -262,6 +262,17 @@ def test_import_round_trip(session, tmp_path):
     assert [t for k, t in console.lines if k == "ok"] == [f"unpacked to {box.path}", "1 targets"]
 
 
+def test_loot_with_common_names_survives_export_and_import(session, tmp_path):
+    loot = session.box.path / "targets" / "dc01" / "loot"
+    names = (".index.php.swp", "config.php~", "backup.tmp", "x.part", "files.toml")
+    for name in names:
+        (loot / name).write_bytes(f"loot {name}\x00".encode())
+    archive = export_box(session, **NOFIX)
+    box = import_box(fresh_home(tmp_path), Settings(), FakeConsole(), archive, lambda: NOW)
+    for name in names:
+        assert (box.path / "targets" / "dc01" / "loot" / name).read_bytes() == (loot / name).read_bytes()
+
+
 def test_import_of_finished_archive_reopens(session, tmp_path):
     answers(session, "y", "n")
     archive = finish_box(session, **SAVED)

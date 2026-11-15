@@ -7,6 +7,7 @@ from pathlib import Path
 
 import tomli_w
 
+from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
 from pwn_broker.model import Box, Cred, FileRecord, Flag, Target
 
 SCHEMA = 1
@@ -18,7 +19,7 @@ class StoreError(Exception):
 
 def write_text(path: Path, text: str, *, newline: str = "\n") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=TEMP_PREFIX, suffix=TEMP_SUFFIX)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as fh:
             fh.write(text)

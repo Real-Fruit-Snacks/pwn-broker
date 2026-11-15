@@ -3,20 +3,34 @@ import os
 import stat
 from collections.abc import Callable
 from datetime import datetime
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 from pwn_broker.model import Box, FileRecord
 
 HASH_NOW_LIMIT = 64 * 1024 * 1024
-SKIP_NAMES = {"files.toml", "manifest.toml", ".note-state", ".history"}
-# ".tmp" also covers the temp files store.write_text leaves mid-write
-SKIP_SUFFIXES = (".swp", ".swo", ".part", ".tmp", "~")
+# The app's own files. Only these are ever left out of the records, and only where the app puts
+# them: anything else in a box is the user's, whatever it is called.
+ROOT_APP_FILES = frozenset({"files.toml", "manifest.toml", ".note-state", ".history"})
+# of those, the ones that are not packed either
+ROOT_TRANSIENT_FILES = frozenset({".note-state"})
+NOTE_SWAP = ".notes.md.sw?"
+# store.write_text's temp files, in the destination's folder at any depth
+TEMP_PREFIX = ".pwn-broker-"
+TEMP_SUFFIX = ".tmp"
 
 _CHUNK = 1024 * 1024
 
 
-def is_skipped(name: str) -> bool:
-    return name in SKIP_NAMES or name.endswith(SKIP_SUFFIXES)
+def is_temp_name(name: str) -> bool:
+    return name.startswith(TEMP_PREFIX) and name.endswith(TEMP_SUFFIX)
+
+
+def is_app_file(rel_path: str) -> bool:
+    folder, _, name = rel_path.rpartition("/")
+    if is_temp_name(name):
+        return True
+    return not folder and (name in ROOT_APP_FILES or fnmatchcase(name, NOTE_SWAP))
 
 
 def sha256_file(path: Path) -> str:
@@ -57,10 +71,10 @@ def scan(
     for root, dirs, files in os.walk(box.path, followlinks=False, onerror=dir_failed):
         dirs[:] = [d for d in dirs if not d.startswith(".")]
         for name in files:
-            if is_skipped(name):
-                continue
             full = Path(root) / name
             rel = full.relative_to(box.path).as_posix()
+            if is_app_file(rel):
+                continue
             try:
                 st = os.lstat(full)
                 if stat.S_ISLNK(st.st_mode):

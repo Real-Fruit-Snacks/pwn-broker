@@ -10,9 +10,10 @@ import zlib
 from collections.abc import Iterable
 from dataclasses import asdict
 from datetime import datetime
+from fnmatch import fnmatchcase
 from pathlib import Path
 
-from pwn_broker.filescan import SKIP_SUFFIXES, sha256_file
+from pwn_broker.filescan import NOTE_SWAP, ROOT_TRANSIENT_FILES, is_temp_name, sha256_file
 from pwn_broker.model import Box, FileRecord
 from pwn_broker.paths import AppPaths
 from pwn_broker.store import SCHEMA, write_toml
@@ -55,9 +56,12 @@ def write_manifest(box: Box, records: list[FileRecord], *, kind: str, now: datet
     return path
 
 
-def _left_out(name: str) -> bool:
-    # unlike filescan.is_skipped this keeps files.toml and manifest.toml
-    return name == ".note-state" or name.endswith(SKIP_SUFFIXES)
+def _left_out(rel_path: str) -> bool:
+    # narrower than filescan.is_app_file: files.toml, manifest.toml and .history are packed
+    folder, _, name = rel_path.rpartition("/")
+    if is_temp_name(name):
+        return True
+    return not folder and (name in ROOT_TRANSIENT_FILES or fnmatchcase(name, NOTE_SWAP))
 
 
 def _raise(exc: OSError) -> None:
@@ -81,11 +85,12 @@ def _entries(root: Path) -> list[tuple[str, Path]]:
                 found.append(((here / name).relative_to(root).as_posix(), here / name))
         dirs[:] = keep
         for name in files:
-            if _left_out(name):
+            rel = (here / name).relative_to(root).as_posix()
+            if _left_out(rel):
                 continue
             if stat.S_ISREG(os.lstat(here / name).st_mode):
                 _check_name(name)
-                found.append(((here / name).relative_to(root).as_posix(), here / name))
+                found.append((rel, here / name))
     return sorted(found, key=lambda e: e[0])
 
 

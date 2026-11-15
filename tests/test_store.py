@@ -115,6 +115,17 @@ def test_write_is_atomic(tmp_path, monkeypatch):
     assert [p.name for p in tmp_path.iterdir()] == ["x.toml"]
 
 
+def test_write_text_temp_file_is_named_for_the_app(tmp_path, monkeypatch):
+    seen = []
+    real = os.replace
+    monkeypatch.setattr(store.os, "replace", lambda src, dst: seen.append((src, dst)) or real(src, dst))
+    write_text(tmp_path / "creds.toml", "x")
+    [(src, dst)] = seen
+    name = os.path.basename(src)
+    assert os.path.dirname(src) == str(tmp_path) and dst == tmp_path / "creds.toml"
+    assert name.startswith(".pwn-broker-") and name.endswith(".tmp")
+
+
 def test_write_uses_lf_newlines(tmp_path):
     write_toml(tmp_path / "x.toml", {"schema": 1, "a": 1})
     assert b"\r" not in (tmp_path / "x.toml").read_bytes()

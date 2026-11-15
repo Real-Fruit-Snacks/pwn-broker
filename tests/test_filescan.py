@@ -8,7 +8,7 @@ import pytest
 
 from helpers import NOW
 from pwn_broker import filescan
-from pwn_broker.filescan import is_skipped, scan, sha256_file
+from pwn_broker.filescan import is_app_file, scan, sha256_file
 
 
 @pytest.fixture
@@ -85,15 +85,29 @@ def test_large_file_hash_deferred(box, loot):
     assert r2.first_seen == r.first_seen
 
 
-def test_skipped_names(box):
-    for name in ["files.toml", "manifest.toml", ".note-state", ".notes.md.swp", "x.part", "n.md~"]:
+def test_app_files_are_not_recorded(box):
+    own = ["files.toml", "manifest.toml", ".note-state", ".history", ".notes.md.swp", ".notes.md.swo"]
+    own.append(".pwn-broker-k3j9.tmp")
+    for name in own:
         (box.path / name).write_text("x")
+    (box.path / "targets/dc01/loot").mkdir(parents=True)
+    (box.path / "targets/dc01/loot/.pwn-broker-a1b2.tmp").write_text("x")
     (box.path / "notes.md").write_text("x")
     paths = {r.path for r in scan(box, [], now=NOW)}
     assert "notes.md" in paths
-    assert paths.isdisjoint(
-        {"files.toml", "manifest.toml", ".note-state", ".notes.md.swp", "x.part", "n.md~"}
-    )
+    assert paths.isdisjoint(own) and "targets/dc01/loot/.pwn-broker-a1b2.tmp" not in paths
+
+
+def test_files_with_common_names_are_recorded_anywhere(box, loot):
+    names = [".index.php.swp", "config.php~", "backup.tmp", "x.part", "files.toml"]
+    names += [".note-state", ".notes.md.swp", "manifest.toml", ".history"]
+    for name in names:
+        (loot / name).write_bytes(name.encode())
+    for name in ["x.part", "n.md~", "backup.tmp", ".a.swp"]:
+        (box.path / name).write_text("x")
+    paths = {r.path for r in scan(box, [], now=NOW)}
+    assert {f"targets/dc01/loot/{n}" for n in names} <= paths
+    assert {"x.part", "n.md~", "backup.tmp", ".a.swp"} <= paths
 
 
 def test_prompt_history_is_not_a_box_file(box):
@@ -103,12 +117,25 @@ def test_prompt_history_is_not_a_box_file(box):
     assert "notes.md" in paths and ".history" not in paths
 
 
-def test_is_skipped():
-    assert is_skipped("files.toml")
-    assert is_skipped("creds.toml.abc123.tmp")
-    assert is_skipped("a.swo")
-    assert not is_skipped("notes.md")
-    assert is_skipped(".history")
+APP_FILES = [
+    "files.toml", "manifest.toml", ".note-state", ".history", ".notes.md.swp", ".notes.md.swx",
+    ".pwn-broker-abc.tmp", "targets/dc01/.pwn-broker-abc.tmp", "targets/dc01/loot/.pwn-broker-x.tmp",
+]  # fmt: skip
+NOT_APP_FILES = [
+    "notes.md", "creds.toml", "box.toml", "a.swo", "x.tmp", "x.part", "n.md~", ".notes.md.swpp", ".notes.md",
+    "targets/dc01/files.toml", "targets/dc01/.history", "targets/dc01/.notes.md.swp", "targets/dc01/.note-state",
+    ".pwn-broker-abc", "pwn-broker-abc.tmp",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("rel", APP_FILES)
+def test_is_app_file(rel):
+    assert is_app_file(rel)
+
+
+@pytest.mark.parametrize("rel", NOT_APP_FILES)
+def test_is_not_app_file(rel):
+    assert not is_app_file(rel)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
