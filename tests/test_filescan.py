@@ -32,13 +32,13 @@ def test_box_level_file_has_no_target(box):
 
 
 def test_hidden_file_at_top_level_recorded_hidden_dirs_not_entered(box):
-    (box.path / ".history").write_text("ls")
+    (box.path / ".hidden-note").write_text("ls")
     (box.path / ".git").mkdir()
     (box.path / ".git/config").write_text("x")
     (box.path / "targets/dc01/.cache").mkdir(parents=True)
     (box.path / "targets/dc01/.cache/a").write_text("x")
     paths = {r.path for r in scan(box, [], now=NOW)}
-    assert ".history" in paths
+    assert ".hidden-note" in paths
     assert not any("/.cache/" in p or p.startswith(".git/") for p in paths)
 
 
@@ -96,12 +96,19 @@ def test_skipped_names(box):
     )
 
 
+def test_prompt_history_is_not_a_box_file(box):
+    (box.path / ".history").write_text("target list")
+    (box.path / "notes.md").write_text("x")
+    paths = {r.path for r in scan(box, [], now=NOW)}
+    assert "notes.md" in paths and ".history" not in paths
+
+
 def test_is_skipped():
     assert is_skipped("files.toml")
     assert is_skipped("creds.toml.abc123.tmp")
     assert is_skipped("a.swo")
     assert not is_skipped("notes.md")
-    assert not is_skipped(".history")
+    assert is_skipped(".history")
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")

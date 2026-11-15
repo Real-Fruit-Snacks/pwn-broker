@@ -8,7 +8,7 @@ from pathlib import Path
 from pwn_broker.model import Box, FileRecord
 
 HASH_NOW_LIMIT = 64 * 1024 * 1024
-SKIP_NAMES = {"files.toml", "manifest.toml", ".note-state"}
+SKIP_NAMES = {"files.toml", "manifest.toml", ".note-state", ".history"}
 # ".tmp" also covers the temp files store.write_text leaves mid-write
 SKIP_SUFFIXES = (".swp", ".swo", ".part", ".tmp", "~")
 

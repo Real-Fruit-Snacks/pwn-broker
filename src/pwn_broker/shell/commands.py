@@ -72,7 +72,12 @@ def dispatch(session: Session, line: str) -> None:
     name, args = found
     try:
         COMMANDS[name][0](session, args)
+    except Quit:
+        raise
     except Cancelled:
         console.info("cancelled")
     except _HANDLED as exc:
         console.fail(str(exc))
+    except Exception as exc:
+        # a handler bug must not end a session that has been open for hours
+        console.fail(f"unexpected error: {type(exc).__name__}: {exc}")

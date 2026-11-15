@@ -19,6 +19,8 @@ def prompt_style() -> Style:
         {
             "prompt": f"{EMBER} bold",
             "toolbar": MUTE,
+            # the default bottom-toolbar style is reverse video
+            "bottom-toolbar": f"noreverse {MUTE} bg:default",
             "suggestion": MUTE,
         }
     )

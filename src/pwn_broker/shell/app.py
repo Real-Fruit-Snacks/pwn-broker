@@ -1,5 +1,6 @@
+import os
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 
 from prompt_toolkit import PromptSession
@@ -7,12 +8,13 @@ from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.styles import Style
 
 from pwn_broker.boxes import TARGET_FOLDERS
 from pwn_broker.session import Session, rescan
 from pwn_broker.shell.commands import COMMANDS, Quit, dispatch
 from pwn_broker.store import StoreError
-from pwn_broker.theme import prompt_style
+from pwn_broker.theme import color_enabled, prompt_style
 
 # These commands come from later tasks, so their names live here rather than in the registry.
 TARGET_ARG_COMMANDS = ("target use", "target show", "target edit", "target rename", "target remove")
@@ -74,6 +76,10 @@ class ShellCompleter(Completer):
             yield Completion(candidate, start_position=-len(text))
 
 
+def shell_style(env: Mapping[str, str]) -> Style | None:
+    return prompt_style() if color_enabled(env) else None
+
+
 def run_shell(session: Session) -> None:
     console = session.console
     prompt = PromptSession(
@@ -82,9 +88,9 @@ def run_shell(session: Session) -> None:
         auto_suggest=AutoSuggestFromHistory(),
         completer=ShellCompleter(session),
         bottom_toolbar=lambda: [("class:toolbar", toolbar_text(session, session.clock()))],
-        style=prompt_style(),
+        style=shell_style(os.environ),
         complete_while_typing=True,
-        enable_history_search=True,
+        refresh_interval=30,
     )
     while True:
         try:
@@ -96,10 +102,10 @@ def run_shell(session: Session) -> None:
                 break
             line = "quit"
         try:
-            rescan(session)
-        except (StoreError, OSError) as exc:
-            console.warn(str(exc))
-        try:
+            try:
+                rescan(session)
+            except (StoreError, OSError) as exc:
+                console.warn(str(exc))
             dispatch(session, line)
         except Quit:
             break

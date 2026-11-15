@@ -146,6 +146,29 @@ def test_dispatch_lets_keyboard_interrupt_through(session, registry):
         dispatch(session, "interrupt")
 
 
+def test_dispatch_survives_a_handler_bug(session, registry):
+    def bug(s, args):
+        raise KeyError("k")
+
+    command("bug", "b")(bug)
+    dispatch(session, "bug")
+    assert session.console.lines == [("fail", "unexpected error: KeyError: 'k'")]
+
+
+def test_shell_style_respects_no_color():
+    from pwn_broker.shell.app import shell_style
+
+    assert shell_style({}) is not None
+    assert shell_style({"NO_COLOR": "1"}) is None
+
+
+def test_style_makes_the_toolbar_plain_text():
+    from pwn_broker.theme import prompt_style
+
+    rules = dict(prompt_style().style_rules)
+    assert "noreverse" in rules["bottom-toolbar"]
+
+
 def test_prompt_text(session):
     assert prompt_text(session) == "forest/dc01 > "
     session.current = None
