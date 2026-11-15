@@ -21,6 +21,11 @@ MAX_UNPACKED_BYTES = 1024**3
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
 _COMMAND_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _TOP_FILES = (MANIFEST, "LICENSE", "wheels.lock")
+LOCK_LIMIT = 1024 * 1024
+# pip obeys options, URLs and markers in a requirements file; only exact pins with hashes pass
+_LOCK_LINE = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._-]*==[A-Za-z0-9][A-Za-z0-9.!+_-]*( --hash=sha256:[0-9a-f]{64})+"
+)
 _TOP_FOLDERS = ("files", "wheels")
 
 
@@ -280,6 +285,29 @@ def read_manifest(path: Path) -> Manifest:
     return _parse_text(raw, str(path))
 
 
+# ---- wheels.lock
+
+
+def check_lock(raw: bytes, label: str = "wheels.lock") -> None:
+    """Refuse a lock file unless every line is name==version followed by sha256 hashes."""
+    if len(raw) > LOCK_LIMIT:
+        raise ToolError(f"{label} is too large (more than {LOCK_LIMIT} bytes)")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ToolError(f"{label} is not UTF-8 ({exc})") from exc
+    if not text:
+        raise ToolError(f"{label} is empty")
+    lines = text.split("\n")
+    if lines[-1] != "":
+        raise ToolError(f"{label} line {len(lines)} does not end with a line break")
+    for number, line in enumerate(lines[:-1], start=1):
+        if not _LOCK_LINE.fullmatch(line):
+            raise ToolError(
+                f"{label} line {number} is not name==version followed by --hash=sha256: values"
+            )
+
+
 # ---- zips
 
 
@@ -362,6 +390,8 @@ def _check_named_files(manifest: Manifest, seen: dict[str, zipfile.ZipInfo]) -> 
     if manifest.python is not None:
         if not _is_file(seen, manifest.python.lock):
             raise ToolError(f"{manifest.python.lock}: the lock file is missing from the package")
+        if seen[manifest.python.lock].file_size > LOCK_LIMIT:
+            raise ToolError(f"{manifest.python.lock} is too large (more than {LOCK_LIMIT} bytes)")
         prefix = manifest.python.wheels + "/"
         if not any(not i.is_dir() and b.startswith(prefix) for b, i in seen.items()):
             raise ToolError(f"{manifest.python.wheels}: the package holds no wheels")
@@ -416,6 +446,9 @@ def unpack(zip_path: Path, dest: Path) -> Manifest:
                 raise ToolError(f"{MANIFEST} is too large")
             manifest = _parse_text(zf.read(info), MANIFEST)
             _check_named_files(manifest, seen)
+            if manifest.python is not None:
+                lock = manifest.python.lock
+                check_lock(zf.read(seen[lock]), lock)
             _make_dest(dest, created)
             _extract(zf, seen, dest)
     except BaseException as exc:

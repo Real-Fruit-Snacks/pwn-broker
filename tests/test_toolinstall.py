@@ -28,12 +28,14 @@ posix_only = pytest.mark.skipif(sys.platform == "win32", reason="needs a Linux v
 SCRIPT = b"#!/bin/sh\necho hello from tool \"$@\"\n"
 
 
-def build(tmp_path, files=None, wheels=(), **overrides):
+def build(tmp_path, files=None, wheels=(), lock=None, **overrides):
     manifest = toolkit.sample_manifest(**{"arch": machine_arch(), **overrides})
     manifest = {k: v for k, v in manifest.items() if v is not None}
     if files is None:
         files = {"files/kerbrute": SCRIPT}
-    zip_path, size, sha = toolkit.make_package(tmp_path / "zips", manifest, files, wheels=list(wheels))
+    zip_path, size, sha = toolkit.make_package(
+        tmp_path / "zips", manifest, files, wheels=list(wheels), lock=lock
+    )
     entry = BuildEntry(
         name=manifest["name"],
         version=manifest["version"],
@@ -464,6 +466,52 @@ def test_wrong_python_version(paths, box, tmp_path):
     zip_path, entry = python_zip(tmp_path)
     with pytest.raises(ToolError, match="3.13"):
         do_install(paths, box, entry, zip_path, tmp_path, run=FakeRun(version="3.9"))
+    assert_nothing_left(paths)
+
+
+HASH = "--hash=sha256:" + "a" * 64
+GOOD_LINE = f"kerbrute-py==1.0 {HASH}\n".encode()
+BAD_LOCKS = {
+    "an option": GOOD_LINE + b"--no-binary :all:\n",
+    "find links": b"-f https://example.invalid/\n" + GOOD_LINE,
+    "another file": GOOD_LINE + b"-r other.txt\n",
+    "a url": f"kerbrute-py @ https://example.invalid/x.whl {HASH}\n".encode(),
+    "a marker": f'kerbrute-py==1.0 ; python_version < "3.13" {HASH}\n'.encode(),
+    "a marker after the hash": f'kerbrute-py==1.0 {HASH} ; python_version < "3.13"\n'.encode(),
+    "no hash": b"kerbrute-py==1.0\n",
+    "a blank line": GOOD_LINE + b"\n" + GOOD_LINE,
+    "a carriage return": GOOD_LINE.replace(b"\n", b"\r\n"),
+    "a continuation": f"kerbrute-py==1.0 \\\n    {HASH}\n".encode(),
+}
+
+
+@pytest.mark.parametrize("bad", BAD_LOCKS.values(), ids=BAD_LOCKS.keys())
+def test_a_lock_pip_could_misread_is_refused_before_anything_runs(paths, box, tmp_path, bad):
+    wheel = toolkit.make_wheel(tmp_path / "w", "kerbrute-py", "1.0", module="kmod", entry="kerbrute")
+    zip_path, entry = build(tmp_path, wheels=[wheel], files={}, lock=bad, **python_manifest())
+    fake = FakeRun()
+    with pytest.raises(ToolError, match="wheels.lock"):
+        do_install(paths, box, entry, zip_path, tmp_path, run=fake)
+    assert fake.calls == []
+    assert_nothing_left(paths)
+
+
+def test_the_lock_is_checked_again_right_before_pip(paths, box, tmp_path, monkeypatch):
+    from pwn_broker import toolinstall
+
+    zip_path, entry = python_zip(tmp_path)
+    real = toolinstall.unpack
+
+    def swapped(zip_file, dest):
+        manifest = real(zip_file, dest)
+        (dest / "wheels.lock").write_bytes(b"--find-links https://example.invalid/\n")
+        return manifest
+
+    monkeypatch.setattr(toolinstall, "unpack", swapped)
+    fake = FakeRun()
+    with pytest.raises(ToolError, match="wheels.lock line 1"):
+        do_install(paths, box, entry, zip_path, tmp_path, run=fake)
+    assert not any("pip" in call for call in fake.calls)
     assert_nothing_left(paths)
 
 

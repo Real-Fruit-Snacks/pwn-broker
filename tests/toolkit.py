@@ -64,19 +64,26 @@ def sample_manifest(**overrides) -> dict:
 
 
 def make_package(
-    folder: Path, manifest: dict, files: dict[str, bytes], *, wheels: list[Path] = ()
+    folder: Path,
+    manifest: dict,
+    files: dict[str, bytes],
+    *,
+    wheels: list[Path] = (),
+    lock: bytes | None = None,
 ) -> tuple[Path, int, str]:
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{manifest['name']}-{manifest['version']}-{manifest['build']}.zip"
     entries = {"manifest.toml": tomli_w.dumps(manifest).encode(), "LICENSE": b"licence text\n"}
     entries.update(files)
-    lock = []
+    pins = []
     for wheel in wheels:
         dist, version = wheel.name.split("-")[:2]
         entries[f"wheels/{wheel.name}"] = wheel.read_bytes()
-        lock.append(f"{dist.replace('_', '-')}=={version} --hash=sha256:{sha256_file(wheel)}")
+        pins.append(f"{dist.replace('_', '-')}=={version} --hash=sha256:{sha256_file(wheel)}")
     if wheels:
-        entries["wheels.lock"] = ("\n".join(lock) + "\n").encode()
+        entries["wheels.lock"] = ("\n".join(pins) + "\n").encode()
+    if lock is not None:
+        entries["wheels.lock"] = lock
     with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as zf:
         for name, data in entries.items():
             zf.writestr(name, data)

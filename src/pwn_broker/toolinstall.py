@@ -13,10 +13,12 @@ from pwn_broker.paths import AppPaths
 from pwn_broker.store import save_box, write_text
 from pwn_broker.toolindex import BuildEntry
 from pwn_broker.toolpkg import (
+    LOCK_LIMIT,
     Command,
     Manifest,
     ToolError,
     build_id,
+    check_lock,
     machine_arch,
     unpack,
     valid_command_name,
@@ -357,12 +359,19 @@ def _build_venv(manifest: Manifest, folder: Path, python: str, run) -> None:
         )
     venv = folder / "venv"
     _run_checked(run, [python, "-m", "venv", str(venv)], "creating the virtual environment")
+    lock = folder / Path(*spec.lock.split("/"))
+    try:
+        with open(lock, "rb") as fh:
+            raw = fh.read(LOCK_LIMIT + 1)
+    except OSError as exc:
+        raise ToolError(f"cannot read {spec.lock}: {exc}") from exc
+    check_lock(raw, spec.lock)  # checked again here: this is the file pip is about to read
     pip = [
         str(venv / "bin" / "python"), "-m", "pip", "install",
         "--no-index", "--find-links", str(folder / Path(*spec.wheels.split("/"))),
         "--only-binary", ":all:", "--require-hashes",
         "--disable-pip-version-check", "--no-input",
-        "-r", str(folder / Path(*spec.lock.split("/"))),
+        "-r", str(lock),
     ]  # fmt: skip
     _run_checked(run, pip, "pip")
 

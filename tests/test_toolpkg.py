@@ -608,3 +608,51 @@ def test_make_wheel_installs_with_pip(tmp_path):
     assert ran.stdout.strip() == "toy-dist 1.2.3"
     console = scripts / ("toy.exe" if sys.platform == "win32" else "toy")
     assert console.exists()
+
+
+# ---- wheels.lock
+
+
+LOCK_HASH = "--hash=sha256:" + "0123456789abcdef" * 4
+
+
+def test_check_lock_accepts_pins_with_hashes():
+    toolpkg.check_lock(f"a==1.0 {LOCK_HASH}\nb.c_d-e==2!1.0+local {LOCK_HASH} {LOCK_HASH}\n".encode())
+
+
+def test_the_lock_the_test_packages_carry_passes(tmp_path):
+    wheel = make_wheel(tmp_path / "w", "kerbrute-py", "1.0", module="kmod", entry="kerbrute")
+    data = sample_manifest(
+        command=[{"name": "kerbrute", "type": "python-entry", "entry": "kerbrute"}],
+        python={"versions": ["3.13"], "lock": "wheels.lock", "wheels": "wheels"},
+    )
+    zip_path, _size, _sha = make_package(tmp_path / "pkg", data, {}, wheels=[wheel])
+    with zipfile.ZipFile(zip_path) as zf:
+        toolpkg.check_lock(zf.read("wheels.lock"))
+    assert unpack(zip_path, tmp_path / "out").python is not None
+
+
+@pytest.mark.parametrize(
+    ("raw", "where"),
+    [
+        (b"", "empty"),
+        (f"a==1 {LOCK_HASH}".encode(), "line 1"),
+        (f"a==1 {LOCK_HASH}\n# note\n".encode(), "line 2"),
+        (f"a==1 {LOCK_HASH.upper()}\n".encode(), "line 1"),
+        (f"a==1  {LOCK_HASH}\n".encode(), "line 1"),
+        (f"a==1 {LOCK_HASH} \n".encode(), "line 1"),
+        (f"a>=1 {LOCK_HASH}\n".encode(), "line 1"),
+        (f"a==1 --hash=sha512:{'0' * 128}\n".encode(), "line 1"),
+        (b"\xff\xfe\n", "UTF-8"),
+        (f"a==1 {LOCK_HASH}\r\n".encode(), "line 1"),
+    ],
+)
+def test_check_lock_refuses_and_names_the_line(raw, where):
+    with pytest.raises(ToolError, match=where):
+        toolpkg.check_lock(raw)
+
+
+def test_check_lock_has_a_size_cap():
+    line = f"a==1 {LOCK_HASH}\n".encode()
+    with pytest.raises(ToolError, match="too large"):
+        toolpkg.check_lock(line * (1024 * 1024 // len(line) + 1))
