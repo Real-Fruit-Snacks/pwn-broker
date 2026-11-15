@@ -1,3 +1,4 @@
+import hashlib
 import importlib.resources
 import os
 from pathlib import Path
@@ -8,18 +9,49 @@ from pwn_broker.store import write_text
 PATH_MARK = "# pwn-broker"
 
 
+TEMPLATE_NAME = "notes.md"
+# sha256 of default templates shipped before; an installed template still equal to one of them was
+# never edited, so it is replaced by the current default
+OLD_DEFAULT_TEMPLATES = frozenset({"bb34a399fb0f7d5d8ba8c10febcd74b4d6eec51189366d5008f4bb1da587dcad"})
+
+
 def _packaged(name: str) -> str:
     return importlib.resources.files("pwn_broker.data").joinpath(name).read_text(encoding="utf-8")
+
+
+def _vim_files() -> dict[str, str]:
+    """Every file for vim in the package data, by path relative to the data folder."""
+    found: dict[str, str] = {}
+
+    def walk(folder, prefix: str) -> None:
+        for entry in folder.iterdir():
+            if entry.is_dir():
+                if entry.name != "__pycache__":
+                    walk(entry, f"{prefix}{entry.name}/")
+            elif entry.name not in ("__init__.py", TEMPLATE_NAME) and not entry.name.endswith(".pyc"):
+                found[prefix + entry.name] = entry.read_text(encoding="utf-8")
+
+    walk(importlib.resources.files("pwn_broker.data"), "")
+    return found
+
+
+def _template_is_old_default(template: Path) -> bool:
+    try:
+        return hashlib.sha256(template.read_bytes()).hexdigest() in OLD_DEFAULT_TEMPLATES
+    except OSError:
+        return False
 
 
 def install_data(paths: AppPaths) -> None:
     for folder in (paths.run, paths.bin, paths.templates, paths.vim_dir):
         folder.mkdir(parents=True, exist_ok=True)
-    template = paths.templates / "notes.md"
-    if not template.exists():
-        write_text(template, _packaged("notes.md"))
-    for name in ("vimrc", "nightshift.vim"):
-        write_text(paths.vim_dir / name, _packaged(name))
+    template = paths.templates / TEMPLATE_NAME
+    if not template.exists() or _template_is_old_default(template):
+        write_text(template, _packaged(TEMPLATE_NAME))
+    for name, text in _vim_files().items():
+        target = paths.vim_dir / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        write_text(target, text)
 
 
 def write_launcher(paths: AppPaths, python: Path) -> Path:
@@ -53,6 +85,6 @@ def ensure_path_line(rc: Path, opt_bin: Path) -> bool:
 
 def load_template(paths: AppPaths) -> str:
     try:
-        return (paths.templates / "notes.md").read_text(encoding="utf-8")
+        return (paths.templates / TEMPLATE_NAME).read_text(encoding="utf-8")
     except OSError:
-        return _packaged("notes.md")
+        return _packaged(TEMPLATE_NAME)

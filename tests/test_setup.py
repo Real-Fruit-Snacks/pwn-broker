@@ -30,6 +30,61 @@ def test_install_data_creates_layout(paths):
     assert (paths.vim_dir / "nightshift.vim").is_file()
 
 
+def _vim_files():
+    root = importlib.resources.files("pwn_broker.data")
+    found = {}
+
+    def walk(folder, prefix):
+        for entry in folder.iterdir():
+            if entry.is_dir():
+                if entry.name != "__pycache__":
+                    walk(entry, prefix + entry.name + "/")
+            elif entry.name not in ("__init__.py", "notes.md"):
+                found[prefix + entry.name] = entry.read_bytes()
+
+    walk(root, "")
+    return found
+
+
+def test_install_data_copies_every_vim_file_and_can_run_again(paths):
+    files = _vim_files()
+    assert {"vimrc", "nightshift.vim", "syntax/pwnnote.vim"} <= set(files)
+    for _ in range(2):
+        install_data(paths)
+        for name, raw in files.items():
+            assert (paths.vim_dir / name).read_bytes() == raw, name
+    assert not (paths.vim_dir / "notes.md").exists()
+    assert not (paths.vim_dir / "__init__.py").exists()
+
+
+def test_vim_files_are_utf8_with_lf():
+    for name, raw in _vim_files().items():
+        assert b"\r" not in raw, name
+        assert raw.endswith(b"\n") and not raw.endswith(b"\n\n"), name
+        raw.decode("utf-8")
+
+
+# the default template shipped before the note had a box; an install that still has it unedited
+# gets the new one
+OLD_DEFAULT = (
+    "# $name\nplatform     $platform\ndate         $date\nos           $os\ndifficulty   $difficulty\n\n"
+    "## targets\n<!-- pwn-broker:targets -->\n$targets\n<!-- /pwn-broker:targets -->\n"
+    "<!-- pwn-broker:section -->\n## $target\n### enumeration\n### foothold\n### privilege escalation\n"
+)
+
+
+def test_install_data_replaces_the_previous_default_template(paths):
+    paths.templates.mkdir(parents=True)
+    template = paths.templates / "notes.md"
+    template.write_bytes(OLD_DEFAULT.encode("utf-8"))
+    install_data(paths)
+    assert template.read_text(encoding="utf-8") == packaged("notes.md")
+    edited = OLD_DEFAULT.encode("utf-8") + b"## mine\n"
+    template.write_bytes(edited)
+    install_data(paths)
+    assert template.read_bytes() == edited
+
+
 def test_install_data_keeps_an_edited_template(paths):
     install_data(paths)
     (paths.templates / "notes.md").write_text("mine\n", encoding="utf-8")
@@ -144,6 +199,21 @@ def test_nightshift_palette():
     assert "let g:colors_name = 'nightshift'" in text
     assert text.startswith("set background=dark\nhighlight clear\n")
     assert "#FF6A3D" in text.upper()
+    assert "markdown" not in text.lower()
+    for colour in ("#FFC247", "#8A8F99", "#E8E6E1", "#1A1D24", "#13151A", "#0C0D10"):
+        assert colour in text.upper()
+
+
+def test_vimrc_basics():
+    text = packaged("vimrc")
+    for line in (
+        "set nomodeline", "set nobackup nowritebackup noswapfile", "set nonumber",
+        'let mapleader = ","', "set foldmethod=marker",
+        "set foldmarker=##########@@@@@@@@@@,@@@@@@@@@@##########", "set autoread",
+        "set updatetime=1000", "autocmd FocusLost,CursorHold,CursorHoldI * silent! update",
+        "autocmd FocusGained * silent! checktime",
+    ):
+        assert line in [row.strip() for row in text.splitlines()], line
 
 
 @pytest.mark.skipif(shutil.which("vim") is None, reason="vim not installed")
