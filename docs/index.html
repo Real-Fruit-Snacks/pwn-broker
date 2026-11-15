@@ -197,11 +197,13 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
         <div class="tested-grid">
             <ul class="untested" aria-label="Not tested">
                 <li><b>Not tested: Kali Linux.</b> The app has not been run there.</li>
-                <li><b>Not tested: <code>install.sh</code>.</b> It passes <code>sh -n</code>, its help and option handling are tested, and so is how it treats an existing <code>app/</code> folder (with a stand-in for <code>python3</code>), but it has not been run end to end.</li>
+                <li><b>Not tested: the installer's download.</b> No release exists, so fetching the wheel and checking its SHA-256 has not run.</li>
                 <li><b>Not tested: the note window and the prompt on a real terminal.</b></li>
             </ul>
             <ul aria-label="Tested">
+                <li><b>The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13, and again as root on 3.13:</b> 784 passed, 1 skipped.</li>
                 <li><b>The unit tests, on Windows 11 with Python 3.13:</b> 770 passed, 15 skipped. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer).</li>
+                <li><b><code>install.sh</code>, run twice from a checkout on Ubuntu 24.04 in CI:</b> the first run builds the environment, installs the package and writes the launcher and the PATH line; the second reuses the environment and adds no second PATH line.</li>
                 <li><b>The vimrc, run by Vim 9.2 in headless mode on a note the app wrote:</b> folds, fold text, <kbd>F8</kbd>, colours, settings, and the reload after the app changes the note. Timers and focus events do not fire in that mode, so the tests run the check by hand.</li>
             </ul>
         </div>

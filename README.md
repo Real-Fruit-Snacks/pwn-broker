@@ -111,10 +111,12 @@ Edits made by hand to these files are overwritten at the next rebuild.
 
 ## Tested on
 
+- The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13, and again as root on 3.13: 784 passed, 1 skipped.
 - The unit tests, on Windows 11 with Python 3.13: 770 passed, 15 skipped. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer).
+- `install.sh`, run twice from a checkout on Ubuntu 24.04 in CI: the first run builds the environment, installs the package and writes the launcher and the PATH line; the second reuses the environment and adds no second PATH line.
 - The vimrc, run by Vim 9.2 in headless mode on a note the app wrote: folds, fold text, `F8`, colours, settings, and the reload after the app changes the note. Timers and focus events do not fire in that mode, so the tests run the check by hand.
 - *Not* tested: Kali Linux. The app has not been run there.
-- *Not* tested: `install.sh`. It passes `sh -n`, its help and option handling are tested, and so is how it treats an existing `app/` folder (with a stand-in for `python3`), but it has not been run end to end.
+- *Not* tested: the installer's download. No release exists, so fetching the wheel and checking its SHA-256 has not run.
 - *Not* tested: the note window and the prompt on a real terminal.
 
 ## Known issues
