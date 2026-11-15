@@ -637,11 +637,29 @@ A target with an IP and a hostname can have one line in `/etc/hosts`:
 - A hostname already on an unmarked line with the same IP: nothing is added for that name, and the app says it already resolves.
 - A hostname already on an unmarked line with a different IP: nothing is added, and the `warn` shows the line, its number and the command to run once I have removed it. Unmarked lines are never changed.
 
+**Hostnames found later.** A domain, a subdomain or a virtual host on the same IP is one more hostname of the same target. `/etc/hosts` has no wildcards, so each is added by name:
+
+```
+forest/web01 > host add crm.board.htb dev.board.htb
+ok  web01 now answers to 3 names
+ok  /etc/hosts updated
+    10.10.11.5 board.htb crm.board.htb dev.board.htb
+```
+
 | Command | Does |
 |---|---|
-| `hosts` | The box's lines, and whether each is in `/etc/hosts` now |
-| `hosts add [target]` | Adds the line for the current or named target |
-| `hosts remove [target]` | Takes it out and forgets it |
+| `host add <name> [name ...]` | Adds hostnames to the current target. Its `/etc/hosts` line, `lists/hosts.txt` and the note follow |
+| `host remove <name> [name ...]` | Takes hostnames off the current target. Tab completes the names it has |
+| `host` | Every hostname in the box by target, and whether each is in `/etc/hosts` now |
+| `host file on [target]` | Puts the line for the current or named target into `/etc/hosts` |
+| `host file off [target]` | Takes it out and forgets it. The target keeps its hostnames |
+
+- If the target has a line, `host add` and `host remove` rewrite it without asking. If it has none and has an IP, `host add` asks the `/etc/hosts` question once.
+- A name the target already has is skipped, and the app says so. A name another target of the box has is refused, naming that target: within a box a hostname belongs to one target.
+- Only a plain hostname is accepted, the same rule as for writing the file.
+- Removing the last hostname takes the target's line out. A target with no IP keeps at least one hostname.
+- A subdomain I want kept apart, with its own folders, is its own target with the same IP. It gets its own line.
+- `target edit` still works for hostnames, and still replaces the whole list.
 
 **Writing the file.**
 
@@ -1044,7 +1062,8 @@ For recording and Kali changes:
 - The `/etc/hosts` question defaults to yes, because a line is easy to take back.
 - A target's line uses its first IP.
 - An open box's hostname wins over another of my boxes' lines; an unmarked line is never changed.
-- `hosts`, `hosts add` and `hosts remove` exist.
+- `host add`, `host remove`, `host`, `host file on` and `host file off` exist, and act on the current target.
+- Within a box a hostname belongs to one target.
 - Only `tun` interfaces count as a VPN, and there is no setting for it.
 - A new target is pinged wherever it is added, including from `record`.
 - A failed asciinema download does not stop the install.
