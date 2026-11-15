@@ -81,3 +81,15 @@ def dispatch(session: Session, line: str) -> None:
     except Exception as exc:
         # a handler bug must not end a session that has been open for hours
         console.fail(f"unexpected error: {type(exc).__name__}: {exc}")
+
+
+def take_args(
+    args: list[str], required: tuple[str, ...] = (), optional: tuple[str, ...] = ()
+) -> list[str | None]:
+    # Raises ValueError, which dispatch turns into a fail line.
+    if len(args) < len(required):
+        raise ValueError(f"missing argument: {required[len(args)]}")
+    limit = len(required) + len(optional)
+    if len(args) > limit:
+        raise ValueError(f"too many arguments: {' '.join(args[limit:])}")
+    return [*args, *[None] * (limit - len(args))]

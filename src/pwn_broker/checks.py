@@ -4,8 +4,9 @@ import shutil
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
-from pwn_broker import __version__
+from pwn_broker import __version__, setup
 from pwn_broker.config import Settings
 from pwn_broker.console import Cancelled, Console
 from pwn_broker.notewindow import has_display
@@ -165,3 +166,18 @@ def version_check(
     if latest is None or not newer(current, latest):
         return None
     return CheckResult("version", "warn", f"{latest} is available, this is {current}")
+
+
+def launch_checks(
+    paths: AppPaths, settings: Settings, env: Mapping[str, str], home: Path
+) -> list[CheckResult]:
+    results = run_checks(
+        paths,
+        settings,
+        env,
+        repair_path=lambda: setup.ensure_path_line(home / ".zshrc", paths.bin),
+    )
+    version = version_check(settings)
+    if version is not None:
+        results.append(version)
+    return results

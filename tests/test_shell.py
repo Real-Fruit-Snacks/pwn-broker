@@ -61,7 +61,7 @@ def test_command_returns_the_handler(registry):
 
 
 def test_registry_is_restored_after_a_test():
-    assert "files" not in COMMANDS
+    assert COMMANDS.get("files", (None,))[0] is not _noop
 
 
 def test_suggest_prefers_two_words_then_one(registry):
