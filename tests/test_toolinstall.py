@@ -50,11 +50,12 @@ def build(tmp_path, files=None, wheels=(), **overrides):
 
 
 def python_manifest(**extra):
-    return dict(
+    manifest = dict(
         command=[{"name": "kerbrute", "type": "python-entry", "entry": "kerbrute"}],
         python={"versions": ["3.13"], "lock": "wheels.lock", "wheels": "wheels"},
-        **extra,
     )
+    manifest.update(extra)
+    return manifest
 
 
 class FakeRun:
