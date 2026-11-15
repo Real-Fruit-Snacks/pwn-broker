@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -50,9 +51,13 @@ def _row(session: Session, n: int, cast: Path, live: bool) -> list[str]:
         header = read_header(cast)
     except CastError:
         header = None
+    start = None
     if header is not None and header.timestamp is not None:
-        start = datetime.fromtimestamp(header.timestamp, tz)
-    else:
+        try:
+            start = datetime.fromtimestamp(header.timestamp, tz)
+        except (OverflowError, ValueError, OSError):
+            header = None  # a start time no date can show: its length cannot be told either
+    if start is None:
         start = _from_name(cast, session)
     started = start.strftime("%Y-%m-%d %H:%M") if start else cast.stem
     if live:
@@ -85,7 +90,16 @@ def _play(session: Session, n: int, casts: list[Path]) -> None:
             "asciinema is missing or does not match its checksum; run check to download it again"
         )
     try:
-        status = session.play(recorder.play_argv(session.paths, cast)).returncode
+        for folder in recorder.settings_env(session.paths).values():
+            Path(folder).mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        console.fail(f"could not make asciinema's settings folder: {exc}")
+        return
+    # the app's own settings folders, as for recording, and no PWN_BROKER_RECORDING: playing records nothing
+    env = {k: v for k, v in os.environ.items() if k != "PWN_BROKER_RECORDING"}
+    env.update(recorder.settings_env(session.paths))
+    try:
+        status = session.play(recorder.play_argv(session.paths, cast), env=env).returncode
     except KeyboardInterrupt:
         return  # Ctrl-C is how a replay is stopped
     except OSError as exc:
@@ -105,10 +119,10 @@ def replay(session: Session, args: list[str]) -> None:
             raise ValueError(none)
         session.console.info(none)
         return
+    casttext.refresh(session.box, session.console, tz=session.clock().tzinfo, target=target.name)
     if n is not None:
         _play(session, n, casts)
         return
-    casttext.refresh(session.box, session.console, tz=session.clock().tzinfo, target=target.name)
     live = _live(session)
     rows = [_row(session, i, cast, cast.resolve() in live) for i, cast in enumerate(casts, start=1)]
     session.console.table(["n", "started", "length", "size"], rows)

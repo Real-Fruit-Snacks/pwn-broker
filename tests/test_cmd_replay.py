@@ -34,16 +34,19 @@ def _run(session, line):
 @pytest.fixture
 def played(session, monkeypatch):
     calls = []
+    envs = []
     status = [0]
 
-    def play(argv):
+    def play(argv, *, env):
         calls.append(argv)
+        envs.append(env)
         if isinstance(status[0], BaseException):
             raise status[0]
         return subprocess.CompletedProcess(argv, status[0])
 
     session.play = play
     monkeypatch.setattr(cmd_replay.recorder, "present", lambda paths: True)
+    session.played_envs = envs  # read by the test that checks the environment
     return calls, status
 
 
@@ -127,13 +130,44 @@ def test_without_a_current_target(session):
 # ---- playing
 
 
-def test_plays_one_through_the_seam(session, played):
+def test_plays_one_through_the_seam(session, played, monkeypatch):
     calls, status = played
     _cast(session, "dc01", "2026-11-14_1432")
     second = _cast(session, "dc01", "2026-11-14_1510")
+    monkeypatch.setenv("PWN_BROKER_RECORDING", "web01")  # as inside a recorded window
+    monkeypatch.setenv("ASCIINEMA_CONFIG_HOME", "/home/u/.config/asciinema")
     console = _run(session, "replay 2")
     assert calls == [recorder.play_argv(session.paths, second)]
     assert console.lines == [] and console.tables == []
+    [env] = session.played_envs
+    assert env["ASCIINEMA_CONFIG_HOME"] == str(session.paths.run_asciinema / "config")
+    assert env["ASCIINEMA_STATE_HOME"] == str(session.paths.run_asciinema / "state")
+    assert "PWN_BROKER_RECORDING" not in env
+    assert env["PATH"] == os.environ["PATH"]
+    assert all((session.paths.run_asciinema / sub).is_dir() for sub in ("config", "state"))
+
+
+def test_playing_writes_the_missing_text_copies_first(session, played):
+    first = _cast(session, "dc01", "2026-11-14_1432")
+    _run(session, "replay 1")
+    assert "14:32:07  hello" in first.with_suffix(".txt").read_text(encoding="utf-8")
+
+
+def test_a_start_time_too_far_off_does_not_hide_the_other_recordings(session):
+    far = _cast(session, "dc01", "2026-11-14_1430", timestamp=253402300799)
+    os.utime(far, ns=(START * 10**9,) * 2)
+    huge = session.box.path / "targets/dc01/recordings/2026-11-14_1431.cast"
+    huge.write_text('{"version": 3, "term": {"cols": 80, "rows": 24}, "timestamp": 100000000000000000000}\n')
+    good = _cast(session, "dc01", "2026-11-14_1432", minutes=14)
+    console = _run(session, "replay")
+    assert [k for k, _ in console.lines] == ["warn", "warn"]
+    [(columns, rows)] = console.tables
+    assert [row[:3] for row in rows] == [
+        ["1", "2026-11-14 14:30", "-"],
+        ["2", "2026-11-14 14:31", "-"],
+        ["3", "2026-11-14 14:32", "14 min"],
+    ]
+    assert rows[2][3] == human_size(good.stat().st_size)
 
 
 def test_plays_one_of_another_target(session, played):

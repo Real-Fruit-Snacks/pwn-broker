@@ -8,11 +8,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 MAX_SIZE = 1000
+# the last second of the year 9999 (UTC): no later start time can be shown as a date
+MAX_TIMESTAMP = 253402300799
 _BLOCK = 64 * 1024
 
 
 class CastError(Exception):
-    pass
+    """A cast that cannot be read: `reason` says why without the path, which the message adds."""
+
+    def __init__(self, path: Path, reason: str) -> None:
+        super().__init__(f"{path}: {reason}")
+        self.path = path
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -32,30 +39,32 @@ def read_header(path: Path) -> Header:
         with path.open("rb") as fh:
             first = fh.readline()
     except OSError as exc:
-        raise CastError(f"cannot read {path}: {exc.strerror or exc}") from exc
+        raise CastError(path, f"cannot be read ({exc.strerror or exc})") from exc
     if not first.strip():
-        raise CastError(f"{path}: empty file")
+        raise CastError(path, "empty file")
     try:
         data = json.loads(first)
     except (ValueError, RecursionError) as exc:
-        raise CastError(f"{path}: the first line is not JSON") from exc
+        raise CastError(path, "the first line is not JSON") from exc
     if not isinstance(data, dict):
-        raise CastError(f"{path}: the first line is not a JSON object")
+        raise CastError(path, "the first line is not a JSON object")
     if data.get("version") != 3:
-        raise CastError(f"{path}: version {data.get('version')!r} is not asciicast version 3")
+        raise CastError(path, f"version {data.get('version')!r} is not asciicast version 3")
     term = data.get("term")
     if not isinstance(term, dict):
-        raise CastError(f"{path}: the header has no term")
+        raise CastError(path, "the header has no term")
     for key in ("cols", "rows"):
         value = term.get(key)
         if not _whole_number(value) or not 1 <= value <= MAX_SIZE:
-            raise CastError(f"{path}: term {key} {value!r} is not between 1 and {MAX_SIZE}")
+            raise CastError(path, f"term {key} {value!r} is not between 1 and {MAX_SIZE}")
     timestamp = data.get("timestamp")
     if timestamp is not None and not _whole_number(timestamp):
-        raise CastError(f"{path}: timestamp {timestamp!r} is not a whole number")
+        raise CastError(path, f"timestamp {timestamp!r} is not a whole number")
+    if timestamp is not None and not 0 <= timestamp <= MAX_TIMESTAMP:
+        raise CastError(path, f"timestamp {timestamp} is not a time between 1970 and 9999")
     title = data.get("title", "")
     if not isinstance(title, str):
-        raise CastError(f"{path}: the title is not text")
+        raise CastError(path, "the title is not text")
     return Header(cols=term["cols"], rows=term["rows"], timestamp=timestamp, title=title)
 
 
@@ -89,7 +98,7 @@ def events(path: Path) -> Iterator[tuple[float, str, str]]:
             bad: tuple[int, str] | None = None
             for number, raw in enumerate(fh, start=2):
                 if bad is not None:
-                    raise CastError(f"{path}: line {bad[0]} is not a valid event ({bad[1]})")
+                    raise CastError(path, f"line {bad[0]} is not a valid event ({bad[1]})")
                 if not raw.endswith(b"\n"):
                     return  # cut off where the writing stopped
                 if not raw.strip() or raw.startswith(b"#"):
@@ -102,7 +111,7 @@ def events(path: Path) -> Iterator[tuple[float, str, str]]:
                 elapsed += interval
                 yield elapsed, code, data
     except OSError as exc:
-        raise CastError(f"cannot read {path}: {exc.strerror or exc}") from exc
+        raise CastError(path, f"cannot be read ({exc.strerror or exc})") from exc
 
 
 def whole_size(path: Path) -> int:

@@ -413,3 +413,10 @@ def test_real_zsh_whose_zshenv_moves_zdotdir(paths, tmp_path):
     result = _run_shell([zsh, "-i"], home, {"PWN_BROKER_RECORDING": "dc01", **extra}, script)
     assert result.returncode == 0, result.stderr
     assert result.stdout == f"[rec dc01] moved> |{home / '.config' / 'zsh'}"
+
+
+def test_settings_env_is_the_apps_own_asciinema_folders(paths):
+    assert recorder.settings_env(paths) == {
+        "ASCIINEMA_CONFIG_HOME": str(paths.run_asciinema / "config"),
+        "ASCIINEMA_STATE_HOME": str(paths.run_asciinema / "state"),
+    }

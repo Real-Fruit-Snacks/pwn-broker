@@ -33,6 +33,9 @@ def test_header_without_timestamp_or_title(tmp_path):
         (json.dumps({**header(), "term": {"cols": 0, "rows": 24}}), "cols"),
         (json.dumps({**header(), "term": {"cols": 5000, "rows": 24}}), "cols"),
         (json.dumps({**header(), "term": {"cols": 80, "rows": True}}), "rows"),
+        (json.dumps(header(timestamp=-1)), "timestamp"),
+        (json.dumps(header(timestamp=10**20)), "timestamp"),
+        (json.dumps(header(timestamp=253402300800)), "timestamp"),
     ],
 )
 def test_bad_header_is_refused(tmp_path, first, reason):
@@ -154,3 +157,20 @@ def test_whole_size_reads_back_across_blocks(tmp_path):
     assert cast.whole_size(path) == 11
     path.write_bytes(b"0123456789\n" + tail + b"\n")
     assert cast.whole_size(path) == 11 + len(tail) + 1
+
+
+def test_a_timestamp_up_to_the_end_of_9999_is_kept(tmp_path):
+    for value in (0, 253402300799):
+        path = write_cast(tmp_path / f"{value}.cast", [], timestamp=value)
+        assert cast.read_header(path).timestamp == value
+
+
+def test_a_cast_error_keeps_its_reason_apart_from_the_path(tmp_path):
+    path = _write(tmp_path / "bad.cast", "this is not json\n")
+    with pytest.raises(CastError) as err:
+        cast.read_header(path)
+    assert err.value.reason == "the first line is not JSON"
+    assert str(err.value) == f"{path}: the first line is not JSON"
+    with pytest.raises(CastError) as err:
+        cast.read_header(tmp_path / "missing.cast")
+    assert str(tmp_path) not in err.value.reason and err.value.reason.startswith("cannot be read")

@@ -386,7 +386,9 @@ def test_refresh_survives_one_bad_cast_among_good_ones(box):
     last = _cast_in(box, "dc01", "2026-11-14_1600")
     console = _refresh(box)
     [(kind, text)] = console.lines
-    assert kind == "warn" and text.startswith("no text copy of targets/dc01/recordings/2026-11-14_1500.cast: ")
+    assert (kind, text) == (
+        "warn", "no text copy of targets/dc01/recordings/2026-11-14_1500.cast: the first line is not JSON"
+    )
     assert first.with_suffix(".txt").exists() and last.with_suffix(".txt").exists()
     assert not bad.with_suffix(".txt").exists()
 
@@ -407,3 +409,21 @@ def test_cast_files_are_in_name_order_and_only_casts(box):
     assert casttext.cast_files(box, "dc01") == [earlier, later]
     assert casttext.cast_files(box) == [earlier, later, other]
     assert casttext.cast_files(box, "nobody") == []
+
+
+def test_recordings_of_one_minute_are_in_the_order_they_were_made(box):
+    names = ["2026-11-14_1432-10", "2026-11-14_1432-2", "2026-11-14_1432", "2026-11-14_1431", "odd"]
+    for name in [*names, "2026-11-14_1432-3"]:
+        _cast_in(box, "dc01", name)
+    assert [p.stem for p in casttext.cast_files(box, "dc01")] == [
+        "2026-11-14_1431", "2026-11-14_1432", "2026-11-14_1432-2",
+        "2026-11-14_1432-3", "2026-11-14_1432-10", "odd",
+    ]  # fmt: skip
+
+
+def test_a_start_time_past_what_a_date_can_hold_is_a_cast_error(tmp_path):
+    # allowed by the header (the last second of 9999 UTC), but a year 10000 in the VM's time
+    path = write_cast(tmp_path / "far.cast", [(0, "o", "a")], timestamp=253402300799)
+    with pytest.raises(CastError, match="start time"):
+        casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
+    assert [p.name for p in path.parent.iterdir()] == ["far.cast"]

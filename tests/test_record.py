@@ -480,7 +480,9 @@ def test_a_cast_that_cannot_be_read_is_a_warning(make_env, opened, dc01, paths, 
     assert record.run(env, []) == 0
     kinds = [kind for kind, _ in env.console.lines[3:]]
     assert kinds == ["warn", "ok", "info"]
-    assert env.console.lines[3][1].startswith("no text copy of targets/dc01/recordings/2026-11-14_1432.cast: ")
+    assert env.console.lines[3][1] == (
+        "no text copy of targets/dc01/recordings/2026-11-14_1432.cast: the first line is not JSON"
+    )
     assert not (opened.path / "targets" / "dc01" / "recordings" / "2026-11-14_1432.txt").exists()
 
 

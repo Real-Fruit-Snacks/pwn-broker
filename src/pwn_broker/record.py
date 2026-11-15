@@ -249,8 +249,10 @@ def _record(env: Env, box: Box, target: Target) -> int:
         text = casttext.write(
             cast, box_name=box.name, box_id=box.id, target=target.name, tz=env.clock().tzinfo
         )
-    except (CastError, OSError) as exc:
-        console.warn(f"no text copy of {shown(cast)}: {exc}")
+    except CastError as exc:
+        console.warn(f"no text copy of {shown(cast)}: {exc.reason}")
+    except OSError as exc:
+        console.warn(f"no text copy of {shown(cast)}: {exc.strerror or exc}")
     minutes = int((env.clock() - started).total_seconds() // 60)
     console.ok(f"recording saved, {_length(minutes)}")
     console.info(f"    {shown(cast)}")

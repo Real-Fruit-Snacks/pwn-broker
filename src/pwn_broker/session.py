@@ -61,8 +61,8 @@ class Session:
     pid_alive: Callable[[int], bool] = vpnctl.pid_alive
     pid_started: Callable[[int], str | None] = vpnctl.process_start
     vpn_comm: Callable[[int], str | None] = vpnctl.process_comm
-    # how replay plays a recording in this window
-    play: Callable[[list[str]], subprocess.CompletedProcess] = subprocess.run
+    # how replay plays a recording in this window: play(argv, env=...)
+    play: Callable[..., subprocess.CompletedProcess] = subprocess.run
     # the last tunnel read and when it was made, so a redrawn status bar does not run `ip` each time
     tunnel_read: tuple[datetime, vpn.Tunnel | None] | None = None
     # the same for the number of windows recording for the box

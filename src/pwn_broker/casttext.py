@@ -1,6 +1,7 @@
 """The timed plain-text copy of a recording (design section 7.4)."""
 
 import copy
+import re
 import unicodedata
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
@@ -355,18 +356,26 @@ def text_path(cast_path: Path) -> Path:
     return cast_path.with_suffix(".txt")
 
 
+def _started(cast_path: Path, header: Header, tz: tzinfo) -> str:
+    if header.timestamp is None:
+        return "unknown"
+    try:
+        return datetime.fromtimestamp(header.timestamp, tz).strftime("%Y-%m-%d %H:%M:%S")
+    except (OverflowError, ValueError, OSError) as exc:
+        # the header allows up to 9999 in UTC; the VM's time, or this system, may hold less
+        raise CastError(cast_path, f"the start time {header.timestamp} cannot be shown as a date") from exc
+
+
 def write(cast_path: Path, *, box_name: str, box_id: str, target: str, tz: tzinfo) -> Path:
     header = read_header(cast_path)
+    # first: every time in the text is the start time plus a little
+    started = _started(cast_path, header, tz)
     try:
         body = list(render(header, events(cast_path), tz))
     except (CastError, OSError):
         raise
     except Exception as exc:  # pyte's own failures on input it cannot handle
-        raise CastError(f"{cast_path}: could not be rendered ({type(exc).__name__})") from exc
-    if header.timestamp is None:
-        started = "unknown"
-    else:
-        started = datetime.fromtimestamp(header.timestamp, tz).strftime("%Y-%m-%d %H:%M:%S")
+        raise CastError(cast_path, f"could not be rendered ({type(exc).__name__})") from exc
     lines = [
         f"box      {box_name}  {box_id}",
         f"target   {target}",
@@ -390,11 +399,23 @@ def stale(cast_path: Path) -> bool:
     return written < cast_path.stat().st_mtime_ns
 
 
+# record's names: the start time to the minute, then -2, -3 and so on for later ones that minute
+_CAST_NAME = re.compile(r"(\d{4}-\d{2}-\d{2}_\d{4})(?:-([1-9]\d*))?\.cast", re.ASCII)
+
+
+def _made(cast_path: Path) -> tuple:
+    """Sorts recordings oldest first: by start time, then number; other names after, by name."""
+    match = _CAST_NAME.fullmatch(cast_path.name)
+    if match is None:
+        return (1, cast_path.name, 0)
+    return (0, match[1], int(match[2] or 1))
+
+
 def cast_files(box: Box, target: str | None = None) -> list[Path]:
-    """Every targets/<target>/recordings/*.cast in the box, or of one target, by target then name."""
+    """Every targets/<target>/recordings/*.cast in the box, or of one target: by target, oldest first."""
     folder = "*" if target is None else glob_escape(target)
     found = (box.path / "targets").glob(f"{folder}/recordings/*.cast")
-    return sorted((p for p in found if p.is_file()), key=lambda p: (p.parent.parent.name, p.name))
+    return sorted((p for p in found if p.is_file()), key=lambda p: (p.parent.parent.name, _made(p)))
 
 
 def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None) -> None:
@@ -409,5 +430,7 @@ def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None
         try:
             if stale(cast_path):
                 write(cast_path, box_name=box.name, box_id=box.id, target=target_name, tz=tz)
-        except (CastError, OSError) as exc:
-            console.warn(f"no text copy of {shown}: {exc}")
+        except CastError as exc:
+            console.warn(f"no text copy of {shown}: {exc.reason}")
+        except OSError as exc:
+            console.warn(f"no text copy of {shown}: {exc.strerror or exc}")

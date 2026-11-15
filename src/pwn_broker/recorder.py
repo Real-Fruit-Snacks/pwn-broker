@@ -170,10 +170,17 @@ def play_argv(paths: AppPaths, cast: Path) -> list[str]:
     return [str(paths.asciinema), "play", "--idle-time-limit", "2", str(cast)]
 
 
+def settings_env(paths: AppPaths) -> dict[str, str]:
+    """Settings folders of the app's own, so nothing in the home folder changes asciinema."""
+    return {
+        "ASCIINEMA_CONFIG_HOME": str(paths.run_asciinema / "config"),
+        "ASCIINEMA_STATE_HOME": str(paths.run_asciinema / "state"),
+    }
+
+
 def base_env(paths: AppPaths, environ: Mapping[str, str], target: str) -> dict[str, str]:
-    """The environment asciinema runs in: settings folders of the app's own, and the target."""
+    """The environment asciinema records in: settings folders of the app's own, and the target."""
     env = dict(environ)
     env["PWN_BROKER_RECORDING"] = target
-    env["ASCIINEMA_CONFIG_HOME"] = str(paths.run_asciinema / "config")
-    env["ASCIINEMA_STATE_HOME"] = str(paths.run_asciinema / "state")
+    env.update(settings_env(paths))
     return env
