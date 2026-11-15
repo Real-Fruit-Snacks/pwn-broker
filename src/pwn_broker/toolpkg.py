@@ -72,6 +72,14 @@ class Manifest:
     home: list[str]
 
 
+def valid_tool_name(name: str) -> bool:
+    return _NAME.fullmatch(name) is not None
+
+
+def valid_command_name(name: str) -> bool:
+    return _COMMAND_NAME.fullmatch(name) is not None
+
+
 def build_id(version: str, build: int) -> str:
     return f"{version}-{build}"
 
