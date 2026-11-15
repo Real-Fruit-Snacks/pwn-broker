@@ -1,3 +1,4 @@
+import os
 from datetime import timedelta
 
 from helpers import NOW
@@ -6,7 +7,7 @@ from pwn_broker.boxes import add_target
 from pwn_broker.config import Settings
 from pwn_broker.console import FakeConsole
 from pwn_broker.creds import add_cred
-from pwn_broker.note import NOTE_NAME, TABLE_END, read_note
+from pwn_broker.note import FOLD_START, NOTE_NAME, read_note
 from pwn_broker.session import load_session, refresh, rescan, set_current
 from pwn_broker.store import load_box
 
@@ -54,17 +55,28 @@ def test_refresh_writes_lists_and_table(session):
     assert summary.usernames == 1
     assert (session.box.path / "lists" / "usernames.txt").read_text() == "svc\n"
     assert (session.box.path / "creds.toml").exists()
-    table = read_note(session.box).split(TABLE_END)[0]
-    assert "web" in table and "10.10.10.2" in table
+    top = read_note(session.box).split(FOLD_START)[0]
+    assert "#    web " in top and "10.10.10.2" in top
 
 
 def test_refresh_warns_when_markers_are_damaged(session):
     note = session.box.path / NOTE_NAME
-    note.write_text(read_note(session.box).replace(TABLE_END, ""), encoding="utf-8", newline="")
+    note.write_text("my own first line\n" + read_note(session.box), encoding="utf-8", newline="")
     before = note.read_text(encoding="utf-8")
     refresh(session)
     assert note.read_text(encoding="utf-8") == before
     assert [k for k, _ in session.console.lines] == ["warn"]
+    assert "left alone" in session.console.lines[0][1]
+
+
+def test_refresh_without_a_target_change_does_not_rewrite_the_note(session):
+    note = session.box.path / NOTE_NAME
+    refresh(session)
+    before = note.read_bytes()
+    os.utime(note, ns=(1_000_000_000_000_000_000, 1_000_000_000_000_000_000))
+    refresh(session)
+    assert note.read_bytes() == before
+    assert note.stat().st_mtime_ns == 1_000_000_000_000_000_000
 
 
 def test_refresh_without_a_note_is_silent(session):

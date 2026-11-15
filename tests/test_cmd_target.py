@@ -1,7 +1,10 @@
+import os
+
 import pytest
 
 from helpers import NOW, make_cred
 from pwn_broker import note
+from pwn_broker.note import FOLD_END, FOLD_START
 from pwn_broker import shell  # noqa: F401  (fills the command registry)
 from pwn_broker.boxes import add_target
 from pwn_broker.console import FakeConsole
@@ -84,9 +87,12 @@ def test_target_add_updates_everything(session):
     assert (box.path / "targets" / "web01").is_dir()
     assert [t.name for t in load_targets(box)] == ["dc01", "web01"]
     note = (box.path / "notes.md").read_text(encoding="utf-8")
-    assert any(line.startswith("web01") and "10.10.10.50" in line for line in note.splitlines())
-    assert note.rstrip().splitlines()[-1] == "### privilege escalation"
-    assert "\n## web01\n" in note
+    top = note.split(FOLD_START)[0]
+    assert any(line.startswith("#    web01 ") and "10.10.10.50" in line for line in top.splitlines())
+    assert note.endswith(
+        f"{FOLD_END}\n\n{FOLD_START}\nTarget: web01   10.10.10.50   -   external\n\n"
+        f"## enumeration\n\n## foothold\n\n## privilege escalation\n\n{FOLD_END}\n"
+    )
     assert "10.10.10.50" in (box.path / "lists" / "ips.txt").read_text(encoding="utf-8")
     assert session.current.name == "web01"
     assert load_box(box.path).last_target == "web01"
@@ -151,21 +157,58 @@ def test_target_edit_keeps_name_and_updates_lists(session):
     dispatch(session, "target edit dc01")
     assert session.console.asked == ["ip", "hostname", "scope"]
     assert load_targets(session.box)[0].ips == ["10.10.10.200"]
-    assert "10.10.10.200" in (session.box.path / "notes.md").read_text(encoding="utf-8")
+    text = (session.box.path / "notes.md").read_text(encoding="utf-8")
+    assert "#    dc01   10.10.10.200   forest.htb.local   external " in text
+    assert f"{FOLD_START}\nTarget: dc01   10.10.10.200   forest.htb.local   external\n" in text
+    assert "10.10.10.161" not in text
     assert "10.10.10.200" in (session.box.path / "lists" / "ips.txt").read_text(encoding="utf-8")
     assert ("ok", "target dc01 updated") in session.console.lines
 
 
-def test_target_rename_changes_note_heading(session):
+def test_target_edit_leaves_a_title_the_user_changed(session):
+    path = session.box.path / "notes.md"
+    text = path.read_text(encoding="utf-8").replace("Target: dc01   10.10", "Target: dc01 the DC   10.10")
+    path.write_text(text, encoding="utf-8", newline="")
+    session.console = FakeConsole(["10.10.10.200", "", ""])
+    dispatch(session, "target edit dc01")
+    after = path.read_text(encoding="utf-8")
+    assert after.split(FOLD_START, 1)[1] == text.split(FOLD_START, 1)[1]
+    assert "#    dc01   10.10.10.200 " in after
+
+
+def test_target_edit_with_no_change_does_not_rewrite_the_note(session):
+    path = session.box.path / "notes.md"
+    before = path.read_bytes()
+    os.utime(path, ns=(1_000_000_000_000_000_000, 1_000_000_000_000_000_000))
+    session.console = FakeConsole(["", "", ""])
+    dispatch(session, "target edit dc01")
+    assert ("ok", "target dc01 updated") in session.console.lines
+    assert path.read_bytes() == before
+    assert path.stat().st_mtime_ns == 1_000_000_000_000_000_000
+
+
+def test_target_edit_survives_a_broken_note(session, monkeypatch):
+    _break_note_writes(monkeypatch)
+    session.console = FakeConsole(["10.10.10.200", "", ""])
+    dispatch(session, "target edit dc01")
+    kinds = [kind for kind, _ in session.console.lines]
+    assert kinds.count("warn") == 1
+    assert ("ok", "target dc01 updated") in session.console.lines
+    assert load_targets(session.box)[0].ips == ["10.10.10.200"]
+
+
+def test_target_rename_changes_note_title(session):
     note = session.box.path / "notes.md"
     text = note.read_text(encoding="utf-8")
-    note.write_text(text + "\nsee dc01 for details\n", encoding="utf-8", newline="")
+    title = "Target: dc01   10.10.10.161   forest.htb.local   external"
+    mine = f"\nsee dc01 for details\n{title}\n"
+    note.write_text(text + mine, encoding="utf-8", newline="")
     session.console = FakeConsole(["dc"])
     dispatch(session, "target rename dc01")
     text = note.read_text(encoding="utf-8")
-    assert "\n## dc\n" in text
-    assert "## dc01" not in text
-    assert "see dc01 for details" in text
+    assert f"{FOLD_START}\nTarget: dc   10.10.10.161   forest.htb.local   external\n" in text
+    assert "#    dc   10.10.10.161 " in text
+    assert text.endswith(mine)
     assert session.current.name == "dc"
     assert load_box(session.box.path).last_target == "dc"
     assert (session.box.path / "targets" / "dc").is_dir()
@@ -228,7 +271,7 @@ def test_target_remove_current_moves_to_another(session):
     assert load_box(session.box.path).last_target == "web"
     assert not (session.box.path / "targets" / "dc01").exists()
     assert ("ok", "target dc01 removed") in session.console.lines
-    assert "## dc01" in (session.box.path / "notes.md").read_text(encoding="utf-8")
+    assert f"{FOLD_START}\nTarget: dc01   " in (session.box.path / "notes.md").read_text(encoding="utf-8")
     session.console = FakeConsole(["y"])
     dispatch(session, "target remove web")
     assert session.current is None

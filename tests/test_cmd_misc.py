@@ -235,5 +235,5 @@ def test_note_command_recreates_a_missing_note(session, monkeypatch):
     note.unlink()
     dispatch(session, "note")
     text = note.read_text(encoding="utf-8")
-    assert text.startswith("# forest\n") and "## dc01" in text
+    assert text.startswith("#" * 64 + "\n#  Box:         forest ") and "\nTarget: dc01   " in text
     assert ("ok", "note created") in session.console.lines

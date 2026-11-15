@@ -16,7 +16,10 @@ def _update_note(session: Session, change) -> None:
     if not _has_note(session):
         return
     try:
-        note.write_note(session.box, change(note.read_note(session.box)))
+        text = note.read_note(session.box)
+        changed = change(text)
+        if changed != text:
+            note.write_note(session.box, changed)
     except (OSError, NoteError, StoreError) as exc:
         session.console.warn(f"the note could not be updated: {exc}")
 
@@ -94,6 +97,7 @@ def target_edit(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, ("target name",))
     target = boxes.find_target(session.targets, name)
     answers = ask_target(session.console, taken=set(), defaults=target, ask_name=False)
+    before = note.title_text(target)
     boxes.edit_target(
         session.box,
         session.targets,
@@ -102,6 +106,7 @@ def target_edit(session: Session, args: list[str]) -> None:
         hostnames=answers.hostnames,
         scope=answers.scope,
     )
+    _update_note(session, lambda text: note.retitle(text, before, note.title_text(target)))
     refresh(session)
     session.console.ok(f"target {target.name} updated")
 
@@ -118,10 +123,11 @@ def target_rename(session: Session, args: list[str]) -> None:
         unchanged = False
     if unchanged:
         raise ValueError(f"{old} is already its name")
+    before = note.title_text(target)
     boxes.rename_target(session.box, session.targets, old, new, creds=session.creds)
     if session.current is target:
         set_current(session, target)
-    _update_note(session, lambda text: note.rename_heading(text, old, target.name))
+    _update_note(session, lambda text: note.retitle(text, before, note.title_text(target)))
     refresh(session)
     session.console.ok(f"target {old} is now {target.name}")
 

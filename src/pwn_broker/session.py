@@ -7,7 +7,7 @@ from pwn_broker.console import Console
 from pwn_broker.filescan import scan
 from pwn_broker.lists import ListSummary, rebuild_lists
 from pwn_broker.model import Box, Cred, FileRecord, Target
-from pwn_broker.note import NOTE_NAME, NoteError, read_note, render_note, update_table, write_note
+from pwn_broker.note import NOTE_NAME, NoteError, read_note, render_note, update_box, write_note
 from pwn_broker.paths import AppPaths
 from pwn_broker.setup import load_template
 from pwn_broker.store import load_creds, load_files, load_targets, save_box, save_creds, save_files
@@ -57,7 +57,11 @@ def refresh(session: Session) -> ListSummary:
     summary = rebuild_lists(box, session.targets, session.creds)
     if (box.path / NOTE_NAME).exists():
         try:
-            write_note(box, update_table(read_note(box), session.targets))
+            text = read_note(box)
+            drawn = update_box(text, box, session.targets)
+            # an unchanged note is not written, so vim has nothing to reload
+            if drawn != text:
+                write_note(box, drawn)
         except NoteError as exc:
             session.console.warn(str(exc))
     return summary

@@ -78,7 +78,9 @@ def test_new_box_with_two_targets(env):
     assert [t.name for t in s.targets] == ["dc01", "10.10.10.162"]
     assert s.targets[1].scope == "internal"
     note = (s.box.path / "notes.md").read_text()
-    assert note.startswith("# forest\n") and "## dc01" in note and "## 10.10.10.162" in note
+    assert note.startswith("#" * 64) and "#\n#  Box:         forest " in note
+    assert "\nTarget: dc01   10.10.10.161   forest.htb.local   external\n" in note
+    assert "\nTarget: 10.10.10.162   10.10.10.162   -   internal\n" in note
     assert (s.box.path / "lists/ips.txt").read_text() == "10.10.10.161\n10.10.10.162\n"
     assert load_state(env.paths.state_file).last_platform == "htb"
     assert s.current.name == "dc01"
@@ -450,7 +452,7 @@ def test_new_box_keeps_going_when_one_target_fails(env, monkeypatch):
     s = new_box(env)
     assert [t.name for t in s.targets] == ["one", "three"]
     text = (s.box.path / "notes.md").read_text()
-    assert "## one" in text and "## three" in text and "## two" not in text
+    assert "Target: one " in text and "Target: three " in text and "two" not in text
     assert len(lines(env, "fail")) == 1 and "disk full" in lines(env, "fail")[0]
 
 
