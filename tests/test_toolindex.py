@@ -628,13 +628,52 @@ def test_a_refused_index_closes_the_response_it_came_with(paths):
     import io
 
     body = io.BytesIO(b"not found")
+    # held here, so collecting the error cannot close the body in place of the code under test
+    raised = []
 
     def refused(url, timeout):
-        raise _http_error(url, body)
+        raised.append(_http_error(url, body))
+        raise raised[-1]
 
     with pytest.raises(ToolError):
         toolindex.load_index(paths, url_settings(), now=NOW, fetch=refused)
-    assert body.closed
+    assert raised and body.closed
+
+
+def test_a_refusal_after_the_deadline_closes_its_response(paths, monkeypatch):
+    import io
+    import threading
+
+    monkeypatch.setattr(toolindex, "QUICK_TIMEOUT", 0.05)
+    body = io.BytesIO(b"not found")
+    raised = []
+    late = threading.Event()
+
+    def slow_refusal(url, timeout):
+        time.sleep(0.3)
+        raised.append(_http_error(url, body))
+        late.set()
+        raise raised[-1]
+
+    with pytest.raises(ToolError, match="no answer"):
+        toolindex.load_index(paths, url_settings(), now=NOW, fetch=slow_refusal)
+    assert late.wait(5)
+    deadline = time.monotonic() + 5
+    while not body.closed and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert raised and body.closed
+
+
+def test_close_response_leaves_other_errors_alone():
+    class Closable(Exception):
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    error = Closable()
+    toolindex.close_response(error)
+    assert not error.closed
 
 
 def test_a_refused_zip_closes_the_response_it_came_with(paths, tmp_path):
@@ -642,13 +681,16 @@ def test_a_refused_zip_closes_the_response_it_came_with(paths, tmp_path):
 
     body = io.BytesIO(b"not found")
     entry = make_zip_entry(tmp_path)
+    # held here, so collecting the error cannot close the body in place of the code under test
+    raised = []
 
     def refused(url, dest, limit, timeout):
-        raise _http_error(url, body)
+        raised.append(_http_error(url, body))
+        raise raised[-1]
 
     with pytest.raises(ToolError, match="cannot download"):
         toolindex.fetch_zip(paths, url_settings(), entry, download=refused)
-    assert body.closed
+    assert raised and body.closed
 
 
 def test_fetch_zip_url_location_needs_a_url(paths, tmp_path):

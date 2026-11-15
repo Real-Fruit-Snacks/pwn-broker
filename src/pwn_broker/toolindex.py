@@ -6,6 +6,7 @@ import stat
 import threading
 import time
 import tomllib
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
@@ -219,10 +220,9 @@ _OPENER = _opener()
 
 def close_response(exc: BaseException) -> None:
     """An HTTP error carries the response it came with; close it once the error is handled."""
-    close = getattr(exc, "close", None)
-    if callable(close):
+    if isinstance(exc, urllib.error.HTTPError):
         try:
-            close()
+            exc.close()
         except OSError:
             pass
 
@@ -257,17 +257,29 @@ def download(url: str, dest: Path, limit: int, timeout: float) -> None:
 def _with_deadline(fetch: Callable[[str, float], bytes], url: str, timeout: float) -> bytes:
     # urlopen's timeout is per socket operation, so the total time is enforced here
     box: list = []
+    lock = threading.Lock()
+    given_up = False
 
     def run() -> None:
         try:
-            box.append((True, fetch(url, timeout)))
+            result = (True, fetch(url, timeout))
         except BaseException as exc:
-            box.append((False, exc))
+            result = (False, exc)
+        with lock:
+            if not given_up:
+                box.append(result)
+                return
+        # nobody is waiting for this answer any more; an error's response is closed here
+        if not result[0]:
+            close_response(result[1])
 
     thread = threading.Thread(target=run, daemon=True)
     thread.start()
     thread.join(timeout)
-    if not box:
+    with lock:
+        if not box:
+            given_up = True
+    if given_up:
         raise ToolError(f"no answer from {url} within {timeout:g} seconds")
     ok, value = box[0]
     if not ok:

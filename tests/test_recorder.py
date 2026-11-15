@@ -101,13 +101,16 @@ def test_fetch_closes_a_refused_response(paths):
     import urllib.error
 
     body = io.BytesIO(b"not found")
+    # held here, so collecting the error cannot close the body in place of the code under test
+    raised = []
 
     def refused(url, dest, limit, timeout):
-        raise urllib.error.HTTPError(url, 404, "Not Found", {}, body)
+        raised.append(urllib.error.HTTPError(url, 404, "Not Found", {}, body))
+        raise raised[-1]
 
     with pytest.raises(RecorderError):
         fetch(paths, download=refused, size=SIZE, sha256=SUM)
-    assert body.closed
+    assert raised and body.closed
 
 
 def raising(error):

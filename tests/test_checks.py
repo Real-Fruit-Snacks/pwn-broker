@@ -323,12 +323,15 @@ def test_latest_version_closes_a_refused_response():
     import urllib.error
 
     body = io.BytesIO(b"not found")
+    # held here, so collecting the error cannot close the body in place of the code under test
+    raised = []
 
     def fetch(url, timeout):
-        raise urllib.error.HTTPError(url, 404, "Not Found", {}, body)
+        raised.append(urllib.error.HTTPError(url, 404, "Not Found", {}, body))
+        raise raised[-1]
 
     assert latest_version(fetch=fetch) is None
-    assert body.closed
+    assert raised and body.closed
 
 
 def test_version_check_off():
