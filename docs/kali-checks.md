@@ -16,6 +16,12 @@ Then `sh install.sh --from .`, open a new terminal, and work one box end to end.
 - [ ] At a question, Ctrl-C cancels that command and returns to the prompt. Ctrl-D at the prompt offers the export and quits.
 - [ ] With the note open in vim, change `notes.md` from another terminal (`echo x >> notes.md`). Vim shows the change within about a second, and `.note-state` in the box folder still reads `0`.
 - [ ] Type in the note, then within a second run `target add` in the prompt. Vim does not show a "file changed" prompt, and nothing typed is lost.
+- [ ] The note opens with every target fold closed, each showing only its `Target:` line.
+- [ ] A closed fold is drawn on the raised colour (`#1A1D24`) across the whole line.
+- [ ] IP addresses are Amber and `<Placeholder>` text is Ember, inside the box at the top as well as below it.
+- [ ] `F8`, in normal mode and in insert mode, adds an empty fold below the line, open, with the cursor on its blank line in insert mode.
+- [ ] Open a fold, put the cursor inside it, then run `target add` in the prompt. After vim reloads, that fold is still open, the others are still closed, and the cursor is on the same text.
+- [ ] While the note is open, no `.swp`, `~` or other backup file appears in the box folder.
 - [ ] The status bar is muted text on the normal background, not reverse video, and its clock moves while the prompt is idle.
 - [ ] The completion menu opens while typing a command, and Tab completes target names.
 - [ ] As a normal user, `/opt/pwn-broker` belongs to that user after install, and `pwn-broker` runs without `sudo`.

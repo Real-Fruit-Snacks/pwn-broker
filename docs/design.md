@@ -266,28 +266,40 @@ Only the app writes these files. Changes to a target go through `target edit`, n
 
 - On launch the app opens a second terminal window running `vim -u /opt/pwn-broker/vim/vimrc notes.md`. My own `~/.vimrc` is never read or changed.
 - The terminal is `x-terminal-emulator`, with a setting to name another.
-- The vimrc carries the Nightshift colours so the note and the prompt match.
-- The note starts from `templates/notes.md`, with the box details and a table of targets at the top:
+- The vimrc carries the Nightshift colours so the note and the prompt match. IP addresses are Amber and `<Placeholder>` text is Ember wherever they appear, the box included. The note has its own filetype, so no markdown highlighting applies.
+- The note starts from `templates/notes.md`: a box with the box details and the targets at the top, then one section per target, each wrapped in a fold:
 
 ```
-# forest
-platform     htb
-date         2026-11-14
-os           windows
-difficulty   easy
+################################################################
+#  Box:         forest                                         #
+#  Platform:    htb                                            #
+#  Date:        2026-11-14                                     #
+#  OS:          windows                                        #
+#  Difficulty:  easy                                           #
+#                                                              #
+#  Targets:                                                    #
+#    dc01   10.10.10.161   forest.htb.local   external         #
+################################################################
 
-## targets
-dc01   10.10.10.161   forest.htb.local   external
+##########@@@@@@@@@@
+Target: dc01   10.10.10.161   forest.htb.local   external
 
-## dc01
-### enumeration
-### foothold
-### privilege escalation
+## enumeration
+
+## foothold
+
+## privilege escalation
+
+@@@@@@@@@@##########
 ```
 
-- Adding a target later adds its row to the table and its section to the end of the note.
-- The app only ever rewrites the targets table, appends sections and, on a rename, changes that target's own section heading. It never touches anything I wrote.
-- The vimrc saves the note when I leave the window and reloads it when I come back, so the app and vim never overwrite each other.
+- The box belongs to the app. It is redrawn in full whenever the targets change, and the note is written only when that changes something. The box starts and ends with a line of `#`; if that is missing or damaged, the app leaves the note alone and says so.
+- Adding a target appends its section at the end of the note. Removing a target leaves its section where it is.
+- A section's `Target:` line, just under the fold's start marker, is its title. `target rename` and `target edit` rewrite it, but only while it is still exactly the line the app wrote; once I change it, it is mine.
+- Apart from the box and those title lines, the app never changes anything in the note.
+- The folds use the markers `##########@@@@@@@@@@` and `@@@@@@@@@@##########` and can nest. The note opens with every fold closed. A closed fold shows only the line under its start marker, or `(empty fold)` when that line is blank.
+- `F8`, in normal or insert mode, adds an empty fold below the current line, open, with the cursor inside it in insert mode.
+- The vimrc saves the note when I leave the window and reloads it when I come back, so the app and vim never overwrite each other. When the app redraws the box, open folds stay open and the cursor stays on the same text. Vim writes no swap or backup file into the box folder.
 - `note` in the prompt reopens the window if I closed it.
 
 ### 6.7 The prompt
@@ -335,7 +347,7 @@ Built on `prompt_toolkit` for the prompt and `rich` for tables.
 | `target use <name>` | Switches the current target. A partial name works when it matches only one |
 | `target show [name]` | One target in full |
 | `target edit <name>` | Asks the target's questions again with the current answers as defaults. This is how an IP is changed after a respawn, or a newly found hostname added |
-| `target rename <name>` | Renames the target everywhere: its folder, its row and section heading in the note, its file records, and the "found on" of its credentials |
+| `target rename <name>` | Renames the target everywhere: its folder, its row in the note's box and its section's `Target:` line, its file records, and the "found on" of its credentials |
 | `target remove <name>` | Removes a target that holds no files, after asking. If its folder holds anything, it refuses and says what is there. It never deletes collected work |
 | `cred add` · `cred list` · `cred show <n>` · `cred edit <n>` · `cred clear <n> <field>` · `cred works <n>` · `cred remove <n>` · `cred import <file>` | Section 6.8 |
 | `files [target]` | Lists recorded files |
