@@ -545,13 +545,22 @@ def tool_log() -> list[list[str]]:
     return [[field.strip() for field in line.split("  ") if field.strip()] for line in text.splitlines()]
 
 
-def logged_since(start: int, expected: list[tuple[str, str]], what: str) -> None:
+def logged_since(s: "State", start: int, expected: list[tuple[str, str]], what: str) -> None:
     """The log's lines after the first `start` are these (event, "<name> <version>-<build>")
-    pairs in this order; a runtime's line ends in `runtime`."""
+    pairs in this order, each for this box and with its package's SHA-256; a runtime's line
+    ends in `runtime`, and every line splits into exactly its fields."""
     lines = tool_log()
     EVIDENCE.write("tools.log", TOOL_LOG.read_bytes() if TOOL_LOG.is_file() else b"")
-    found = [(fields[1], fields[3], fields[-1] == "runtime") for fields in lines[start:] if len(fields) >= 5]
-    wanted = [(event, package, package.startswith(RUNTIME + " ")) for event, package in expected]
+    box = f"{BOX} ({s.box_id})"
+    found = []
+    for fields in lines[start:]:
+        runtime = len(fields) == 6 and fields[5] == "runtime"
+        check(len(fields) == 5 or runtime, f"each new line of {TOOL_LOG} has five fields, or six ending in runtime", repr(fields))
+        found.append((fields[1], fields[2], fields[3], fields[4], runtime))
+    wanted = [
+        (event, box, package, f"sha256:{s.sha256[package.split(' ')[0]]}", package.startswith(RUNTIME + " "))
+        for event, package in expected
+    ]
     check(found == wanted, what, f"--- expected ---\n{wanted!r}\n--- found ---\n{found!r}\n--- end ---")
 
 
@@ -569,6 +578,15 @@ def py_runs_on_runtime() -> None:
     check(Path(out[1]).is_relative_to(TOOLS), f"its prefix is under {TOOLS}", shown)
     runtime_folder = TOOLS / RUNTIME
     check(Path(out[2]).is_relative_to(runtime_folder), f"its base prefix is under {runtime_folder}", shown)
+    # the command itself runs on that environment: its script names the environment's interpreter
+    script = python.parent / PY_TOOL
+    first = script.read_text(encoding="utf-8", errors="replace").split("\n", 1)[0] if script.is_file() else ""
+    named = first[2:].split()[:1] if first.startswith("#!") else []
+    check(
+        bool(named) and Path(os.path.realpath(named[0])) == Path(os.path.realpath(python)),
+        f"{script}'s first line names the environment's own interpreter",
+        repr(first),
+    )
     real = Path(os.path.realpath(python))
     check(real.is_relative_to(runtime_folder), f"{python} resolves inside {runtime_folder}", str(real))
     runtime = installed_list().get(RUNTIME, {})
@@ -595,6 +613,8 @@ class State:
         # the upstream archive kali-cycle.sh downloaded and checked
         self.runtime_archive: Path | None = None
         self.runtime_sha256 = ""
+        # each test package's SHA-256 by name, as the index gives it
+        self.sha256: dict[str, str] = {}
         # how many lines the tool log had before the step that is checking it
         self.logged = 0
 
@@ -716,6 +736,7 @@ def prepare(s: State) -> None:
         examples=[PY_TOOL],
     )
     check(python_tool.requires == [RUNTIME], f"{PY_TOOL} requires {RUNTIME}", repr(python_tool))
+    s.sha256 = {e.name: e.sha256 for e in (entry, runtime, python_tool)}
     toolkit.write_index(TOOL_INDEX, [entry, runtime, python_tool])
     check((TOOL_INDEX / "index.toml").is_file(), f"a folder index in {TOOL_INDEX}")
     check(read_toml(TOOL_INDEX / "index.toml").get("schema") == 2, "the index is schema 2")
@@ -1098,7 +1119,7 @@ def step_tool(s: State) -> None:
     launcher = BIN / TOOL
     check(launcher.is_file() and os.access(launcher, os.X_OK), f"{launcher} exists")
     tool_runs()
-    logged_since(s.logged, [("install", f"{TOOL} {TOOL_VERSION}-{TOOL_BUILD}")], f"{TOOL_LOG} has an install line for {TOOL}")
+    logged_since(s, s.logged, [("install", f"{TOOL} {TOOL_VERSION}-{TOOL_BUILD}")], f"{TOOL_LOG} has an install line for {TOOL}")
 
 
 # toolinstall.install_runtime: the runtime's line, with the zip's size in MiB
@@ -1152,7 +1173,7 @@ def step_python_tool(s: State) -> None:
         repr(records),
     )
     logged_since(
-        s.logged,
+        s, s.logged,
         [("install", RUNTIME_PACKAGE), ("install", PY_PACKAGE)],
         f"{TOOL_LOG} has an install line for {RUNTIME}, then one for {PY_TOOL}",
     )
@@ -1218,7 +1239,7 @@ def step_finish(s: State) -> None:
     check(not (BIN / TOOL).exists(), f"{BIN / TOOL} is gone")
     check(not (BIN / PY_TOOL).exists(), f"{BIN / PY_TOOL} is gone")
     tools_left()
-    logged_since(s.logged, FINISHED, f"{TOOL_LOG} has a finish line for {TOOL}, {PY_TOOL} and {RUNTIME}")
+    logged_since(s, s.logged, FINISHED, f"{TOOL_LOG} has a finish line for {TOOL}, {PY_TOOL} and {RUNTIME}")
     check(not s.folder.exists(), f"{s.folder} is gone")
     archive = s.finished = Path(found[1])
     expected = WRAPPED / f"{s.folder.name}.finished.tar.gz"
@@ -1268,7 +1289,7 @@ def step_import(s: State) -> None:
         repr(records),
     )
     logged_since(
-        s.logged,
+        s, s.logged,
         [("install", f"{TOOL} {TOOL_VERSION}-{TOOL_BUILD}"), ("install", RUNTIME_PACKAGE), ("install", PY_PACKAGE)],
         f"{TOOL_LOG} has an install line for {TOOL}, then {RUNTIME}, then {PY_TOOL}",
     )
@@ -1306,7 +1327,7 @@ def step_last_finish(s: State) -> None:
     tools_left()
     check(not (BIN / TOOL).exists(), f"{BIN / TOOL} is gone")
     check(not (BIN / PY_TOOL).exists(), f"{BIN / PY_TOOL} is gone")
-    logged_since(s.logged, FINISHED, f"{TOOL_LOG} has a finish line for {TOOL}, {PY_TOOL} and {RUNTIME} again")
+    logged_since(s, s.logged, FINISHED, f"{TOOL_LOG} has a finish line for {TOOL}, {PY_TOOL} and {RUNTIME} again")
     check(not s.folder.exists(), f"{s.folder} is gone")
 
     # the app leaves each launch's note window open; recorded here, not judged
