@@ -210,8 +210,10 @@ def tool_info(session: Session, args: list[str]) -> None:
         _line(session, "licence", tool.licence)
         _line(session, "upstream", tool.upstream)
         _line(session, "versions", ", ".join(build_id(b.version, b.build) for b in tool.builds))
-        for name in build.requires if build else []:
-            _line(session, "requires", _requirement(session, index, name))
+        # the build this box has installed, or else the one an install would take
+        requires = item.requires if item is not None else build.requires if build else []
+        for runtime in requires:
+            _line(session, "requires", _requirement(session, index, runtime))
     if item is None:
         return
     paths = session.paths

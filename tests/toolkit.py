@@ -311,7 +311,7 @@ def no_real_venv(monkeypatch, *, fail: str | None = None):
 
     def run(argv, **kwargs):
         calls.append(list(argv))
-        if argv[1] == "-c":
+        if argv[1:3] == ["-I", "-c"]:
             return SimpleNamespace(returncode=0, stdout="3.13\n", stderr="")
         if fail is not None and fail in argv:
             return SimpleNamespace(returncode=1, stdout="", stderr=f"{fail} refused\n")

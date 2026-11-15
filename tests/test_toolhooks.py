@@ -1241,7 +1241,7 @@ def test_a_box_that_recorded_a_schema_1_python_tool_gets_that_build(tooled, pysh
     say(tooled, "y")
     toolhooks.restore(tooled)
     assert ("ok", "certipy 5.1.0 installed") in tooled.console.lines
-    assert pyshop.calls[0][:2] == ["python3", "-c"]  # Kali's own Python
+    assert pyshop.calls[0][:3] == ["python3", "-I", "-c"]  # Kali's own Python
     installed = load_installed(tooled.paths)
     assert installed["certipy"].build == 2 and "python-3.13" not in installed
     [record] = [t for t in load_box(tooled.box.path).tools if t.name == "certipy"]

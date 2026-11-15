@@ -55,7 +55,8 @@ def install_tool(
     is removed again; one that was there before is left alone.
     """
     paths, console = session.paths, session.console
-    # every runtime is found in the index before anything is fetched
+    # a tool the box would refuse costs no download; nor does a runtime the index lacks
+    toolinstall.check_install(session.box, entry, installed=installed, unfinished=unfinished)
     missing = [
         toolindex.pick_build(toolindex.find_runtime(index, name), None)
         for name in entry.requires
@@ -89,9 +90,12 @@ def install_tool(
     except BaseException:
         for item in brought:
             try:
-                toolinstall.forget_runtime(paths, installed, item.name)
+                removed = toolinstall.forget_runtime(paths, installed, item.name)
             except Exception as exc:  # the install's own error is the one to report
                 console.warn(f"{item.name} {item.version}   {exc}")
+                continue
+            if removed:
+                console.ok(f"{item.name} {item.version} removed (runtime)")
         raise
 
 

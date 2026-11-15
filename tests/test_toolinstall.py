@@ -79,15 +79,12 @@ class FakeRun:
         self.output = output
 
     def __call__(self, argv, **kwargs):
-        # the version check runs as it always has; venv and pip get a folder and an environment
-        if argv[1] == "-c":
-            assert kwargs == {"capture_output": True, "text": True}
-        else:
-            assert set(kwargs) == {"capture_output", "text", "cwd", "env"}
+        # every program an install runs gets the tool's folder and a cleaned environment
+        assert set(kwargs) == {"capture_output", "text", "cwd", "env"}
         self.calls.append(list(argv))
         self.kwargs.append(kwargs)
         index = len(self.calls) - 1
-        if argv[1] == "-c":
+        if argv[1:3] == ["-I", "-c"]:
             return SimpleNamespace(returncode=0, stdout=self.version + "\n", stderr="")
         if index == self.fail_at:
             return SimpleNamespace(returncode=1, stdout=self.output, stderr="boom\n")
@@ -345,10 +342,11 @@ def test_the_launcher_starts_when_the_marker_folder_is_read_only(paths, tmp_path
 # ---- python_version
 
 
-def test_python_version():
+def test_python_version(tmp_path):
     fake = FakeRun(version="3.12")
-    assert python_version("py", fake) == "3.12"
-    assert fake.calls == [["py", "-c", "import sys; print('%d.%d' % sys.version_info[:2])"]]
+    assert python_version("py", tmp_path, fake) == "3.12"
+    assert fake.calls == [["py", "-I", "-c", "import sys; print('%d.%d' % sys.version_info[:2])"]]
+    assert fake.kwargs[0]["cwd"] == str(tmp_path) and "PIP_CONFIG_FILE" in fake.kwargs[0]["env"]
 
     def missing(argv, **kw):
         raise FileNotFoundError("nope")
@@ -358,9 +356,9 @@ def test_python_version():
 
     for bad in (missing, failing):
         with pytest.raises(ToolError, match="python3 was not found"):
-            python_version("py", bad)
+            python_version("py", tmp_path, bad)
     with pytest.raises(ToolError, match="could not report"):
-        python_version("py", FakeRun(version=""))
+        python_version("py", tmp_path, FakeRun(version=""))
 
 
 # ---- install: kali tools
@@ -573,7 +571,7 @@ def test_python_tool_runs_venv_and_pip(paths, box, tmp_path):
     folder = paths.tools / "kerbrute" / "1.0.3-1"
     venv_python = str(folder / "venv" / "bin" / "python")
     assert fake.calls == [
-        ["py3", "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
+        ["py3", "-I", "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
         ["py3", "-I", "-m", "venv", str(folder / "venv")],
         [
             venv_python, "-I", "-m", "pip", "--isolated", "install", "--no-index",
@@ -607,9 +605,11 @@ def test_venv_and_pip_run_in_the_tool_folder_with_none_of_the_callers_settings(
     fake = FakeRun()
     do_install(paths, box, entry, zip_path, tmp_path, run=fake, **kw)
     folder = paths.tools / "kerbrute" / "1.0.3-1"
-    made = [(call, kwargs) for call, kwargs in zip(fake.calls, fake.kwargs) if call[1] != "-c"]
-    assert [call[2:4] for call, _kw in made] == [["-m", "venv"], ["-m", "pip"]]
-    for _call, kwargs in made:
+    made = list(zip(fake.calls, fake.kwargs))
+    steps = [["-c", PY_VERSION]] if schema == 1 else []  # Kali's own Python is asked its version
+    assert [call[2:4] for call, _kw in made] == [*steps, ["-m", "venv"], ["-m", "pip"]]
+    for call, kwargs in made:
+        assert call[1] == "-I"
         assert kwargs["cwd"] == str(folder)
         env = kwargs["env"]
         assert not set(SHADOWS) & set(env)
@@ -1521,7 +1521,7 @@ def test_a_schema_1_python_tool_still_uses_kalis_python(paths, box, tmp_path):
     zip_path, entry = python_zip(tmp_path)
     fake = FakeRun()
     item, _c, _i = do_install(paths, box, entry, zip_path, tmp_path, run=fake)
-    assert [call[:3] for call in fake.calls[:2]] == [["python3", "-c", PY_VERSION], ["python3", "-I", "-m"]]
+    assert [call[:3] for call in fake.calls[:2]] == [["python3", "-I", "-c"], ["python3", "-I", "-m"]]
     assert item.requires == [] and box.tools[0].runtime is None
     assert "requires" not in paths.tools_state.read_text(encoding="utf-8")
 

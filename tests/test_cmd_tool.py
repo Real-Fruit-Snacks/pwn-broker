@@ -830,6 +830,8 @@ def take_the_command(session, shop):
 
 
 TOOL_FAULTS = ["venv", "pip", "a command name", "the download"]
+# the faults found only once the tool's own package is being installed
+LATE_FAULTS = ["venv", "pip", "the download"]
 
 
 def break_the_tool(session, shop, pyshop, monkeypatch, fault):
@@ -841,18 +843,70 @@ def break_the_tool(session, shop, pyshop, monkeypatch, fault):
         (shop.folder / pyshop.certipy.file).unlink()
 
 
-@pytest.mark.parametrize("fault", TOOL_FAULTS)
+@pytest.mark.parametrize("fault", LATE_FAULTS)
 def test_a_failed_install_takes_the_runtime_it_brought_away_again(
     session, shop, pyshop, monkeypatch, fault
 ):
     break_the_tool(session, shop, pyshop, monkeypatch, fault)
     console = run(session, "tool install certipy")
     assert len(lines(console, "fail")) == 1
-    assert lines(console, "ok") == [RT_LINE]  # installed, then taken away again
+    assert lines(console, "ok") == [RT_LINE, RT_GONE]  # installed, then taken away again
     nothing_of(session, "certipy", "python-3.13")
-    assert [t.name for t in load_box(session.box.path).tools] == (
-        ["taker"] if fault == "a command name" else []
+    assert load_box(session.box.path).tools == []
+
+
+def schema_1_certipy(shop, pyshop):
+    # certipy 5.1.0-2 on Kali's own Python, beside build 3 on the runtime
+    wheel = toolkit.make_wheel(
+        shop.folder / "w1", "certipy-py", "1.0", module="tool", entry="certipy"
     )
+    manifest = toolkit.sample_manifest(
+        name="certipy", version="5.1.0", build=2, arch=machine_arch(),
+        command=[{"name": "certipy", "type": "python-entry", "entry": "certipy"}],
+        python={"versions": ["3.13"], "lock": "wheels.lock", "wheels": "wheels"},
+    )  # fmt: skip
+    zip_path, size, sha = toolkit.make_package(shop.folder, manifest, {}, wheels=[wheel])
+    old = BuildEntry(
+        "certipy", "5.1.0", 2, "kali", False, ["certipy"], zip_path.name, "", size, sha
+    )
+    toolkit.write_index(shop.folder, [*shop.entries, pyshop.runtime, old, pyshop.certipy])
+    return old
+
+
+REFUSALS = ["another box has another build", "a command name"]
+
+
+@pytest.mark.parametrize("refusal", REFUSALS)
+def test_an_install_the_box_refuses_fetches_nothing(session, shop, pyshop, other, refusal):
+    if refusal == "a command name":
+        take_the_command(session, shop)
+    else:
+        install_for(other, shop, schema_1_certipy(shop, pyshop), session.paths)
+    pyshop.fetched.clear()
+    console = run(session, "tool install certipy")
+    failed = lines(console, "fail")
+    assert len(failed) == 1
+    said = "already belongs to taker" if refusal == "a command name" else "in use by Cascade"
+    assert said in failed[0]
+    assert pyshop.fetched == [] and lines(console, "ok") == []
+    nothing_of(session, "python-3.13")
+
+
+def test_install_tool_refuses_another_build_of_the_boxs_own_before_fetching(session, shop, pyshop):
+    from pwn_broker import toolindex
+    from pwn_broker.model import ToolRecord
+
+    old = schema_1_certipy(shop, pyshop)
+    session.box.tools.append(ToolRecord("certipy", "5.1.0", 2, old.sha256, NOW))
+    index = toolindex.load_index(session.paths, session.settings, now=NOW)
+    with pytest.raises(ToolError, match="forest already has certipy 5.1.0-2"):
+        toolhooks.install_tool(
+            session, index, pyshop.certipy,
+            installed=toolstate.load_installed(session.paths),
+            unfinished={session.box.id: session.box.name},
+        )  # fmt: skip
+    assert pyshop.fetched == []
+    nothing_of(session, "python-3.13")
 
 
 @pytest.mark.parametrize("fault", TOOL_FAULTS)
@@ -884,22 +938,10 @@ def test_a_runtime_whose_removal_fails_after_a_failed_install_is_a_warn(
 
 
 def test_a_schema_1_build_of_a_python_tool_installs_as_before(session, shop, pyshop):
-    wheel = toolkit.make_wheel(
-        shop.folder / "w1", "certipy-py", "1.0", module="tool", entry="certipy"
-    )
-    manifest = toolkit.sample_manifest(
-        name="certipy", version="5.1.0", build=2, arch=machine_arch(),
-        command=[{"name": "certipy", "type": "python-entry", "entry": "certipy"}],
-        python={"versions": ["3.13"], "lock": "wheels.lock", "wheels": "wheels"},
-    )  # fmt: skip
-    zip_path, size, sha = toolkit.make_package(shop.folder, manifest, {}, wheels=[wheel])
-    old = BuildEntry(
-        "certipy", "5.1.0", 2, "kali", False, ["certipy"], zip_path.name, "", size, sha
-    )
-    toolkit.write_index(shop.folder, [*shop.entries, pyshop.runtime, old, pyshop.certipy])
+    schema_1_certipy(shop, pyshop)
     console = run(session, "tool install certipy@5.1.0-2")
     assert lines(console, "ok") == ["certipy 5.1.0 installed"]
-    assert pyshop.calls[0][:2] == ["python3", "-c"]
+    assert pyshop.calls[0][:3] == ["python3", "-I", "-c"]
     assert runtime_row(session) is None
     assert load_box(session.box.path).tools[0].runtime is None
 
@@ -946,6 +988,16 @@ def test_info_names_the_runtime_a_tool_requires(session, shop, pyshop):
     run(session, "tool install bloodhound")
     assert "requires    python-3.13 (1 MB, installed)" in info_lines(session, "certipy")
     assert not any(t.startswith("requires") for t in info_lines(session, "kerbrute"))
+
+
+def test_info_shows_what_the_installed_build_requires(session, shop, pyshop):
+    schema_1_certipy(shop, pyshop)
+    run(session, "tool install certipy@5.1.0-2")
+    assert not any(t.startswith("requires") for t in info_lines(session, "certipy"))
+    run(session, "tool remove certipy", "y")
+    assert "requires    python-3.13 (1 MB, not installed)" in info_lines(session, "certipy")
+    run(session, "tool install certipy")
+    assert "requires    python-3.13 (1 MB, installed)" in info_lines(session, "certipy")
 
 
 def test_info_for_a_tool_whose_runtime_is_not_in_the_index(session, shop, pyshop):

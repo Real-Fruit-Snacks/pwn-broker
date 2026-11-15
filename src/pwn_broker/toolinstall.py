@@ -122,10 +122,14 @@ def launcher_text(paths: AppPaths, manifest: Manifest, command: Command, folder:
 # ---- helpers
 
 
-def python_version(python: str, run=subprocess.run) -> str:
+def python_version(python: str, folder: Path, run=subprocess.run) -> str:
+    # run as venv and pip are: from the tool's folder, isolated, with none of the caller's settings
     code = "import sys; print('%d.%d' % sys.version_info[:2])"
     try:
-        result = run([python, "-c", code], capture_output=True, text=True)
+        result = run(
+            [python, "-I", "-c", code],
+            capture_output=True, text=True, cwd=str(folder), env=_clean_environment(),
+        )  # fmt: skip
     except OSError as exc:
         raise ToolError(f"python3 was not found ({exc})") from exc
     if result.returncode != 0:
@@ -251,6 +255,41 @@ def check_recorded(box: Box, entry: BuildEntry) -> None:
             )
 
 
+def _check_commands(installed: dict[str, Installed], name: str, commands: list[str]) -> None:
+    taken = {c: t.name for t in installed.values() if t.name != name for c in t.commands}
+    for command in commands:
+        if command in taken:
+            raise ToolError(f"the command {command} already belongs to {taken[command]}")
+
+
+def check_install(
+    box: Box, entry: BuildEntry, *, installed: dict[str, Installed], unfinished: dict[str, str]
+) -> None:
+    """Raises the error install would raise for this box before anything is fetched or written."""
+    name = entry.name
+    if not valid_tool_name(name):
+        raise ToolError(f"{name!r} is not a valid tool name")
+    current = installed.get(name)
+    if entry.kind == "runtime" or (current is not None and current.kind == "runtime"):
+        raise ToolError(runtime_refusal(name))
+    check_recorded(box, entry)
+    if current is not None:
+        users = [u for u in current.users if u in unfinished]
+        others = [u for u in users if u != box.id]
+        if build_id(current.version, current.build) != build_id(entry.version, entry.build):
+            if box.id in users:
+                raise ToolError(
+                    f"{box.name} already has {name} {current.version}; "
+                    f"run tool remove {name} first"
+                )
+            if others:
+                raise ToolError(
+                    f"{name} {current.version} is in use by {unfinished[others[0]]}; "
+                    f"finish or remove it there before installing {entry.version}"
+                )
+    _check_commands(installed, name, entry.commands)
+
+
 def install(
     paths: AppPaths,
     box: Box,
@@ -268,28 +307,15 @@ def install(
     runtime: Installed | None = None,
 ) -> Installed:
     """Installs a tool for the box. A tool that requires a runtime is given it, installed."""
+    check_install(box, entry, installed=installed, unfinished=unfinished)
     name = entry.name
-    if not valid_tool_name(name):
-        raise ToolError(f"{name!r} is not a valid tool name")
     current = installed.get(name)
-    if entry.kind == "runtime" or (current is not None and current.kind == "runtime"):
-        raise ToolError(runtime_refusal(name))
     wanted = build_id(entry.version, entry.build)
-    check_recorded(box, entry)
 
     if current is not None:
         users = [u for u in current.users if u in unfinished]
         others = [u for u in users if u != box.id]
         same = build_id(current.version, current.build) == wanted
-        if box.id in users and not same:
-            raise ToolError(
-                f"{box.name} already has {name} {current.version}; run tool remove {name} first"
-            )
-        if others and not same:
-            raise ToolError(
-                f"{name} {current.version} is in use by {unfinished[others[0]]}; "
-                f"finish or remove it there before installing {entry.version}"
-            )
         if same and (others or Path(current.folder).is_dir()):
             note = _runtime_note(name, current.requires, runtime)
             joined = _join(paths, box, current, users, installed, console, now, note)
@@ -434,7 +460,7 @@ def _build_venv(
         # the wheels are built for the runtime's series, so there is no version to check
         python = runtime.python
     else:
-        found = python_version(python, run)
+        found = python_version(python, folder, run)
         if found not in spec.versions:
             raise ToolError(
                 f"{manifest.name} supports Python {', '.join(spec.versions)}; "
@@ -470,12 +496,8 @@ def _write_launchers(
     on_path: Callable[[str], str | None],
     made: list[Path],
 ) -> None:
-    taken = {
-        c: t.name for t in installed.values() if t.name != manifest.name for c in t.commands
-    }
+    _check_commands(installed, manifest.name, [c.name for c in manifest.commands])
     for command in manifest.commands:
-        if command.name in taken:
-            raise ToolError(f"the command {command.name} already belongs to {taken[command.name]}")
         dest = paths.bin / command.name
         _check_inside(dest, paths.bin, "a launcher")
         if os.path.lexists(dest) and not _is_ours(dest, manifest.name):
