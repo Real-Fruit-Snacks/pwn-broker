@@ -96,7 +96,7 @@ def test_refresh_without_a_note_is_silent(session):
 
 
 def test_rescan_warns_per_skipped_file(session, monkeypatch):
-    def fake_scan(box, records, *, now, hash_all, on_skip):
+    def fake_scan(box, records, *, now, hash_all, on_skip, live):
         on_skip("a.txt", "cannot read")
         on_skip("b.txt", "disappeared")
         return []
@@ -311,3 +311,17 @@ def test_a_test_session_given_an_equal_hosts_path_is_still_guarded(paths, box, s
         hosts_path=Path("/etc/hosts"),
     )  # fmt: skip
     assert built.hosts_path == system.hosts_path
+
+
+def test_rescan_between_commands_leaves_a_live_cast_unhashed(session, system):
+    from casts import recording_now
+
+    from pwn_broker.session import rescan
+
+    cast = recording_now(session, system, "dc01")
+    rel = "targets/dc01/recordings/2026-11-14_1432.cast"
+    [live] = [r for r in rescan(session) if r.path == rel]
+    assert (live.size, live.sha256) == (cast.stat().st_size, "")
+    del system.processes[5150]  # the window closed
+    [done] = [r for r in rescan(session) if r.path == rel]
+    assert done.sha256 != ""

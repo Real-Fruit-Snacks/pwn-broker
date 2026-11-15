@@ -4,6 +4,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+from pwn_broker import recstate
 from pwn_broker.archive import (
     ArchiveError,
     archive_path,
@@ -20,7 +21,7 @@ from pwn_broker.model import Box
 from pwn_broker.notewindow import note_unsaved
 from pwn_broker.paths import AppPaths
 from pwn_broker.privilege import fix_ownership
-from pwn_broker.session import Session, load_session, refresh, rescan
+from pwn_broker.session import Session, load_session, process_checks, refresh, rescan
 from pwn_broker.store import StoreError, load_box, save_box
 from pwn_broker.toolpkg import ToolError
 
@@ -43,10 +44,12 @@ def reopen_box(box: Box) -> None:
 def _pack(session: Session, kind: str) -> tuple[Path, list[str]]:
     box = session.box
     refresh(session)
-    records = rescan(session, hash_all=True)
+    # read once: the manifest and the archive must hold the same length of each live recording
+    live = recstate.live_casts(session.paths, box, **process_checks(session))
+    records = rescan(session, hash_all=True, live=live)
     write_manifest(box, records, kind=kind, now=session.clock())
     dest = archive_path(session.paths, box, kind)
-    return dest, pack(box, dest)
+    return dest, pack(box, dest, cut=live)
 
 
 def _report_left_out(console: Console, left_out: list[str]) -> None:

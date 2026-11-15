@@ -64,7 +64,7 @@ def test_export_copies_to_copy_to(session, tmp_path):
 
 
 def test_export_failure_reports_and_returns_none(session, monkeypatch):
-    def boom(*args):
+    def boom(*args, **kwargs):
         raise ArchiveError("disk full")
 
     monkeypatch.setattr(lifecycle, "pack", boom)
@@ -166,7 +166,7 @@ def test_finish_failure_rolls_back(session, monkeypatch, tmp_path):
     ran = []
     monkeypatch.setattr(lifecycle, "UNDO_HOOKS", [ran.append])
 
-    def boom(*args):
+    def boom(*args, **kwargs):
         raise ArchiveError("copy failed")
 
     monkeypatch.setattr(lifecycle, "copy_out", boom)
@@ -181,7 +181,7 @@ def test_finish_failure_rolls_back(session, monkeypatch, tmp_path):
 
 
 def test_finish_failure_still_reports_when_rollback_save_fails(session, monkeypatch):
-    def boom(*args):
+    def boom(*args, **kwargs):
         raise ArchiveError("cannot pack")
 
     monkeypatch.setattr(lifecycle, "pack", boom)
@@ -379,7 +379,7 @@ def test_finish_rolls_back_on_any_exception_and_reraises(session, monkeypatch, e
     ran = []
     monkeypatch.setattr(lifecycle, "UNDO_HOOKS", [ran.append])
 
-    def boom(*args):
+    def boom(*args, **kwargs):
         raise exc
 
     monkeypatch.setattr(lifecycle, "pack", boom)
@@ -413,10 +413,10 @@ def test_finish_rolls_back_when_refresh_fails_after_status_save(session, monkeyp
 def test_finish_rolls_back_when_hashing_rescan_fails(session, monkeypatch):
     real = lifecycle.rescan
 
-    def flaky(s, *, hash_all=False):
+    def flaky(s, *, hash_all=False, live=None):
         if hash_all:
             raise OSError("io error")
-        return real(s, hash_all=hash_all)
+        return real(s, hash_all=hash_all, live=live)
 
     monkeypatch.setattr(lifecycle, "rescan", flaky)
     answers(session, "y")
@@ -458,8 +458,8 @@ def pack_leaving_out(monkeypatch, count):
     real = lifecycle.pack
     names = [f"loot/link{i:02}" for i in range(count)]
 
-    def fake(box, dest):
-        real(box, dest)
+    def fake(box, dest, cut=None):
+        real(box, dest, cut=cut)
         return list(names)
 
     monkeypatch.setattr(lifecycle, "pack", fake)
@@ -634,3 +634,33 @@ def test_a_failing_pre_pack_hook_rolls_finish_back_and_stops_export(session, mon
         "finish failed, the box is still active: the disk is full",
         "export failed: the disk is full",
     ]
+
+
+# ---- a recording still being written at export
+
+
+def test_export_packs_a_live_cast_up_to_its_last_whole_line(session, system, monkeypatch):
+    from casts import recording_now
+
+    cast = recording_now(session, system, "dc01", events=[(0, "o", "one\r\n"), (1, "o", "two\r\n")])
+    cast.write_bytes(cast.read_bytes() + b'[2, "o", "thr')  # a line still being written
+    whole = cast.read_bytes()[: cast.read_bytes().rindex(b"\n") + 1]
+    rel = "targets/dc01/recordings/2026-11-14_1432.cast"
+    real = lifecycle.rescan
+
+    def rescan_then_grow(session, **kwargs):
+        records = real(session, **kwargs)
+        cast.write_bytes(cast.read_bytes() + b'ee"]\n[3, "o", "four"]\n')
+        return records
+
+    monkeypatch.setattr(lifecycle, "rescan", rescan_then_grow)
+    path = export_box(session, **NOFIX)
+    assert path is not None
+    verify(path)
+    [row] = [r for r in read_toml(session.box.path / "manifest.toml")["file"] if r["path"] == rel]
+    assert row["size"] == len(whole)
+    [saved] = [r for r in read_toml(session.box.path / "files.toml")["file"] if r["path"] == rel]
+    assert saved["size"] == len(whole) and saved["sha256"] == row["sha256"]
+    with tarfile.open(path) as tar:
+        assert tar.extractfile(f"2026-11-14_htb_forest/{rel}").read() == whole
+    assert cast.stat().st_size > len(whole)

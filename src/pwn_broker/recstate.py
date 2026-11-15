@@ -17,6 +17,11 @@ class Recording:
     cast: Path
 
 
+def windows(count: int) -> str:
+    """`1 window is` or `<n> windows are`, for the lines that count recording windows."""
+    return "1 window is" if count == 1 else f"{count} windows are"
+
+
 def marker_path(paths: AppPaths, pid: int) -> Path:
     return paths.run_recordings / str(pid)
 

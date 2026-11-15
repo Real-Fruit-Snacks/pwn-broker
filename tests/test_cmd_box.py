@@ -40,7 +40,7 @@ def test_quit_declined_exports_nothing(session):
 
 
 def _failing_pack(monkeypatch):
-    def pack(box, dest):
+    def pack(box, dest, cut=None):
         raise ArchiveError("disk full")
 
     monkeypatch.setattr(lifecycle, "pack", pack)
@@ -123,3 +123,30 @@ def test_finish_command_stays_open_when_declined(session):
     dispatch(session, "finish")
     assert not _archive(session, "finished").exists()
     assert session.box.status == "active"
+
+
+def test_quit_warns_about_windows_still_recording_before_the_question(session, system):
+    from casts import recording_now
+
+    recording_now(session, system, "dc01")
+    session.console = FakeConsole(["n"])
+    with pytest.raises(Quit):
+        dispatch(session, "quit")
+    assert session.console.lines == [("warn", "1 window is still recording for this box")]
+    assert session.console.asked == ["export forest before you go?"]
+    recording_now(session, system, "dc01", "2026-11-14_1600", pid=5151)
+    session.console = FakeConsole(["n"])
+    with pytest.raises(Quit):
+        dispatch(session, "quit")
+    assert session.console.lines == [("warn", "2 windows are still recording for this box")]
+
+
+def test_quit_says_nothing_about_recordings_when_none_are_live(session, system):
+    from casts import recording_now
+
+    recording_now(session, system, "dc01")
+    del system.processes[5150]
+    session.console = FakeConsole(["n"])
+    with pytest.raises(Quit):
+        dispatch(session, "quit")
+    assert session.console.lines == []

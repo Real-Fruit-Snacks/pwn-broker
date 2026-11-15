@@ -824,3 +824,42 @@ def test_pack_leaves_out_the_vpn_folder_silently(filled, tmp_path):
     top = filled.path.name
     assert f"{top}/targets/dc01/vpn/x" in names and f"{top}/vpn.txt" in names
     assert not any(n == f"{top}/vpn" or n.startswith(f"{top}/vpn/") for n in names)
+
+
+# --- a recording still being written ---
+
+CAST = "targets/dc01/recordings/2026-11-14_1432.cast"
+WHOLE = b'{"version": 3}\n[0, "o", "a"]\n'
+
+
+def _live_box(box):
+    cast = box.path / CAST
+    cast.parent.mkdir(parents=True)
+    cast.write_bytes(WHOLE + b'[1, "o", "b')
+    records = scan(box, [], now=NOW, hash_all=True, live={CAST: len(WHOLE)})
+    write_manifest(box, records, kind="exported", now=NOW)
+    return cast
+
+
+def test_pack_cuts_a_live_cast_and_verifies_while_it_grows(box, tmp_path):
+    cast = _live_box(box)
+    cast.write_bytes(cast.read_bytes() + b'"]\n[2, "o", "c"]\n')
+    dest = tmp_path / "forest.tar.gz"
+    pack(box, dest, cut={CAST: len(WHOLE)})
+    verify(dest)
+    with tarfile.open(dest) as tar:
+        member = tar.getmember(f"{box.path.name}/{CAST}")
+        assert member.size == len(WHOLE)
+        assert tar.extractfile(member).read() == WHOLE
+    folder = unpack(dest, tmp_path / "elsewhere")
+    assert (folder / CAST).read_bytes() == WHOLE
+    assert cast.stat().st_size > len(WHOLE)
+
+
+def test_pack_refuses_a_cut_longer_than_the_file(box, tmp_path):
+    cast = _live_box(box)
+    cast.write_bytes(WHOLE[:5])
+    dest = tmp_path / "forest.tar.gz"
+    with pytest.raises(ArchiveError, match="recordings"):
+        pack(box, dest, cut={CAST: len(WHOLE)})
+    assert not dest.exists() and not part_of(dest).exists()

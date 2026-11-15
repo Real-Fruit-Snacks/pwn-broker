@@ -7,7 +7,7 @@ import tarfile
 import tempfile
 import tomllib
 import zlib
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict
 from datetime import datetime
 from fnmatch import fnmatchcase
@@ -103,8 +103,36 @@ def _discard(path: Path) -> None:
         pass
 
 
-def pack(box: Box, dest: Path) -> list[str]:
-    # returns the links and special files that were left out, relative to the box
+class _Head:
+    """A file read no further than its first `size` bytes."""
+
+    def __init__(self, fh, size: int) -> None:
+        self._fh = fh
+        self._left = size
+
+    def read(self, n: int = -1) -> bytes:
+        n = self._left if n is None or n < 0 else min(n, self._left)
+        data = self._fh.read(n)
+        self._left -= len(data)
+        return data
+
+
+def _add_cut(tar: tarfile.TarFile, full: Path, arcname: str, rel: str, size: int) -> None:
+    info = tar.gettarinfo(full, arcname=arcname)
+    if info.size < size:
+        raise ArchiveError(f"{rel} is shorter than the {size} bytes recorded for it")
+    info.size = size
+    with open(full, "rb") as fh:
+        # tarfile fails on its own if the file is cut short while it is read
+        tar.addfile(info, _Head(fh, size))
+
+
+def pack(box: Box, dest: Path, cut: Mapping[str, int] | None = None) -> list[str]:
+    """Write the box to dest; a path in `cut` is packed only up to that many bytes.
+
+    Returns the links and special files that were left out, relative to the box.
+    """
+    cut = cut or {}
     part = dest.with_name(dest.name + ".part")
     top = box.path.name
     try:
@@ -112,7 +140,11 @@ def pack(box: Box, dest: Path) -> list[str]:
         entries, special = _entries(box.path)
         with tarfile.open(part, "w:gz") as tar:
             for rel, full in entries:
-                tar.add(full, arcname=f"{top}/{rel}" if rel else top, recursive=False)
+                arcname = f"{top}/{rel}" if rel else top
+                if rel in cut:
+                    _add_cut(tar, full, arcname, rel, cut[rel])
+                else:
+                    tar.add(full, arcname=arcname, recursive=False)
         verify(part)
         os.replace(part, dest)
     except BaseException as exc:

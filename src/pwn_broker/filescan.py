@@ -1,7 +1,7 @@
 import hashlib
 import os
 import stat
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -43,6 +43,16 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_head(path: Path, size: int) -> str:
+    """The SHA-256 of the first `size` bytes of the file."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while size > 0 and (chunk := fh.read(min(_CHUNK, size))):
+            digest.update(chunk)
+            size -= len(chunk)
+    return digest.hexdigest()
+
+
 def _reason(exc: OSError) -> str:
     return "disappeared" if isinstance(exc, FileNotFoundError) else "cannot read"
 
@@ -55,7 +65,14 @@ def scan(
     hash_all: bool = False,
     limit: int = HASH_NOW_LIMIT,
     on_skip: Callable[[str, str], None] | None = None,
+    live: Mapping[str, int] | None = None,
 ) -> list[FileRecord]:
+    """Record every file in the box, reusing the record of a file whose size and mtime are unchanged.
+
+    `live` maps each recording still being written to the size of its whole lines. Such a file is
+    never hashed between commands; a hash_all scan records exactly that much of it.
+    """
+    live = live or {}
     previous = {r.path: r for r in records}
     found: list[FileRecord] = []
 
@@ -88,8 +105,13 @@ def scan(
                         on_skip(rel, "not a regular file")
                     continue
                 old = previous.get(rel)
+                size = st.st_size
                 wants_hash = hash_all or st.st_size <= limit
-                if old and old.size == st.st_size and old.mtime == st.st_mtime:
+                if rel in live:
+                    # it grows with every second recorded; the empty checksum gets it hashed once it stops
+                    size = live[rel] if hash_all else st.st_size
+                    checksum = sha256_head(full, size) if hash_all else ""
+                elif old and old.size == st.st_size and old.mtime == st.st_mtime:
                     if old.sha256 or not wants_hash:
                         found.append(old)
                         continue
@@ -105,7 +127,7 @@ def scan(
                     path=rel,
                     target=parts[1] if parts[0] == "targets" and len(parts) > 2 else "",
                     first_seen=old.first_seen if old else now,
-                    size=st.st_size,
+                    size=size,
                     mtime=st.st_mtime,
                     sha256=checksum,
                 )

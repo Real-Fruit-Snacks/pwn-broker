@@ -150,16 +150,17 @@ def test_status_shows_box_at_a_glance(session):
     dispatch(session, "status")
     lines = _info(session.console)
     assert lines == [
-        "box       forest (htb)",
-        "started   2026-11-14",
-        "status    active",
-        "targets   1",
-        "tools     0",
-        "vpn       not up",
-        "creds     1",
-        "files     1",
-        "user flag recorded 12:00",
-        "root flag -",
+        "box        forest (htb)",
+        "started    2026-11-14",
+        "status     active",
+        "targets    1",
+        "tools      0",
+        "vpn        not up",
+        "creds      1",
+        "files      1",
+        "recordings 0",
+        "user flag  recorded 12:00",
+        "root flag  -",
     ]
     assert FLAG not in "".join(lines)
 
@@ -245,7 +246,7 @@ def test_note_command_recreates_a_missing_note(session, monkeypatch):
 def test_status_shows_the_tunnel(session, system):
     system.tunnel_found = Tunnel("tun0", "10.10.14.7")
     dispatch(session, "status")
-    assert "vpn       10.10.14.7 on tun0" in _info(session.console)
+    assert "vpn        10.10.14.7 on tun0" in _info(session.console)
 
 
 def test_check_command_hands_the_session_tunnel_reader_to_the_checks(session, system, monkeypatch):
@@ -254,3 +255,17 @@ def test_check_command_hands_the_session_tunnel_reader_to_the_checks(session, sy
     dispatch(session, "check")
     assert ("warn", "vpn   no VPN tunnel is up") not in session.console.lines
     assert system.tunnel_reads == 1
+
+
+def test_status_counts_recordings_and_those_recording_now(session, system):
+    from casts import recording_now, write_cast
+
+    folder = session.box.path / "targets/dc01/recordings"
+    write_cast(folder / "2026-11-14_1000.cast", [(0, "o", "a")])
+    write_cast(session.box.path / "targets/web01/recordings/2026-11-14_1100.cast", [(0, "o", "a")])
+    dispatch(session, "status")
+    assert "recordings 2" in _info(session.console)
+    recording_now(session, system, "dc01")
+    session.console = FakeConsole()
+    dispatch(session, "status")
+    assert "recordings 3 (1 recording now)" in _info(session.console)

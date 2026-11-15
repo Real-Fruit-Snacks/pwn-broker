@@ -1,11 +1,11 @@
 import os
 from pathlib import Path
 
-from pwn_broker import boxes, checks, notewindow, store, toolstate
+from pwn_broker import boxes, casttext, checks, notewindow, store, toolstate
 from pwn_broker.model import FileRecord, Flag
 from pwn_broker.note import NOTE_NAME, NoteError
 from pwn_broker.questions import ask_value
-from pwn_broker.session import Session, current_tunnel, write_new_note
+from pwn_broker.session import Session, current_tunnel, recording_count, write_new_note
 from pwn_broker.store import StoreError
 from pwn_broker.shell.commands import COMMANDS, command, take_args
 
@@ -111,6 +111,12 @@ def _vpn_line(session: Session) -> str:
     return f"{found.address} on {found.name}" if found else "not up"
 
 
+def _recordings_line(session: Session) -> str:
+    count = len(casttext.cast_files(session.box))
+    live = recording_count(session, fresh=True)
+    return f"{count} ({live} recording now)" if live else str(count)
+
+
 @command("status", "show the box at a glance")
 def status(session: Session, args: list[str]) -> None:
     take_args(args)
@@ -124,11 +130,12 @@ def status(session: Session, args: list[str]) -> None:
         ("vpn", _vpn_line(session)),
         ("creds", str(len(session.creds))),
         ("files", str(len(store.load_files(box)))),
+        ("recordings", _recordings_line(session)),
         ("user flag", _flag_line(session, "user")),
         ("root flag", _flag_line(session, "root")),
     ]
     for label, value in rows:
-        session.console.info(f"{label:<10}{value}")
+        session.console.info(f"{label:<11}{value}")
 
 
 @command("check", "run the setup checks again")

@@ -5,6 +5,7 @@ import unicodedata
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
 from datetime import date, datetime, tzinfo
+from glob import escape as glob_escape
 from pathlib import Path
 from typing import NamedTuple
 
@@ -12,6 +13,8 @@ import pyte
 
 from pwn_broker import store
 from pwn_broker.cast import MAX_SIZE, CastError, Header, events, read_header
+from pwn_broker.console import Console
+from pwn_broker.model import Box
 
 # private modes that switch to the alternate screen
 _ALTERNATE = frozenset({1049, 1047, 47})
@@ -385,3 +388,26 @@ def stale(cast_path: Path) -> bool:
     except FileNotFoundError:
         return True
     return written < cast_path.stat().st_mtime_ns
+
+
+def cast_files(box: Box, target: str | None = None) -> list[Path]:
+    """Every targets/<target>/recordings/*.cast in the box, or of one target, by target then name."""
+    folder = "*" if target is None else glob_escape(target)
+    found = (box.path / "targets").glob(f"{folder}/recordings/*.cast")
+    return sorted((p for p in found if p.is_file()), key=lambda p: (p.parent.parent.name, p.name))
+
+
+def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None) -> None:
+    """Write the text copy of every recording whose text is missing or older than its cast.
+
+    A recording still being written is read as far as its last whole line. A cast that cannot be
+    read gets one warn line and no text; the others are still written.
+    """
+    for cast_path in cast_files(box, target):
+        shown = cast_path.relative_to(box.path).as_posix()
+        target_name = cast_path.parent.parent.name
+        try:
+            if stale(cast_path):
+                write(cast_path, box_name=box.name, box_id=box.id, target=target_name, tz=tz)
+        except (CastError, OSError) as exc:
+            console.warn(f"no text copy of {shown}: {exc}")

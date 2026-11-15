@@ -1,11 +1,12 @@
 import shutil
+import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from pwn_broker import hosts, privilege, recorder, vpn, vpnctl
+from pwn_broker import hosts, privilege, recorder, recstate, vpn, vpnctl
 from pwn_broker.config import Settings
 from pwn_broker.console import Console
 from pwn_broker.filescan import scan
@@ -56,12 +57,16 @@ class Session:
     fetch: Callable[[AppPaths], None] = recorder.fetch
     which: Callable[[str], str | None] = shutil.which
     sleep: Callable[[float], None] = time.sleep
-    # how vpnctl.ours tells the app's OpenVPN from a process that reuses its ID
-    vpn_alive: Callable[[int], bool] = vpnctl.pid_alive
-    vpn_started: Callable[[int], str | None] = vpnctl.process_start
+    # how a marker's process is told from one that reuses its ID: the app's OpenVPN, a recording window
+    pid_alive: Callable[[int], bool] = vpnctl.pid_alive
+    pid_started: Callable[[int], str | None] = vpnctl.process_start
     vpn_comm: Callable[[int], str | None] = vpnctl.process_comm
+    # how replay plays a recording in this window
+    play: Callable[[list[str]], subprocess.CompletedProcess] = subprocess.run
     # the last tunnel read and when it was made, so a redrawn status bar does not run `ip` each time
     tunnel_read: tuple[datetime, vpn.Tunnel | None] | None = None
+    # the same for the number of windows recording for the box
+    recordings_read: tuple[datetime, int] | None = None
     # things said once per session
     notices: set[str] = field(default_factory=set)
 
@@ -69,18 +74,41 @@ class Session:
 TUNNEL_AGE = timedelta(seconds=10)
 
 
+def _old(now: datetime, last: tuple | None) -> bool:
+    return last is None or not timedelta(0) <= now - last[0] < TUNNEL_AGE
+
+
 def current_tunnel(session: Session, *, fresh: bool = False) -> vpn.Tunnel | None:
     """The tunnel as last read, read again when asked to or when the answer is ten seconds old."""
     now = session.clock()
     last = session.tunnel_read
-    if fresh or last is None or not timedelta(0) <= now - last[0] < TUNNEL_AGE:
+    if fresh or _old(now, last):
         last = session.tunnel_read = (now, session.tunnel())
     return last[1]
 
 
+def process_checks(session: Session) -> dict:
+    """The checks that a marker's process is still the one that wrote it."""
+    return dict(alive=session.pid_alive, started=session.pid_started)
+
+
 def vpn_checks(session: Session) -> dict:
     """The process checks for vpnctl.ours, start and stop."""
-    return dict(alive=session.vpn_alive, started=session.vpn_started, comm=session.vpn_comm)
+    return dict(**process_checks(session), comm=session.vpn_comm)
+
+
+def recordings(session: Session) -> list[recstate.Recording]:
+    """The windows recording into the box now."""
+    return recstate.recording(session.paths, session.box, **process_checks(session))
+
+
+def recording_count(session: Session, *, fresh: bool = False) -> int:
+    """The number of windows recording for the box, under the tunnel's ten-second rule."""
+    now = session.clock()
+    last = session.recordings_read
+    if fresh or _old(now, last):
+        last = session.recordings_read = (now, len(recordings(session)))
+    return last[1]
 
 
 def load_session(
@@ -165,13 +193,21 @@ def refresh(session: Session) -> ListSummary:
     return summary
 
 
-def rescan(session: Session, *, hash_all: bool = False) -> list[FileRecord]:
+def rescan(
+    session: Session, *, hash_all: bool = False, live: Mapping[str, int] | None = None
+) -> list[FileRecord]:
+    """Scan the box and save files.toml; `live` is recstate.live_casts, read here when not given."""
+
     def on_skip(path: str, reason: str) -> None:
         if hash_all or path not in session.warned:
             session.warned.add(path)
             session.console.warn(f"{path}   {reason}")
 
     box = session.box
-    records = scan(box, load_files(box), now=session.clock(), hash_all=hash_all, on_skip=on_skip)
+    if live is None:
+        live = recstate.live_casts(session.paths, box, **process_checks(session))
+    records = scan(
+        box, load_files(box), now=session.clock(), hash_all=hash_all, on_skip=on_skip, live=live
+    )
     save_files(box, records)
     return records

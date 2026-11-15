@@ -12,7 +12,9 @@ from prompt_toolkit.styles import Style
 
 from pwn_broker import boxlock, toolindex, toolstate
 from pwn_broker.boxes import TARGET_FOLDERS
-from pwn_broker.session import Session, current_tunnel, mark_seen, reload_if_changed, rescan
+from pwn_broker.session import (
+    Session, current_tunnel, mark_seen, recording_count, reload_if_changed, rescan,
+)  # fmt: skip
 from pwn_broker.shell.commands import COMMANDS, Quit, dispatch
 from pwn_broker.store import StoreError
 from pwn_broker.theme import color_enabled, prompt_style
@@ -54,6 +56,9 @@ def toolbar_text(session: Session, now: datetime) -> str:
         parts.append(f"{tools} tool" if tools == 1 else f"{tools} tools")
     found = current_tunnel(session)
     parts.append(f"vpn {found.address}" if found else "no vpn")
+    recording = recording_count(session)
+    if recording:
+        parts.append(f"rec {recording}")
     minutes = max(0, int((now - session.box.started).total_seconds())) // 60
     parts.append(f"{minutes // 60:02d}:{minutes % 60:02d}")
     return " " + "   ".join(parts)
@@ -151,6 +156,7 @@ def run_shell(session: Session) -> None:
                     continue
                 try:
                     current_tunnel(session, fresh=True)
+                    recording_count(session, fresh=True)
                     try:
                         rescan(session)
                     except (StoreError, OSError) as exc:

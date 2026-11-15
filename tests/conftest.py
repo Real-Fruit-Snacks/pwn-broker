@@ -82,7 +82,7 @@ class System:
         # programs `which` finds, by name; openvpn is not installed unless a test says so
         self.programs: dict[str, str] = {}
         self.sleeps: list[float] = []
-        # the process table the VPN checks see: pid to (start time, command name)
+        # the process table the VPN and recording checks see: pid to (start time, command name)
         self.processes: dict[int, tuple[str, str]] = {}
 
     @property
@@ -118,10 +118,10 @@ class System:
         # never sleeps for real
         self.sleeps.append(seconds)
 
-    def vpn_alive(self, pid):
+    def pid_alive(self, pid):
         return pid in self.processes
 
-    def vpn_started(self, pid):
+    def pid_started(self, pid):
         return self.processes[pid][0] if pid in self.processes else None
 
     def vpn_comm(self, pid):
@@ -142,6 +142,10 @@ def system(tmp_path_factory, monkeypatch):
     from pwn_broker.session import Session
 
     fake = System(lambda: tmp_path_factory.mktemp("etc"))
+
+    def refuse_asciinema(*args, **kwargs):
+        raise AssertionError("a test reached the real asciinema; pass a run or play stand-in")
+
     defaults = {f.name: f.default for f in fields(Session)}
     original = Session.__init__
 
@@ -152,10 +156,12 @@ def system(tmp_path_factory, monkeypatch):
             self.hosts_path = fake.hosts_path
         for name in (
             "is_root", "run_privileged", "ping", "tunnel", "fetch",
-            "which", "sleep", "vpn_alive", "vpn_started", "vpn_comm",
+            "which", "sleep", "pid_alive", "pid_started", "vpn_comm",
         ):  # fmt: skip
             if getattr(self, name) is defaults[name]:
                 setattr(self, name, getattr(fake, name))
+        if self.play is defaults["play"]:
+            self.play = refuse_asciinema
 
     monkeypatch.setattr(Session, "__init__", safe_init)
 
@@ -178,9 +184,6 @@ def system(tmp_path_factory, monkeypatch):
 
     record_defaults = {f.name: f.default for f in fields(record.Env)}
     record_original = record.Env.__init__
-
-    def refuse_asciinema(*args, **kwargs):
-        raise AssertionError("a test reached the real asciinema; pass a run stand-in")
 
     def safe_record_init(self, *args, **kwargs):
         record_original(self, *args, **kwargs)

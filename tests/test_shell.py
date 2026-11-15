@@ -451,3 +451,42 @@ def test_each_command_starts_with_a_fresh_tunnel_read(session, loop, system):
     ))  # fmt: skip
     assert seen == [None, Tunnel("tun0", "10.10.14.7")]
     assert system.tunnel_reads == 2
+
+
+def test_toolbar_counts_windows_recording_for_the_box(session, system):
+    from casts import recording_now
+
+    from pwn_broker.session import recording_count
+
+    recording_now(session, system, "dc01")
+    recording_now(session, system, "dc01", "2026-11-14_1600", pid=5151)
+    assert toolbar_text(session, session.box.started).endswith("1 target   no vpn   rec 2   00:00")
+    del system.processes[5150], system.processes[5151]
+    # a redraw within ten seconds keeps the count it read
+    assert toolbar_text(session, session.box.started).endswith("no vpn   rec 2   00:00")
+    recording_count(session, fresh=True)
+    assert toolbar_text(session, session.box.started).endswith("1 target   no vpn   00:00")
+
+
+def test_the_recording_count_is_read_again_after_ten_seconds(session, system):
+    from casts import recording_now
+
+    clock = [NOW]
+    session.clock = lambda: clock[0]
+    assert "rec" not in toolbar_text(session, NOW)
+    recording_now(session, system, "dc01")
+    clock[0] = NOW + timedelta(seconds=9)
+    assert "rec" not in toolbar_text(session, NOW)
+    clock[0] = NOW + timedelta(seconds=10)
+    assert toolbar_text(session, NOW).endswith("rec 1   00:00")
+
+
+def test_each_command_starts_with_a_fresh_recording_count(session, loop, system):
+    from casts import recording_now
+
+    from pwn_broker.session import recording_count
+
+    seen = []
+    command("count", "help")(lambda s, a: seen.append(recording_count(s)))
+    loop(["count", "count"], between=lambda left: recording_now(session, system, "dc01") if left == 1 else None)
+    assert seen == [0, 1]

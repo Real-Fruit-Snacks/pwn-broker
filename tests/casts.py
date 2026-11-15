@@ -27,3 +27,17 @@ def write_cast(path: Path, events, **kwargs) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(cast_text(events, **kwargs).encode("utf-8"))
     return path
+
+
+def recording_now(
+    session, system, target: str, name: str = "2026-11-14_1432", *, pid: int = 5150, events=None, **header_args
+) -> Path:
+    """A cast in the session's box with a live marker for it, as a window that is still recording."""
+    from pwn_broker import recstate
+
+    folder = session.box.path / "targets" / target / "recordings"
+    events = events if events is not None else [(0, "o", "hello\r\n")]
+    cast = write_cast(folder / f"{name}.cast", events, **header_args)
+    system.processes[pid] = ("777", "zsh")
+    recstate.mark(session.paths, pid, "777", target, cast)
+    return cast

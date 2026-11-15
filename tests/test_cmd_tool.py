@@ -526,10 +526,10 @@ def test_toolbar_counts_the_boxes_tools_after_targets(session, shop):
 
 
 def test_status_shows_the_tool_count(session, shop):
-    assert "tools     0" in lines(run(session, "status"), "info")
+    assert "tools      0" in lines(run(session, "status"), "info")
     run(session, "tool install kerbrute")
     shown = lines(run(session, "status"), "info")
-    assert shown.index("tools     1") == shown.index("targets   1") + 1
+    assert shown.index("tools      1") == shown.index("targets    1") + 1
 
 
 def test_completions_for_install_and_info_come_from_the_cached_index(session, shop):
@@ -691,7 +691,7 @@ def test_a_tool_the_box_records_but_the_machine_lacks_is_not_installed(session, 
     _columns, rows = table(run(session, "tool search stand-in"))
     assert [r[3] for r in rows] == ["not installed", "installed"]
     assert toolbar_text(session, start).endswith("1 target   1 tool   no vpn   00:00")
-    assert "tools     1" in lines(run(session, "status"), "info")
+    assert "tools      1" in lines(run(session, "status"), "info")
 
 
 def test_the_toolbar_counts_nothing_while_the_installed_list_cannot_be_read(session, shop):

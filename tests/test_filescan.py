@@ -309,3 +309,43 @@ def test_scan_does_not_descend_into_the_vpn_folder(box, monkeypatch):
     monkeypatch.setattr(filescan.os, "walk", spy)
     scan(box, [], now=NOW)
     assert not any("vpn" in dirs for dirs in seen)
+
+
+# ---- a recording still being written
+
+
+CAST = "targets/dc01/recordings/2026-11-14_1432.cast"
+
+
+@pytest.fixture
+def live_cast(box):
+    path = box.path / CAST
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'{"version": 3}\n[0, "o", "a"]\n[1, "o", "b')
+    return path
+
+
+def test_a_live_cast_is_not_hashed_between_commands(box, live_cast, monkeypatch):
+    calls = []
+    monkeypatch.setattr(filescan, "sha256_file", lambda p: calls.append(p) or "x")
+    monkeypatch.setattr(filescan, "sha256_head", lambda p, size: calls.append(p) or "x")
+    [r] = [r for r in scan(box, [], now=NOW, live={CAST: 29}) if r.path == CAST]
+    assert (r.size, r.sha256, r.target) == (live_cast.stat().st_size, "", "dc01")
+    live_cast.write_bytes(live_cast.read_bytes() + b'"]\n')
+    [again] = [x for x in scan(box, [r], now=NOW + timedelta(hours=1), live={CAST: 33}) if x.path == CAST]
+    assert (again.size, again.sha256, again.first_seen) == (live_cast.stat().st_size, "", NOW)
+    assert live_cast not in calls
+
+
+def test_an_export_hashes_a_live_cast_up_to_its_last_whole_line(box, live_cast):
+    [r] = [r for r in scan(box, [], now=NOW, hash_all=True, live={CAST: 29}) if r.path == CAST]
+    assert r.size == 29
+    assert r.sha256 == hashlib.sha256(live_cast.read_bytes()[:29]).hexdigest()
+
+
+def test_a_cast_whose_window_closed_is_hashed_on_the_next_scan(box, live_cast):
+    first = scan(box, [], now=NOW, live={CAST: 29})
+    # unchanged since the live scan: same size and modification time
+    [r] = [r for r in scan(box, first, now=NOW, live={}) if r.path == CAST]
+    assert r.sha256 == hashlib.sha256(live_cast.read_bytes()).hexdigest()
+    assert r.size == live_cast.stat().st_size

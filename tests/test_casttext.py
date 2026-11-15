@@ -344,3 +344,66 @@ def test_stale(tmp_path):
     assert not casttext.stale(path)
     os.utime(text, ns=(500_000_000_000, 500_000_000_000))
     assert casttext.stale(path)
+
+
+# ---- refresh: the text copies export, finish and replay write
+
+
+def _cast_in(box, target, name, events=((0, "o", "hello\r\n"),)):
+    return write_cast(box.path / "targets" / target / "recordings" / f"{name}.cast", list(events))
+
+
+def _refresh(box, **kwargs):
+    from pwn_broker.console import FakeConsole
+
+    console = FakeConsole()
+    casttext.refresh(box, console, tz=TZ, **kwargs)
+    return console
+
+
+def test_refresh_writes_missing_and_stale_texts_and_leaves_fresh_ones(box):
+    missing = _cast_in(box, "dc01", "2026-11-14_1432")
+    stale = _cast_in(box, "web01", "2026-11-14_1510")
+    fresh = _cast_in(box, "web01", "2026-11-14_1600")
+    for path in (stale, fresh):
+        path.with_suffix(".txt").write_text("old\n", encoding="utf-8")
+    os.utime(stale, ns=(2_000_000_000_000, 2_000_000_000_000))
+    os.utime(stale.with_suffix(".txt"), ns=(1_000_000_000_000, 1_000_000_000_000))
+    os.utime(fresh, ns=(1_000_000_000_000, 1_000_000_000_000))
+    os.utime(fresh.with_suffix(".txt"), ns=(2_000_000_000_000, 2_000_000_000_000))
+    assert _refresh(box).lines == []
+    text = missing.with_suffix(".txt").read_text(encoding="utf-8")
+    assert text.startswith("box      forest  2026-11-14_htb_forest\ntarget   dc01\n")
+    assert "14:32:07  hello" in text
+    assert "target   web01\n" in stale.with_suffix(".txt").read_text(encoding="utf-8")
+    assert fresh.with_suffix(".txt").read_text(encoding="utf-8") == "old\n"
+
+
+def test_refresh_survives_one_bad_cast_among_good_ones(box):
+    first = _cast_in(box, "dc01", "2026-11-14_1432")
+    bad = box.path / "targets/dc01/recordings/2026-11-14_1500.cast"
+    bad.write_bytes(b"not a cast\n")
+    last = _cast_in(box, "dc01", "2026-11-14_1600")
+    console = _refresh(box)
+    [(kind, text)] = console.lines
+    assert kind == "warn" and text.startswith("no text copy of targets/dc01/recordings/2026-11-14_1500.cast: ")
+    assert first.with_suffix(".txt").exists() and last.with_suffix(".txt").exists()
+    assert not bad.with_suffix(".txt").exists()
+
+
+def test_refresh_for_one_target_leaves_the_others(box):
+    mine = _cast_in(box, "dc01", "2026-11-14_1432")
+    theirs = _cast_in(box, "web01", "2026-11-14_1432")
+    _refresh(box, target="dc01")
+    assert mine.with_suffix(".txt").exists() and not theirs.with_suffix(".txt").exists()
+
+
+def test_cast_files_are_in_name_order_and_only_casts(box):
+    later = _cast_in(box, "dc01", "2026-11-14_1600")
+    earlier = _cast_in(box, "dc01", "2026-11-14_1432")
+    other = _cast_in(box, "web01", "2026-11-14_1000")
+    (box.path / "targets/dc01/recordings/notes.txt").write_text("x")
+    (box.path / "targets/dc01/recordings/folder.cast").mkdir()
+    assert casttext.cast_files(box, "dc01") == [earlier, later]
+    assert casttext.cast_files(box) == [earlier, later, other]
+    assert casttext.cast_files(box, "nobody") == []

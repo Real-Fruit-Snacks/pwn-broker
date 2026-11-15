@@ -295,6 +295,6 @@ def test_session_seams_cannot_start_signal_or_sleep(session, paths, box):
 
     defaults = {f.name: f.default for f in fields(type(session))}
     built = load_session(paths, session.settings, FakeConsole(), box, lambda: NOW)
-    for name in ("run_privileged", "which", "sleep", "vpn_alive", "vpn_started", "vpn_comm"):
+    for name in ("run_privileged", "which", "sleep", "pid_alive", "pid_started", "vpn_comm", "play"):
         assert getattr(built, name) is not defaults[name], name
-    assert built.which("openvpn") is None and built.vpn_alive(1) is False
+    assert built.which("openvpn") is None and built.pid_alive(1) is False

@@ -1,7 +1,30 @@
-from pwn_broker import hostflow, lifecycle, vpnctl
+from pwn_broker import casttext, hostflow, lifecycle, vpnctl
 from pwn_broker.console import Cancelled
-from pwn_broker.session import Session, current_tunnel, vpn_checks
+from pwn_broker.recstate import windows
+from pwn_broker.session import Session, current_tunnel, recordings, vpn_checks
 from pwn_broker.shell import cmd_vpn
+
+
+def recording_block(session: Session) -> str | None:
+    """finish waits for every window recording into the box: what it records later would be lost."""
+    found = recordings(session)
+    if not found:
+        return None
+    names = ", ".join(sorted({r.target for r in found}))
+    them = "it" if len(found) == 1 else "them"
+    return f"{windows(len(found))} still recording ({names}). exit {them}, then finish again"
+
+
+def recordings_pre_pack(session: Session) -> None:
+    """Before packing, warn about windows still recording and write the missing text copies.
+
+    At finish no window is recording (recording_block), so the warning is only ever an export's.
+    """
+    count = len(recordings(session))
+    if count:
+        them = "it" if count == 1 else "them"
+        session.console.warn(f"{windows(count)} still recording; the export holds {them} up to now")
+    casttext.refresh(session.box, session.console, tz=session.clock().tzinfo)
 
 
 def vpn_question(session: Session) -> None:
@@ -28,6 +51,8 @@ def vpn_question(session: Session) -> None:
 
 def register() -> None:
     for hooks, hook in (
+        (lifecycle.BLOCK_HOOKS, recording_block),
+        (lifecycle.PRE_PACK_HOOKS, recordings_pre_pack),
         (lifecycle.SUMMARY_HOOKS, hostflow.summary),
         (lifecycle.UNDO_HOOKS, hostflow.undo),
         (lifecycle.UNDO_HOOKS, vpn_question),

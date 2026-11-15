@@ -23,6 +23,8 @@ def test_register_adds_each_hook_once(monkeypatch):
         monkeypatch.setattr(lifecycle, name, [])
     kalihooks.register()
     kalihooks.register()
+    assert lifecycle.BLOCK_HOOKS == [kalihooks.recording_block]
+    assert lifecycle.PRE_PACK_HOOKS == [kalihooks.recordings_pre_pack]
     assert lifecycle.SUMMARY_HOOKS == [hostflow.summary]
     assert lifecycle.UNDO_HOOKS == [hostflow.undo, kalihooks.vpn_question]
     assert lifecycle.RESTORE_HOOKS == []
@@ -140,16 +142,16 @@ def test_the_vpn_question_never_raises(session, system, registered):
 
     def gone_before_the_signal(pid):
         # alive for the question, gone by the time stop checks again
-        session.vpn_alive = lambda pid: False
+        session.pid_alive = lambda pid: False
         return True
 
-    session.vpn_alive = gone_before_the_signal
+    session.pid_alive = gone_before_the_signal
     session.console = FakeConsole(["y"])
     kalihooks.vpn_question(session)
     assert session.console.lines == [("warn", "no VPN started by pwn-broker is running")]
 
     _vpn_running(session, system)
-    session.vpn_alive = system.vpn_alive
+    session.pid_alive = system.pid_alive
 
     def broken(argv):
         raise RuntimeError("sudo is gone")
@@ -158,3 +160,74 @@ def test_the_vpn_question_never_raises(session, system, registered):
     session.console = FakeConsole(["y"])
     kalihooks.vpn_question(session)
     assert session.console.lines == [("warn", "could not stop the VPN: sudo is gone")]
+
+
+# ---- recordings at finish and export
+
+
+def test_finish_refuses_while_windows_record_and_asks_nothing(session, system, registered):
+    from casts import recording_now
+
+    recording_now(session, system, "dc01", pid=5150)
+    recording_now(session, system, "web01", "2026-11-14_1510", pid=5151)
+    recording_now(session, system, "dc01", "2026-11-14_1600", pid=5152)
+    session.console = FakeConsole(["y", "n"])
+    assert finish_box(session, **SAVED) is None
+    assert session.console.lines == [
+        ("fail", "3 windows are still recording (dc01, web01). exit them, then finish again")
+    ]
+    assert session.console.asked == []
+    assert session.box.status == "active"
+
+
+def test_finish_names_one_window(session, system, registered):
+    from casts import recording_now
+
+    recording_now(session, system, "dc01")
+    session.console = FakeConsole(["y", "n"])
+    assert finish_box(session, **SAVED) is None
+    assert session.console.lines == [
+        ("fail", "1 window is still recording (dc01). exit it, then finish again")
+    ]
+
+
+def test_a_stale_recording_marker_does_not_block_finish(session, system, registered):
+    from casts import recording_now
+
+    cast = recording_now(session, system, "dc01")
+    del system.processes[5150]  # the window was killed
+    session.console = FakeConsole(["y", "n"])
+    assert finish_box(session, **SAVED) is not None
+    assert not (session.paths.run_recordings / "5150").exists()
+    # the killed window's text copy is written before the archive is made
+    assert cast.with_suffix(".txt").exists()
+
+
+def test_export_warns_about_windows_still_recording_and_writes_their_text(session, system, registered):
+    from casts import recording_now
+
+    cast = recording_now(session, system, "dc01")
+    assert lifecycle.export_box(session, fix=lambda path: 0) is not None
+    assert session.console.lines[0] == (
+        "warn", "1 window is still recording; the export holds it up to now"
+    )
+    assert "14:32:07  hello" in cast.with_suffix(".txt").read_text(encoding="utf-8")
+    recording_now(session, system, "dc01", "2026-11-14_1600", pid=5151)
+    session.console = FakeConsole()
+    lifecycle.export_box(session, fix=lambda path: 0)
+    assert session.console.lines[0] == (
+        "warn", "2 windows are still recording; the export holds them up to now"
+    )
+
+
+def test_export_without_recordings_says_nothing_about_them(session, registered):
+    lifecycle.export_box(session, fix=lambda path: 0)
+    assert [k for k, _ in session.console.lines] == ["ok"]
+
+
+def test_one_bad_cast_does_not_stop_an_export(session, registered):
+    folder = session.box.path / "targets/dc01/recordings"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "2026-11-14_1432.cast").write_bytes(b"broken\n")
+    assert lifecycle.export_box(session, fix=lambda path: 0) is not None
+    assert [k for k, _ in session.console.lines] == ["warn", "ok"]
