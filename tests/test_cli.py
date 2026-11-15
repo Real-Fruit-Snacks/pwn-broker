@@ -5,14 +5,16 @@ from pathlib import Path
 import pytest
 
 from conftest import NOW
-from pwn_broker import __version__, boxes, checks, cli, lifecycle, notewindow, privilege, setup
+from pwn_broker import (
+    __version__, boxes, checks, cli, lifecycle, note, notewindow, privilege, session, setup,
+)  # fmt: skip
 from pwn_broker.boxes import BoxError, create_box
 from pwn_broker.checks import CheckResult
 from pwn_broker.cli import box_for_cwd, choose, main, new_box, start
 from pwn_broker.config import Settings, load_state
 from pwn_broker.console import Cancelled, FakeConsole
 from pwn_broker.questions import BoxAnswers, ask_box
-from pwn_broker.store import save_box
+from pwn_broker.store import StoreError, save_box
 
 
 @pytest.fixture
@@ -52,7 +54,7 @@ def test_ask_box_reasks_empty_name_and_bad_date():
     assert console.asked == ["box name"] * 3 + ["platform", "date", "date", "os", "difficulty"]
 
 
-def test_ask_box_platform_normalised_only_when_default():
+def test_ask_box_platform_stored_as_typed():
     a = ask_box(
         FakeConsole(["Forest ", "Other Lab", "", "", ""]),
         default_platform=" HTB",
@@ -62,7 +64,7 @@ def test_ask_box_platform_normalised_only_when_default():
     b = ask_box(
         FakeConsole(["x", "", "", "", ""]), default_platform=" HTB", today=date(2026, 11, 14)
     )
-    assert b.platform == "htb"
+    assert b.platform == " HTB"
 
 
 def test_new_box_with_two_targets(env):
@@ -328,10 +330,14 @@ def test_start_resume_without_name(env, quiet, box, ran):
 
 
 def test_start_refuses_second_open_box(env, quiet, box, monkeypatch, ran):
-    monkeypatch.setattr(boxes, "open_box_folder", lambda paths: box.path)
+    monkeypatch.setattr(boxes, "pid_alive", lambda pid: pid == 999)
+    boxes.acquire_open(env.paths, box, pid=999, alive=lambda pid: False)
+    lock = env.paths.run / "open.toml"
+    before = lock.read_bytes()
     assert start(env, ["new"]) == 1
     assert box.path.name in lines(env, "fail")[0]
     assert env.console.asked == [] and ran == []
+    assert lock.read_bytes() == before
 
 
 def test_start_acquire_failure(env, quiet, box, monkeypatch, ran):
@@ -423,3 +429,102 @@ def test_main_keyboard_interrupt(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli, "start", boom)
     assert main([]) == 130
+
+
+def test_new_box_keeps_going_when_one_target_fails(env, monkeypatch):
+    real = boxes.add_target
+
+    def flaky(box, targets, **kw):
+        if kw["name"] == "two":
+            raise BoxError("disk full")
+        return real(box, targets, **kw)
+
+    monkeypatch.setattr(boxes, "add_target", flaky)
+    env.console = FakeConsole(
+        ["forest", "", "", "", "",
+         "", "10.10.10.1", "", "", "one",
+         "y", "10.10.10.2", "", "", "two",
+         "y", "10.10.10.3", "", "", "three",
+         ""]
+    )  # fmt: skip
+    s = new_box(env)
+    assert [t.name for t in s.targets] == ["one", "three"]
+    text = (s.box.path / "notes.md").read_text()
+    assert "## one" in text and "## three" in text and "## two" not in text
+    assert len(lines(env, "fail")) == 1 and "disk full" in lines(env, "fail")[0]
+
+
+def test_new_box_survives_a_note_that_cannot_be_written(env, monkeypatch):
+    def boom(box, text):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(session, "write_note", boom)
+    env.console = FakeConsole(["forest", "", "", "", "", "y", "10.10.10.1", "", "", "", ""])
+    s = new_box(env)
+    assert s.box.path.is_dir() and [t.name for t in s.targets] == ["10.10.10.1"]
+    warns = lines(env, "warn")
+    assert len(warns) == 1 and "read-only" in warns[0]
+
+
+def test_start_reports_a_box_that_could_not_be_finished(env, quiet, monkeypatch, ran):
+    def boom(s):
+        raise StoreError("bad toml")
+
+    monkeypatch.setattr(session, "refresh", boom)
+    env.console = FakeConsole(["forest", "", "", "", "", "n"])
+    assert start(env, ["new"]) == 1
+    fails = lines(env, "fail")
+    assert len(fails) == 1 and "bad toml" in fails[0] and "forest" in fails[0]
+    assert ran == [] and not (env.paths.run / "open.toml").exists()
+
+
+def test_resume_prints_unreadable_folders(env, quiet, box):
+    bad = env.paths.active / "2026-01-01_htb_bad"
+    bad.mkdir()
+    (bad / "box.toml").write_text("not = [valid", encoding="utf-8")
+    assert start(env, ["resume", "nope"]) == 1
+    kinds = [k for k, _ in env.console.lines]
+    assert kinds.index("warn") < kinds.index("fail")
+
+
+def test_install_failure_suggests_repair(env, quiet, monkeypatch):
+    def boom(paths):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(setup, "install_data", boom)
+    start(env, [])
+    assert env.console.lines[-1] == ("info", "run the installer again to repair the install")
+
+
+def test_version_check_overlaps_the_checks(env, quiet, monkeypatch, box, ran):
+    order = []
+    monkeypatch.setattr(checks, "version_check", lambda s: order.append("version"))
+    monkeypatch.setattr(
+        checks, "launch_checks", lambda *a, **k: order.append("checks") or []
+    )
+    env.cwd = box.path
+    start(env, [])
+    assert sorted(order) == ["checks", "version"]
+
+
+def test_main_reports_unexpected_errors(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("PWN_BROKER_OPT", str(tmp_path))
+
+    def boom(env, argv):
+        raise RuntimeError("odd")
+
+    monkeypatch.setattr(cli, "start", boom)
+    assert main([]) == 1
+    assert "unexpected error: RuntimeError: odd" in capsys.readouterr().out
+
+
+def test_main_survives_a_deleted_cwd(monkeypatch, tmp_path):
+    monkeypatch.setenv("PWN_BROKER_OPT", str(tmp_path))
+    seen = []
+    monkeypatch.setattr(cli, "start", lambda env, argv: seen.append(env.cwd) or 0)
+
+    def gone():
+        raise FileNotFoundError("deleted")
+
+    monkeypatch.setattr(Path, "cwd", staticmethod(gone))
+    assert main([]) == 0 and seen == [Path.home()]

@@ -182,8 +182,6 @@ def ask_box(console: Console, *, default_platform: str, today: date) -> BoxAnswe
         console.fail("the box name needs at least one letter or digit")
 
     platform = console.ask("platform", default_platform)
-    if platform == default_platform:
-        platform = platform.strip().lower()
 
     while True:
         text = console.ask("date", today.isoformat())

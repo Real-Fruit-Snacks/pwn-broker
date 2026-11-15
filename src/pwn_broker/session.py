@@ -7,8 +7,9 @@ from pwn_broker.console import Console
 from pwn_broker.filescan import scan
 from pwn_broker.lists import ListSummary, rebuild_lists
 from pwn_broker.model import Box, Cred, FileRecord, Target
-from pwn_broker.note import NOTE_NAME, NoteError, read_note, update_table, write_note
+from pwn_broker.note import NOTE_NAME, NoteError, read_note, render_note, update_table, write_note
 from pwn_broker.paths import AppPaths
+from pwn_broker.setup import load_template
 from pwn_broker.store import load_creds, load_files, load_targets, save_box, save_creds, save_files
 
 
@@ -38,6 +39,10 @@ def load_session(
     if current is None and targets:
         current = targets[0]
     return Session(paths, settings, console, box, targets, load_creds(box), current, clock)
+
+
+def write_new_note(paths: AppPaths, box: Box, targets: list[Target]) -> None:
+    write_note(box, render_note(load_template(paths), box, targets))
 
 
 def set_current(session: Session, target: Target | None) -> None:

@@ -195,3 +195,13 @@ def test_files_added_uses_the_clock_timezone(session):
     save_files(session.box, [_record("targets/dc01/a", "dc01", seen, 1)])
     dispatch(session, "files")
     assert session.console.tables[0][1][0][1] == "01:30"
+
+
+def test_note_command_recreates_a_missing_note(session, monkeypatch):
+    monkeypatch.setattr(notewindow, "open_note", lambda *a: True)
+    note = session.box.path / "notes.md"
+    note.unlink()
+    dispatch(session, "note")
+    text = note.read_text(encoding="utf-8")
+    assert text.startswith("# forest\n") and "## dc01" in text
+    assert ("ok", "note created") in session.console.lines

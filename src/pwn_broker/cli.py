@@ -11,7 +11,8 @@ from pwn_broker import questions, session as sessions, setup
 from pwn_broker.boxes import BoxError
 from pwn_broker.config import ConfigError, Settings
 from pwn_broker.console import Cancelled, Console, TermConsole
-from pwn_broker.model import Box
+from pwn_broker.model import Box, Target
+from pwn_broker.note import NoteError
 from pwn_broker.paths import AppPaths
 from pwn_broker.session import Session
 from pwn_broker.shell.app import run_shell
@@ -60,33 +61,44 @@ def new_box(env: Env) -> Session:
         difficulty=answers.difficulty,
         now=env.clock(),
     )
-    targets: list = []
+    targets: list[Target] = []
     try:
         adding = console.confirm("add a target?", default=True)
         while adding:
             given = questions.ask_target(console, taken={t.name for t in targets})
-            target = boxes.add_target(
-                box,
-                targets,
-                ips=given.ips,
-                hostnames=given.hostnames,
-                scope=given.scope,
-                name=given.name,
-                now=env.clock(),
-            )
-            console.ok(f"target {target.name} created")
+            try:
+                target = boxes.add_target(
+                    box,
+                    targets,
+                    ips=given.ips,
+                    hostnames=given.hostnames,
+                    scope=given.scope,
+                    name=given.name,
+                    now=env.clock(),
+                )
+            except (BoxError, OSError, ValueError) as exc:
+                console.fail(f"could not add the target: {exc}")
+            else:
+                console.ok(f"target {target.name} created")
             adding = console.confirm("add another?", default=False)
     except Cancelled:
         # the box exists on disk already; keep it and what was added
         pass
 
-    note.write_note(box, note.render_note(setup.load_template(env.paths), box, targets))
-    session = _load(env, box)
-    # the clock may not tick between targets, so keep the order they were typed in
-    session.targets = targets
-    sessions.set_current(session, session.targets[0] if session.targets else None)
-    sessions.refresh(session)
-    config.save_state(env.paths.state_file, config.State(last_platform=answers.platform))
+    try:
+        sessions.write_new_note(env.paths, box, targets)
+    except (OSError, NoteError, StoreError) as exc:
+        console.warn(f"the note could not be written: {exc}")
+    try:
+        session = _load(env, box)
+        # the clock may not tick between targets, so keep the order they were typed in
+        session.targets = targets
+        sessions.set_current(session, targets[0] if targets else None)
+        sessions.refresh(session)
+        config.save_state(env.paths.state_file, config.State(last_platform=answers.platform))
+    except (StoreError, OSError) as exc:
+        # the box, its note and its targets are on disk and can be resumed
+        raise BoxError(f"box {box.path.name} was created but not finished: {exc}") from exc
     console.ok(f"box {box.name} created")
     return session
 
@@ -150,7 +162,9 @@ def box_for_cwd(env: Env) -> Box | None:
 
 
 def _resume(env: Env, name: str | None) -> Session | None:
-    found, _ = boxes.list_boxes(env.paths)
+    found, problems = boxes.list_boxes(env.paths)
+    for problem in problems:
+        env.console.warn(problem)
     active = [b for b in found if b.status == "active"]
     if name is None:
         if len(active) == 1:
@@ -179,7 +193,7 @@ def _pick_session(env: Env, argv: list[str]) -> Session | None:
     return choose(env)
 
 
-def _newer_release(settings: Settings) -> checks.CheckResult | None:
+def _newer_release(settings: Settings) -> Callable[[], checks.CheckResult | None]:
     found: list[checks.CheckResult | None] = []
 
     def look() -> None:
@@ -190,8 +204,12 @@ def _newer_release(settings: Settings) -> checks.CheckResult | None:
 
     thread = threading.Thread(target=look, daemon=True)
     thread.start()
-    thread.join(2.0)
-    return found[0] if found else None
+
+    def result() -> checks.CheckResult | None:
+        thread.join(2.0)
+        return found[0] if found else None
+
+    return result
 
 
 def _usage(env: Env, argv: list[str]) -> int | None:
@@ -234,8 +252,10 @@ def _prepare(env: Env) -> int | None:
             setup.install_data(env.paths)
         except OSError as exc:
             console.fail(f"cannot install pwn-broker data: {exc}")
+            console.info("run the installer again to repair the install")
             return 1
 
+    wait_for_version = _newer_release(env.settings)
     results = checks.launch_checks(
         env.paths, env.settings, env.environ, env.home, include_version=False
     )
@@ -243,7 +263,7 @@ def _prepare(env: Env) -> int | None:
     if any(r.status == "fail" for r in results):
         return 1
 
-    newer = _newer_release(env.settings)
+    newer = wait_for_version()
     if newer is not None:
         console.warn(f"{newer.name}   {newer.message}")
     return None
@@ -259,7 +279,7 @@ def start(env: Env, argv: list[str]) -> int:
         return done
 
     try:
-        busy = boxes.open_box_folder(env.paths)
+        busy = boxes.open_box_folder(env.paths, alive=boxes.pid_alive)
         if busy is not None:
             console.fail(f"{busy.name} is open in another prompt; quit that prompt first")
             return 1
@@ -267,6 +287,9 @@ def start(env: Env, argv: list[str]) -> int:
     except Cancelled:
         console.info("cancelled")
         return 0
+    except (BoxError, StoreError, OSError) as exc:
+        console.fail(f"could not open the box: {exc}")
+        return 1
     if session is None:
         return 1
 
@@ -294,13 +317,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     import pwn_broker.shell  # noqa: F401  (importing it fills the command registry)
 
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        cwd = Path.home()
     env = Env(
         paths=paths,
         settings=settings,
         console=TermConsole(os.environ),
         clock=lambda: datetime.now().astimezone(),
         environ=os.environ,
-        cwd=Path.cwd(),
+        cwd=cwd,
         pid=os.getpid(),
         home=Path.home(),
     )
@@ -308,3 +335,6 @@ def main(argv: list[str] | None = None) -> int:
         return start(env, args)
     except KeyboardInterrupt:
         return 130
+    except Exception as exc:
+        env.console.fail(f"unexpected error: {type(exc).__name__}: {exc}")
+        return 1

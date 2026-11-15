@@ -3,8 +3,9 @@ from pathlib import Path
 
 from pwn_broker import boxes, checks, notewindow, store
 from pwn_broker.model import FileRecord, Flag
-from pwn_broker.note import NOTE_NAME
-from pwn_broker.session import Session
+from pwn_broker.note import NOTE_NAME, NoteError
+from pwn_broker.session import Session, write_new_note
+from pwn_broker.store import StoreError
 from pwn_broker.shell.commands import COMMANDS, command, take_args
 
 BOX_FOLDERS = ("lists", "screenshots")
@@ -84,6 +85,14 @@ def path(session: Session, args: list[str]) -> None:
 @command("note", "open the note in vim")
 def note(session: Session, args: list[str]) -> None:
     take_args(args)
+    box = session.box
+    if not (box.path / NOTE_NAME).exists():
+        try:
+            write_new_note(session.paths, box, session.targets)
+        except (OSError, NoteError, StoreError) as exc:
+            session.console.fail(f"could not write the note: {exc}")
+            return
+        session.console.ok("note created")
     if notewindow.open_note(session.paths, session.settings, session.box, os.environ):
         session.console.ok("note opened")
         return
