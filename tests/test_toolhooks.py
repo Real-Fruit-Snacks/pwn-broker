@@ -1553,17 +1553,33 @@ def test_finish_logs_nothing_for_a_tool_only_another_box_holds(tooled, other):
     assert load_installed(tooled.paths)["kerbrute"].users == [other.id]
 
 
-def test_reopening_keeps_when_the_tool_was_first_installed(tooled, pyshop):
+def test_reopening_gives_each_tool_a_new_install_time_in_its_row(tooled, pyshop):
     put(tooled, pyshop.certipy)
-    first = {t.name: t.installed for t in tooled.box.tools}
     wipe_all(tooled)
     _z, newer = toolkit.make_runtime(pyshop_folder(tooled), build=2)
     toolkit.write_index(pyshop_folder(tooled), [*pyshop.entries, newer])
-    tooled.clock = lambda: NOW + timedelta(days=2)
+    later = NOW + timedelta(days=2)
+    tooled.clock = lambda: later
     say(tooled, "y")
     toolhooks.restore(tooled)
     rows = load_box(tooled.box.path).tools
-    assert {t.name: t.installed for t in rows} == first
-    [certipy] = [t for t in rows if t.name == "certipy"]
-    assert certipy.runtime.build == 2  # the note says what it runs on now
+    assert [(t.name, t.installed) for t in rows] == [("kerbrute", later), ("certipy", later)]
+    assert rows[1].runtime.build == 2  # the note says what it runs on now
     assert [line.split()[1] for line in log_lines(tooled.paths)] == ["install"] * 3
+
+
+def test_tool_data_from_before_a_reopen_is_kept_beside_the_new(tooled, user):
+    toolhooks.pre_pack(tooled)  # the first finish copies the data in
+    wipe(tooled)  # reopened on a machine without the tool
+    shutil.rmtree(user / ".kerb")
+    tooled.clock = lambda: NOW + timedelta(days=2)
+    say(tooled, "y")
+    toolhooks.restore(tooled)
+    assert tooled.box.id in load_installed(tooled.paths)["kerbrute"].users
+    (user / ".kerb").mkdir()
+    (user / ".kerb" / "second.txt").write_text("second run")
+    toolhooks.pre_pack(tooled)
+    data = tooled.box.path / "tooldata" / "kerbrute"
+    assert (data / "home-1" / ".kerb" / "found.txt").read_text() == "result"
+    assert (data / "home" / ".kerb" / "second.txt").read_text() == "second run"
+    assert not (data / "home" / ".kerb" / "found.txt").exists()
