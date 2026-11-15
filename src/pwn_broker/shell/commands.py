@@ -9,6 +9,7 @@ from pwn_broker.note import NoteError
 from pwn_broker.session import Session
 from pwn_broker.store import StoreError
 from pwn_broker.toolpkg import ToolError
+from pwn_broker.vpnctl import VpnError
 
 Handler = Callable[[Session, list[str]], None]
 
@@ -19,7 +20,10 @@ class Quit(Exception):
 
 COMMANDS: dict[str, tuple[Handler, str]] = {}
 
-_HANDLED = (BoxError, CredError, StoreError, ArchiveError, NoteError, ToolError, ValueError, OSError)
+_HANDLED = (
+    BoxError, CredError, StoreError, ArchiveError, NoteError, ToolError, VpnError,
+    ValueError, OSError,
+)  # fmt: skip
 
 
 def command(name: str, help: str) -> Callable[[Handler], Handler]:

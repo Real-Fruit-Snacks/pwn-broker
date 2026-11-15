@@ -15,6 +15,7 @@ class Cancelled(Exception):
 
 class Console(Protocol):
     def ask(self, label: str, default: str | None = None) -> str: ...
+    def ask_path(self, label: str, default: str | None = None) -> str: ...
     def confirm(self, question: str, default: bool = False) -> bool: ...
     def ok(self, text: str) -> None: ...
     def warn(self, text: str) -> None: ...
@@ -54,6 +55,9 @@ class FakeConsole:
         if answer == "" and default is not None:
             return default
         return answer
+
+    def ask_path(self, label: str, default: str | None = None) -> str:
+        return self.ask(label, default)
 
     def confirm(self, question: str, default: bool = False) -> bool:
         return _answer_to_bool(self._next(question), default)
@@ -131,8 +135,16 @@ class TermConsole:
         self._rich.print(table)
 
     def ask(self, label: str, default: str | None = None) -> str:
+        return self._ask(label, default)
+
+    def ask_path(self, label: str, default: str | None = None) -> str:
+        from prompt_toolkit.completion import PathCompleter
+
+        return self._ask(label, default, completer=PathCompleter(expanduser=True))
+
+    def _ask(self, label: str, default: str | None, completer=None) -> str:
         suffix = f" [{default}]" if default is not None else ""
-        answer = self._prompt(f"{label:<12}{suffix} > ")
+        answer = self._prompt(f"{label:<12}{suffix} > ", completer=completer)
         if answer == "" and default is not None:
             return default
         return answer
@@ -141,7 +153,7 @@ class TermConsole:
         hint = "[Y/n]" if default else "[y/N]"
         return _answer_to_bool(self._prompt(f"{question} {hint} > "), default)
 
-    def _prompt(self, message: str) -> str:
+    def _prompt(self, message: str, completer=None) -> str:
         from prompt_toolkit import prompt
         from prompt_toolkit.lexers import SimpleLexer
 
@@ -150,6 +162,7 @@ class TermConsole:
                 [("class:question", message)],
                 style=theme.prompt_style() if self._color else None,
                 lexer=SimpleLexer("class:answer"),
+                completer=completer,
             )
         except (KeyboardInterrupt, EOFError):
             raise Cancelled() from None

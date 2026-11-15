@@ -182,3 +182,31 @@ def test_fake_raw_is_recorded():
     c = FakeConsole()
     c.raw("a\tb")
     assert c.lines == [("raw", "a\tb")]
+
+
+def test_fake_ask_path_is_ask():
+    c = FakeConsole(["", "/tmp/x.ovpn"])
+    assert c.ask_path("vpn file", default="/a.ovpn") == "/a.ovpn"
+    assert c.ask_path("vpn file") == "/tmp/x.ovpn"
+    assert c.asked == ["vpn file", "vpn file"]
+
+
+def test_term_ask_path_completes_paths_and_takes_the_default(monkeypatch):
+    from prompt_toolkit.completion import PathCompleter
+
+    seen = []
+
+    def fake_prompt(message, **kwargs):
+        seen.append((message, kwargs))
+        return "" if len(seen) == 1 else "~/lab.ovpn"
+
+    monkeypatch.setattr("prompt_toolkit.prompt", fake_prompt)
+    console = TermConsole({"NO_COLOR": "1"}, out=io.StringIO())
+    assert console.ask_path("vpn file", default="/root/lab.ovpn") == "/root/lab.ovpn"
+    assert console.ask_path("vpn file") == "~/lab.ovpn"
+    message, kwargs = seen[0]
+    assert message == [("class:question", "vpn file     [/root/lab.ovpn] > ")]
+    completer = kwargs["completer"]
+    assert isinstance(completer, PathCompleter) and completer.expanduser is True
+    console.ask("user")
+    assert seen[-1][1]["completer"] is None

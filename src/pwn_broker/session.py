@@ -1,9 +1,11 @@
+import shutil
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from pwn_broker import hosts, privilege, vpn
+from pwn_broker import hosts, privilege, vpn, vpnctl
 from pwn_broker.config import Settings
 from pwn_broker.console import Console
 from pwn_broker.filescan import scan
@@ -50,6 +52,12 @@ class Session:
     run_privileged: Callable = privilege.run_privileged
     ping: Callable[[str], PingResult] = ping_once
     tunnel: Callable[[], vpn.Tunnel | None] = vpn.tunnel
+    which: Callable[[str], str | None] = shutil.which
+    sleep: Callable[[float], None] = time.sleep
+    # how vpnctl.ours tells the app's OpenVPN from a process that reuses its ID
+    vpn_alive: Callable[[int], bool] = vpnctl.pid_alive
+    vpn_started: Callable[[int], str | None] = vpnctl.process_start
+    vpn_comm: Callable[[int], str | None] = vpnctl.process_comm
     # the last tunnel read and when it was made, so a redrawn status bar does not run `ip` each time
     tunnel_read: tuple[datetime, vpn.Tunnel | None] | None = None
     # things said once per session
@@ -66,6 +74,11 @@ def current_tunnel(session: Session, *, fresh: bool = False) -> vpn.Tunnel | Non
     if fresh or last is None or not timedelta(0) <= now - last[0] < TUNNEL_AGE:
         last = session.tunnel_read = (now, session.tunnel())
     return last[1]
+
+
+def vpn_checks(session: Session) -> dict:
+    """The process checks for vpnctl.ours, start and stop."""
+    return dict(alive=session.vpn_alive, started=session.vpn_started, comm=session.vpn_comm)
 
 
 def load_session(

@@ -77,6 +77,11 @@ class System:
         # the tunnel the stand-in reports; None means no VPN is up
         self.tunnel_found = None
         self.tunnel_reads = 0
+        # programs `which` finds, by name; openvpn is not installed unless a test says so
+        self.programs: dict[str, str] = {}
+        self.sleeps: list[float] = []
+        # the process table the VPN checks see: pid to (start time, command name)
+        self.processes: dict[int, tuple[str, str]] = {}
 
     @property
     def hosts_path(self):
@@ -99,6 +104,22 @@ class System:
         # the real reader runs `ip`; no test may
         self.tunnel_reads += 1
         return self.tunnel_found
+
+    def which(self, name):
+        return self.programs.get(name)
+
+    def sleep(self, seconds):
+        # never sleeps for real
+        self.sleeps.append(seconds)
+
+    def vpn_alive(self, pid):
+        return pid in self.processes
+
+    def vpn_started(self, pid):
+        return self.processes[pid][0] if pid in self.processes else None
+
+    def vpn_comm(self, pid):
+        return self.processes[pid][1] if pid in self.processes else None
 
     def ping(self, ip):
         self.pings.append(ip)
@@ -123,7 +144,10 @@ def system(tmp_path_factory, monkeypatch):
         # an equal path is the same file, so it is compared by value
         if self.hosts_path == defaults["hosts_path"]:
             self.hosts_path = fake.hosts_path
-        for name in ("is_root", "run_privileged", "ping", "tunnel"):
+        for name in (
+            "is_root", "run_privileged", "ping", "tunnel",
+            "which", "sleep", "vpn_alive", "vpn_started", "vpn_comm",
+        ):  # fmt: skip
             if getattr(self, name) is defaults[name]:
                 setattr(self, name, getattr(fake, name))
 
@@ -199,3 +223,21 @@ def no_real_ip(monkeypatch):
         raise AssertionError("a test reached the real `ip`; pass a tunnel reader or a run")
 
     monkeypatch.setattr(vpn.tunnel, "__defaults__", (refuse,))
+
+
+@pytest.fixture(autouse=True)
+def no_real_vpn(monkeypatch):
+    """vpnctl's own defaults would start openvpn, signal or read real processes and sleep."""
+    from pwn_broker import vpnctl
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a test reached a real process, openvpn or sleep; pass a stand-in")
+
+    for name in ("pid_alive", "process_start", "process_comm"):
+        monkeypatch.setattr(vpnctl, name, refuse)
+    for function in (vpnctl.start, vpnctl.stop):
+        defaults = dict(function.__kwdefaults__)
+        for name in ("run", "sleep", "which"):
+            if name in defaults:
+                defaults[name] = refuse
+        monkeypatch.setattr(function, "__kwdefaults__", defaults)
