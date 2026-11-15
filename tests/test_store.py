@@ -3,7 +3,7 @@ import sys
 from datetime import timedelta
 
 import pytest
-from helpers import NOW, make_cred
+from helpers import NASTY, NOW, make_cred
 
 from pwn_broker import store
 from pwn_broker.model import FileRecord, Flag, Target
@@ -21,17 +21,6 @@ from pwn_broker.store import (
     write_text,
     write_toml,
 )
-
-NASTY = [
-    'p@ss "word" with spaces\\',
-    "[red]x[/red]",
-    "a#b",
-    "tab\there",
-    "  lead and trail  ",
-    "pässwörd",
-    "'",
-    "",
-]
 
 
 def test_box_round_trip(box):
