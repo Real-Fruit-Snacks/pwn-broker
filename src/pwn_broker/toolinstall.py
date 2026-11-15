@@ -34,6 +34,10 @@ _DATA = "{data}"
 _OWN_VARIABLES = ("data", "box", "run", "pid")
 
 
+def runtime_refusal(name: str) -> str:
+    return f"{name} is a runtime; it is installed with the tools that need it"
+
+
 # ---- launchers
 
 
@@ -269,7 +273,7 @@ def install(
         raise ToolError(f"{name!r} is not a valid tool name")
     current = installed.get(name)
     if entry.kind == "runtime" or (current is not None and current.kind == "runtime"):
-        raise ToolError(f"{name} is a runtime; it is installed with the tools that need it")
+        raise ToolError(runtime_refusal(name))
     wanted = build_id(entry.version, entry.build)
     check_recorded(box, entry)
 
@@ -520,7 +524,10 @@ def _check_interpreter(python: Path, root: Path, shown: str) -> None:
         raise ToolError(f"the runtime's interpreter {shown} is not a regular file")
 
 
-def _intact(paths: AppPaths, item: Installed) -> bool:
+def runtime_intact(paths: AppPaths, item: Installed | None) -> bool:
+    """Whether a row is a runtime whose files are in place and can be used as they are."""
+    if item is None or item.kind != "runtime":
+        return False
     folder = Path(item.folder)
     # the row is only believed where it points into the runtime's own place: a hand-edited
     # list must not make an install run another program
@@ -570,7 +577,7 @@ def install_runtime(
     if current is not None:
         if current.kind != "runtime":
             raise ToolError(f"{name} is installed as a tool, not a runtime")
-        if _intact(paths, current):
+        if runtime_intact(paths, current):
             return current
         # its files are gone or damaged: whatever is left under its name goes with the row
         leftover = paths.tools / name

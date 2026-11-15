@@ -734,3 +734,295 @@ def test_info_fills_lhost_from_the_tunnel(session, shop, system):
     joined = "\n".join(lines(run(session, "tool info kerbrute"), "info"))
     assert "--dc 10.10.10.161 forest.htb.local 10.10.14.7 {nope} {0}" in joined
     assert "<lhost>" not in joined
+
+
+# ---- tools on a runtime
+
+RT_LINE = "python-3.13 3.13.18 installed (runtime, 1 MB)"
+RT_GONE = "python-3.13 3.13.18 removed (runtime)"
+REFUSED = "python-3.13 is a runtime; it is installed with the tools that need it"
+
+
+@pytest.fixture
+def pyshop(session, shop, monkeypatch):
+    # certipy and bloodhound both require python-3.13; kerbrute and ligolo-ng require nothing
+    calls = toolkit.no_real_venv(monkeypatch)
+    _z, runtime = toolkit.make_runtime(shop.folder)
+    _z, certipy = toolkit.make_python_tool(shop.folder)
+    _z, bloodhound = toolkit.make_python_tool(shop.folder, "bloodhound", "1.8.0", build=1)
+    entries = [*shop.entries, runtime, certipy, bloodhound]
+    toolkit.write_index(shop.folder, entries)
+    fetched = []
+    real = cmd_tool.toolindex.fetch_zip
+
+    def spy(paths, settings, entry, **kw):
+        fetched.append(entry.name)
+        return real(paths, settings, entry, **kw)
+
+    monkeypatch.setattr(cmd_tool.toolindex, "fetch_zip", spy)
+    return SimpleNamespace(
+        runtime=runtime, certipy=certipy, bloodhound=bloodhound, entries=entries,
+        calls=calls, fetched=fetched,
+    )  # fmt: skip
+
+
+def runtime_row(session):
+    return toolstate.load_installed(session.paths).get("python-3.13")
+
+
+def nothing_of(session, *names):
+    installed = toolstate.load_installed(session.paths)
+    for name in names:
+        assert name not in installed
+        assert not (session.paths.tools / name).exists()
+
+
+def test_install_brings_the_runtime_first(session, shop, pyshop):
+    console = run(session, "tool install certipy")
+    assert lines(console, "ok") == [RT_LINE, "certipy 5.1.0 installed"]
+    assert pyshop.fetched == ["python-3.13", "certipy"]
+    rt = runtime_row(session)
+    assert rt.kind == "runtime" and rt.users == []
+    # the environment is made by the runtime's interpreter
+    assert pyshop.calls[0][0] == rt.python
+    [record] = load_box(session.box.path).tools
+    assert (record.runtime.name, record.runtime.version, record.runtime.build) == (
+        "python-3.13", "3.13.18", 1,
+    )  # fmt: skip
+    assert toolstate.load_installed(session.paths)["certipy"].requires == ["python-3.13"]
+
+
+def test_install_uses_the_runtime_already_there_without_fetching_it(session, shop, pyshop):
+    run(session, "tool install certipy")
+    pyshop.fetched.clear()
+    console = run(session, "tool install bloodhound")
+    assert lines(console, "ok") == ["bloodhound 1.8.0 installed"]
+    assert pyshop.fetched == ["bloodhound"]
+
+
+def test_a_newer_runtime_in_the_index_does_not_replace_the_installed_one(session, shop, pyshop):
+    run(session, "tool install certipy")
+    _z, newer = toolkit.make_runtime(shop.folder, build=2)
+    toolkit.write_index(shop.folder, [*pyshop.entries, newer])
+    console = run(session, "tool install bloodhound")
+    assert lines(console, "ok") == ["bloodhound 1.8.0 installed"]
+    assert runtime_row(session).build == 1
+
+
+def test_a_runtime_missing_from_the_index_stops_before_anything_is_fetched(session, shop, pyshop):
+    toolkit.write_index(shop.folder, [e for e in pyshop.entries if e.name != "python-3.13"])
+    console = run(session, "tool install certipy")
+    assert lines(console, "fail") == ["no runtime named 'python-3.13' in the index"]
+    assert pyshop.fetched == []
+    nothing_of(session, "certipy", "python-3.13")
+    assert load_box(session.box.path).tools == []
+
+
+def take_the_command(session, shop):
+    # another tool already owns the command name certipy
+    command = {"name": "certipy", "type": "binary", "path": "files/kerbrute"}
+    _z, taker = toolkit.make_entry(shop.folder / "taker", {"name": "taker", "command": [command]})
+    toolinstall.install(
+        session.paths, session.box, taker, shop.folder / "taker" / taker.file,
+        installed=toolstate.load_installed(session.paths), unfinished={session.box.id: "forest"},
+        home=shop.home, console=FakeConsole(), now=NOW, on_path=lambda n: None,
+    )  # fmt: skip
+
+
+TOOL_FAULTS = ["venv", "pip", "a command name", "the download"]
+
+
+def break_the_tool(session, shop, pyshop, monkeypatch, fault):
+    if fault in ("venv", "pip"):
+        toolkit.no_real_venv(monkeypatch, fail=fault)
+    elif fault == "a command name":
+        take_the_command(session, shop)
+    else:
+        (shop.folder / pyshop.certipy.file).unlink()
+
+
+@pytest.mark.parametrize("fault", TOOL_FAULTS)
+def test_a_failed_install_takes_the_runtime_it_brought_away_again(
+    session, shop, pyshop, monkeypatch, fault
+):
+    break_the_tool(session, shop, pyshop, monkeypatch, fault)
+    console = run(session, "tool install certipy")
+    assert len(lines(console, "fail")) == 1
+    assert lines(console, "ok") == [RT_LINE]  # installed, then taken away again
+    nothing_of(session, "certipy", "python-3.13")
+    assert [t.name for t in load_box(session.box.path).tools] == (
+        ["taker"] if fault == "a command name" else []
+    )
+
+
+@pytest.mark.parametrize("fault", TOOL_FAULTS)
+def test_a_failed_install_leaves_a_runtime_that_was_already_there(
+    session, shop, pyshop, monkeypatch, fault
+):
+    run(session, "tool install bloodhound")
+    before = runtime_row(session)
+    break_the_tool(session, shop, pyshop, monkeypatch, fault)
+    console = run(session, "tool install certipy")
+    assert len(lines(console, "fail")) == 1 and lines(console, "ok") == []
+    nothing_of(session, "certipy")
+    assert runtime_row(session) == before and Path(before.python).is_file()
+
+
+def test_a_runtime_whose_removal_fails_after_a_failed_install_is_a_warn(
+    session, shop, pyshop, monkeypatch
+):
+    toolkit.no_real_venv(monkeypatch, fail="pip")
+
+    def stuck(paths, item):
+        raise ToolError("the folder is busy")
+
+    monkeypatch.setattr(cmd_tool.toolinstall, "remove_runtime", stuck)
+    console = run(session, "tool install certipy")
+    assert lines(console, "warn") == ["python-3.13 3.13.18   the folder is busy"]
+    assert len(lines(console, "fail")) == 1 and "pip" in lines(console, "fail")[0]
+    assert runtime_row(session) is not None  # the launch check offers it again
+
+
+def test_a_schema_1_build_of_a_python_tool_installs_as_before(session, shop, pyshop):
+    wheel = toolkit.make_wheel(
+        shop.folder / "w1", "certipy-py", "1.0", module="tool", entry="certipy"
+    )
+    manifest = toolkit.sample_manifest(
+        name="certipy", version="5.1.0", build=2, arch=machine_arch(),
+        command=[{"name": "certipy", "type": "python-entry", "entry": "certipy"}],
+        python={"versions": ["3.13"], "lock": "wheels.lock", "wheels": "wheels"},
+    )  # fmt: skip
+    zip_path, size, sha = toolkit.make_package(shop.folder, manifest, {}, wheels=[wheel])
+    old = BuildEntry(
+        "certipy", "5.1.0", 2, "kali", False, ["certipy"], zip_path.name, "", size, sha
+    )
+    toolkit.write_index(shop.folder, [*shop.entries, pyshop.runtime, old, pyshop.certipy])
+    console = run(session, "tool install certipy@5.1.0-2")
+    assert lines(console, "ok") == ["certipy 5.1.0 installed"]
+    assert pyshop.calls[0][:2] == ["python3", "-c"]
+    assert runtime_row(session) is None
+    assert load_box(session.box.path).tools[0].runtime is None
+
+
+def test_install_refuses_a_runtime(session, shop, pyshop):
+    console = run(session, "tool install python-3.13")
+    assert lines(console, "fail") == [REFUSED]
+    assert pyshop.fetched == [] and runtime_row(session) is None
+    assert lines(run(session, "tool install python-3.13@3.13.18"), "fail") == [REFUSED]
+
+
+def test_remove_refuses_a_runtime_installed_or_not(session, shop, pyshop):
+    assert lines(run(session, "tool remove python-3.13", "y"), "fail") == [REFUSED]
+    run(session, "tool install certipy")
+    console = run(session, "tool remove python-3.13", "y")
+    assert lines(console, "fail") == [REFUSED] and console.asked == []
+    assert runtime_row(session) is not None
+
+
+def test_listings_completions_and_counts_leave_runtimes_out(session, shop, pyshop):
+    start = session.box.started
+    run(session, "tool install certipy")
+    _columns, rows = table(run(session, "tool list"))
+    assert [r[0] for r in rows] == ["bloodhound", "certipy", "kerbrute", "ligolo-ng"]
+    _columns, rows = table(run(session, "tool list --installed"))
+    assert [r[0] for r in rows] == ["certipy"]
+    assert lines(run(session, "tool search python"), "info") == ["no tools match python"]
+    assert "tool install python-3.13" not in completions(session, "tool install ")
+    assert completions(session, "tool info p") == []
+    assert completions(session, "tool remove ") == ["tool remove certipy"]
+    assert toolbar_text(session, start).endswith("1 target   1 tool   no vpn   00:00")
+    assert "tools      1" in lines(run(session, "status"), "info")
+    assert lines(run(session, "tool refresh"), "ok") == ["index refreshed: 4 tools"]
+
+
+def info_lines(session, name):
+    return lines(run(session, f"tool info {name}"), "info")
+
+
+def test_info_names_the_runtime_a_tool_requires(session, shop, pyshop):
+    shown = info_lines(session, "certipy")
+    after = shown[shown.index("versions    5.1.0-3") + 1]
+    assert after == "requires    python-3.13 (1 MB, not installed)"
+    run(session, "tool install bloodhound")
+    assert "requires    python-3.13 (1 MB, installed)" in info_lines(session, "certipy")
+    assert not any(t.startswith("requires") for t in info_lines(session, "kerbrute"))
+
+
+def test_info_for_a_tool_whose_runtime_is_not_in_the_index(session, shop, pyshop):
+    toolkit.write_index(shop.folder, [e for e in pyshop.entries if e.name != "python-3.13"])
+    assert "requires    python-3.13 (not in the index)" in info_lines(session, "certipy")
+
+
+def test_remove_takes_the_runtime_with_the_last_tool_that_requires_it(session, shop, pyshop):
+    run(session, "tool install certipy")
+    console = run(session, "tool remove certipy", "y")
+    assert lines(console, "ok") == ["certipy removed; its files are deleted", RT_GONE]
+    assert toolstate.load_installed(session.paths) == {}
+    assert not (session.paths.tools / "python-3.13").exists()
+
+
+def test_two_tools_share_a_runtime_until_the_last_is_removed(session, shop, pyshop):
+    run(session, "tool install certipy")
+    run(session, "tool install bloodhound")
+    console = run(session, "tool remove certipy", "y")
+    assert lines(console, "ok") == ["certipy removed; its files are deleted"]
+    assert runtime_row(session) is not None
+    console = run(session, "tool remove bloodhound", "y")
+    assert lines(console, "ok") == ["bloodhound removed; its files are deleted", RT_GONE]
+    assert runtime_row(session) is None
+
+
+def install_on_runtime_for(box, session, shop, pyshop, entry):
+    # another unfinished box installs a tool on the runtime
+    paths = session.paths
+    installed = toolstate.load_installed(paths)
+    rt = toolinstall.install_runtime(
+        paths, pyshop.runtime, shop.folder / pyshop.runtime.file,
+        installed=installed, console=FakeConsole(),
+    )  # fmt: skip
+    toolinstall.install(
+        paths, box, entry, shop.folder / entry.file,
+        installed=installed, unfinished={box.id: box.name},
+        home=shop.home, console=FakeConsole(), now=NOW, on_path=lambda n: None, runtime=rt,
+    )  # fmt: skip
+
+
+def test_a_runtime_a_tool_of_another_unfinished_box_requires_stays(session, shop, pyshop, other):
+    install_on_runtime_for(other, session, shop, pyshop, pyshop.certipy)
+    run(session, "tool install bloodhound")
+    console = run(session, "tool remove bloodhound", "y")
+    assert lines(console, "ok") == ["bloodhound removed; its files are deleted"]
+    assert runtime_row(session) is not None
+    assert toolstate.load_installed(session.paths)["certipy"].users == [other.id]
+
+
+def test_a_runtime_under_a_tool_another_box_shares_stays(session, shop, pyshop, other):
+    install_on_runtime_for(other, session, shop, pyshop, pyshop.certipy)
+    console = run(session, "tool install certipy")
+    assert lines(console, "ok") == ["certipy 5.1.0 installed"]
+    console = run(session, "tool remove certipy", "y")
+    assert "Cascade still uses it" in lines(console, "ok")[0]
+    assert runtime_row(session) is not None
+
+
+def test_no_runtime_is_removed_while_a_box_cannot_be_read(session, shop, pyshop):
+    run(session, "tool install certipy")
+    break_a_box(session)
+    console = run(session, "tool remove certipy", "y")
+    assert lines(console, "ok") == ["certipy removed; its files are deleted"]
+    assert lines(console, "warn") == ["python-3.13 kept: broken cannot be read"]
+    assert runtime_row(session) is not None
+
+
+def test_a_runtime_that_cannot_be_removed_is_a_warn(session, shop, pyshop, monkeypatch):
+    run(session, "tool install certipy")
+
+    def stuck(paths, item):
+        raise ToolError("the folder is busy")
+
+    monkeypatch.setattr(cmd_tool.toolinstall, "remove_runtime", stuck)
+    console = run(session, "tool remove certipy", "y")
+    assert lines(console, "ok") == ["certipy removed; its files are deleted"]
+    assert lines(console, "warn") == ["python-3.13 3.13.18   the folder is busy"]
+    assert lines(console, "fail") == []
+    assert runtime_row(session) is not None

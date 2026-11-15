@@ -3,20 +3,21 @@ import shutil
 import sys
 import tarfile
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import toolkit
 from helpers import NOW
-from pwn_broker import lifecycle, toolhooks, toolinstall, toolstate
+from pwn_broker import lifecycle, toolhooks, toolindex, toolinstall, toolstate
 from pwn_broker.archive import archive_path
 from pwn_broker.console import FakeConsole
 from pwn_broker.lifecycle import export_box, finish_box, import_box
 from pwn_broker.model import ToolRecord
 from pwn_broker.paths import AppPaths
 from pwn_broker.store import load_box, save_box
-from pwn_broker.toolpkg import ToolError
+from pwn_broker.toolpkg import ToolError, machine_arch
 from pwn_broker.toolstate import load_installed
 
 SAVED = dict(fix=lambda path: 0, unsaved=lambda box: False)
@@ -398,9 +399,11 @@ def test_leftovers_never_take_a_runtime_for_an_unused_tool_or_a_stray(paths, tmp
     zip_path, entry = toolkit.make_runtime(tmp_path / "rtzips")
     installed = {}
     toolinstall.install_runtime(paths, entry, zip_path, installed=installed, console=FakeConsole())
-    console = FakeConsole(["y", "y"])
+    console = FakeConsole(["n", "y"])
     toolhooks.leftovers(paths, console)
-    assert console.asked == [] and console.lines == []
+    # offered once, as a runtime
+    assert console.asked == [RUNTIME_QUESTION]
+    assert console.lines == [("info", "runtimes  python-3.13 3.13.18")]
     assert list(load_installed(paths)) == ["python-3.13"]
     assert (paths.tools / "python-3.13" / "3.13.18-1").is_dir()
 
@@ -981,3 +984,314 @@ def test_a_removed_orphans_home_paths_are_named_not_deleted(tooled, user):
         "warn",
         f"{user / '.kerb'} was left by kerbrute; remove it by hand if it is not needed",
     ) in console.lines
+
+
+# ---- runtimes
+
+RUNTIME_QUESTION = "remove runtimes no installed tool requires?"
+RT_LINE = ("ok", "python-3.13 3.13.18 installed (runtime, 1 MB)")
+RT_GONE = ("ok", "python-3.13 3.13.18 removed (runtime)")
+RT_SUMMARY = "runtimes  python-3.13 3.13.18   (will be removed)"
+
+
+@pytest.fixture
+def pyshop(shop, monkeypatch):
+    # certipy and bloodhound both require python-3.13
+    calls = toolkit.no_real_venv(monkeypatch)
+    _z, runtime = toolkit.make_runtime(shop.folder)
+    _z, certipy = toolkit.make_python_tool(shop.folder)
+    _z, bloodhound = toolkit.make_python_tool(shop.folder, "bloodhound", "1.8.0", build=1)
+    entries = [shop.entry, runtime, certipy, bloodhound]
+    toolkit.write_index(shop.folder, entries)
+    return SimpleNamespace(
+        runtime=runtime, certipy=certipy, bloodhound=bloodhound, entries=entries, calls=calls
+    )
+
+
+def put(session, entry, box=None):
+    # installs a tool, and the runtime it requires, for the box (the session's by default)
+    installed = load_installed(session.paths)
+    box = box or session.box
+    index = toolindex.load_index(session.paths, session.settings, now=NOW)
+    for name in entry.requires:
+        rt_entry = toolindex.pick_build(toolindex.find_runtime(index, name), None)
+        zip_path = toolindex.fetch_zip(session.paths, session.settings, rt_entry)
+        toolinstall.install_runtime(
+            session.paths, rt_entry, zip_path, installed=installed, console=FakeConsole()
+        )
+    toolinstall.install(
+        session.paths, box, entry, toolindex.fetch_zip(session.paths, session.settings, entry),
+        installed=installed, unfinished={box.id: box.name}, home=toolhooks.user_home(),
+        console=FakeConsole(), now=NOW, on_path=lambda n: None,
+        runtime=installed.get(entry.requires[0]) if entry.requires else None,
+    )  # fmt: skip
+
+
+def runtime_row(paths):
+    return load_installed(paths).get("python-3.13")
+
+
+def wipe_all(session):
+    # the machine has none of the tools or runtimes the box recorded
+    installed = load_installed(session.paths)
+    for item in installed.values():
+        if item.kind == "runtime":
+            toolinstall.remove_runtime(session.paths, item)
+        else:
+            toolinstall.remove_files(session.paths, item)
+    toolstate.save_installed(session.paths, {})
+
+
+def test_summary_lists_the_runtimes_that_will_go(tooled, pyshop):
+    put(tooled, pyshop.certipy)
+    shown = toolhooks.summary(say(tooled))
+    assert shown[:2] == ["tools     kerbrute 1.0.3, certipy 5.1.0   (will be removed)", RT_SUMMARY]
+
+
+def test_summary_keeps_a_runtime_a_tool_of_another_unfinished_box_requires(tooled, pyshop, other):
+    put(tooled, pyshop.certipy)
+    put(tooled, pyshop.bloodhound, box=other)
+    assert RT_SUMMARY not in toolhooks.summary(say(tooled))
+    # the same holds when the other box shares the very tool
+    put(tooled, pyshop.certipy, box=other)
+    toolinstall.release(
+        tooled.paths, other, "bloodhound",
+        installed=load_installed(tooled.paths), unfinished={other.id: other.name},
+    )  # fmt: skip
+    assert RT_SUMMARY not in toolhooks.summary(say(tooled))
+
+
+def test_summary_lists_no_runtime_while_a_box_cannot_be_read(tooled, pyshop, other):
+    put(tooled, pyshop.certipy)
+    break_box(other.path)
+    assert RT_SUMMARY not in toolhooks.summary(say(tooled))
+
+
+def test_finish_removes_the_runtime_with_the_last_tool(tooled, pyshop, user):
+    put(tooled, pyshop.certipy)
+    shown = []
+    say(tooled, "y", "y")
+    original = tooled.console.confirm
+    tooled.console.confirm = lambda q, default=False: (
+        shown.extend(tooled.console.lines) or original(q, default)
+    )
+    path = finish_box(tooled, **SAVED)
+    assert path is not None and path.exists()
+    assert ("info", RT_SUMMARY) in shown
+    assert RT_GONE in tooled.console.lines
+    assert load_installed(tooled.paths) == {}
+    assert not (tooled.paths.tools / "python-3.13").exists()
+    # nothing kept the working folder: finish went on to offer its removal
+    assert tooled.console.asked[-1] == "remove working folder?"
+    assert not tooled.box.path.exists()
+    # the finished box still names the runtime its tool ran on
+    archived = [t for t in tooled.box.tools if t.name == "certipy"]
+    assert archived[0].runtime.name == "python-3.13"
+
+
+def test_finish_keeps_a_runtime_a_tool_of_another_unfinished_box_requires(tooled, pyshop, other):
+    put(tooled, pyshop.certipy)
+    put(tooled, pyshop.bloodhound, box=other)
+    say(tooled, "y")
+    assert finish_box(tooled, **SAVED) is not None
+    assert RT_GONE not in tooled.console.lines
+    assert set(load_installed(tooled.paths)) == {"bloodhound", "python-3.13"}
+
+
+def test_finish_keeps_every_runtime_while_a_box_cannot_be_read(tooled, pyshop, other):
+    put(tooled, pyshop.certipy)
+    break_box(other.path)
+    say(tooled, "y")
+    assert finish_box(tooled, **SAVED) is not None
+    assert lines(tooled, "warn")[-1] == f"python-3.13 kept: {other.path.name} cannot be read"
+    assert runtime_row(tooled.paths) is not None
+
+
+def test_a_runtime_finish_cannot_remove_is_a_warn_and_offered_at_launch(
+    tooled, pyshop, monkeypatch
+):
+    put(tooled, pyshop.certipy)
+    real = toolinstall.remove_runtime
+
+    def stuck(paths, item):
+        raise ToolError("the folder is busy")
+
+    monkeypatch.setattr(toolinstall, "remove_runtime", stuck)
+    say(tooled, "y", "y")
+    assert finish_box(tooled, **SAVED) is not None
+    assert ("warn", "python-3.13 3.13.18   the folder is busy") in tooled.console.lines
+    assert lines(tooled, "fail") == []
+    assert tooled.console.asked[-1] == "remove working folder?"
+    assert not tooled.box.path.exists()
+    assert list(load_installed(tooled.paths)) == ["python-3.13"]
+    monkeypatch.setattr(toolinstall, "remove_runtime", real)
+    console = FakeConsole(["y"])
+    toolhooks.leftovers(tooled.paths, console)
+    assert console.asked == [RUNTIME_QUESTION]
+    assert ("ok", "removed python-3.13 3.13.18 (runtime)") in console.lines
+    assert load_installed(tooled.paths) == {}
+    assert not (tooled.paths.tools / "python-3.13").exists()
+
+
+def test_import_installs_the_runtime_before_the_tool(tooled, pyshop, tmp_path):
+    put(tooled, pyshop.certipy)
+    archive = export_box(tooled, fix=lambda p: 0)
+    wipe_all(tooled)
+    paths = fresh_paths(tooled, tmp_path)
+    console = FakeConsole(["y"])
+    box = import_box(paths, tooled.settings, console, archive, lambda: NOW)
+    assert box is not None
+    oks = [t for k, t in console.lines if k == "ok"]
+    assert oks.index(RT_LINE[1]) < oks.index("certipy 5.1.0 installed")
+    assert not any("now runs on" in t for t in oks)
+    installed = load_installed(paths)
+    assert box.id in installed["certipy"].users and installed["python-3.13"].build == 1
+
+
+def restore_after(tooled, pyshop, runtime_entries):
+    # the box recorded certipy on python-3.13 3.13.18-1; the index now lists other runtimes
+    put(tooled, pyshop.certipy)
+    wipe_all(tooled)
+    others = [e for e in pyshop.entries if e.name != "python-3.13"]
+    toolkit.write_index(pyshop_folder(tooled), [*others, *runtime_entries])
+    say(tooled, "y")
+    toolhooks.restore(tooled)
+
+
+def pyshop_folder(session):
+    return Path(session.settings.tools_index)
+
+
+@pytest.mark.parametrize(
+    "version, build, note",
+    [
+        ("3.13.19", 1, "certipy now runs on python-3.13 3.13.19; this box used 3.13.18 before"),
+        ("3.13.18", 2, "certipy now runs on python-3.13 3.13.18-2; this box used 3.13.18-1 before"),
+    ],
+)
+def test_import_on_another_runtime_build_says_so_and_carries_on(
+    tooled, pyshop, version, build, note
+):
+    _z, newer = toolkit.make_runtime(pyshop_folder(tooled), version=version, build=build)
+    restore_after(tooled, pyshop, [newer])
+    assert ("ok", note) in tooled.console.lines
+    assert lines(tooled, "warn") == []
+    [record] = [t for t in load_box(tooled.box.path).tools if t.name == "certipy"]
+    assert (record.runtime.version, record.runtime.build) == (version, build)
+    assert runtime_row(tooled.paths).version == version
+
+
+def test_import_uses_the_runtime_already_installed_at_another_build(tooled, pyshop, other):
+    put(tooled, pyshop.certipy)
+    wipe_all(tooled)
+    _z, newer = toolkit.make_runtime(pyshop_folder(tooled), build=2)
+    toolkit.write_index(pyshop_folder(tooled), [*pyshop.entries, newer])
+    put(tooled, pyshop.bloodhound, box=other)  # brings 3.13.18-2, the index's latest
+    toolkit.write_index(pyshop_folder(tooled), pyshop.entries)
+    say(tooled, "y")
+    toolhooks.restore(tooled)
+    assert RT_LINE not in tooled.console.lines
+    assert (
+        "ok", "certipy now runs on python-3.13 3.13.18-2; this box used 3.13.18-1 before"
+    ) in tooled.console.lines
+    assert runtime_row(tooled.paths).build == 2
+
+
+def test_import_warns_for_a_tool_whose_runtime_the_index_no_longer_lists(tooled, pyshop):
+    restore_after(tooled, pyshop, [])
+    assert lines(tooled, "warn") == [
+        "certipy 5.1.0   no runtime named 'python-3.13' in the index"
+    ]
+    installed = load_installed(tooled.paths)
+    assert "kerbrute" in installed  # the others carry on
+    assert "certipy" not in installed and "python-3.13" not in installed
+
+
+def test_import_takes_away_a_runtime_it_brought_for_a_tool_that_fails(
+    tooled, pyshop, monkeypatch
+):
+    put(tooled, pyshop.certipy)
+    wipe_all(tooled)
+    toolkit.no_real_venv(monkeypatch, fail="pip")
+    say(tooled, "y")
+    toolhooks.restore(tooled)
+    assert RT_LINE in tooled.console.lines
+    assert any(t.startswith("certipy 5.1.0   pip failed") for t in lines(tooled, "warn"))
+    installed = load_installed(tooled.paths)
+    assert "kerbrute" in installed and "python-3.13" not in installed
+    assert not (tooled.paths.tools / "python-3.13").exists()
+
+
+def test_a_box_that_recorded_a_schema_1_python_tool_gets_that_build(tooled, pyshop, user):
+    folder = pyshop_folder(tooled)
+    wheel = toolkit.make_wheel(folder / "w1", "certipy-py", "1.0", module="tool", entry="certipy")
+    manifest = toolkit.sample_manifest(
+        name="certipy", version="5.1.0", build=2, arch=machine_arch(),
+        command=[{"name": "certipy", "type": "python-entry", "entry": "certipy"}],
+        python={"versions": ["3.13"], "lock": "wheels.lock", "wheels": "wheels"},
+    )  # fmt: skip
+    zip_path, size, sha = toolkit.make_package(folder, manifest, {}, wheels=[wheel])
+    old = toolindex.BuildEntry(
+        "certipy", "5.1.0", 2, "kali", False, ["certipy"], zip_path.name, "", size, sha
+    )
+    # the index's latest certipy is build 3, on the runtime; the box recorded build 2
+    toolkit.write_index(folder, [shop_entry(pyshop), pyshop.runtime, old, pyshop.certipy])
+    tooled.box.tools.append(ToolRecord("certipy", "5.1.0", 2, sha, NOW))
+    save_box(tooled.box)
+    say(tooled, "y")
+    toolhooks.restore(tooled)
+    assert ("ok", "certipy 5.1.0 installed") in tooled.console.lines
+    assert pyshop.calls[0][:2] == ["python3", "-c"]  # Kali's own Python
+    installed = load_installed(tooled.paths)
+    assert installed["certipy"].build == 2 and "python-3.13" not in installed
+    [record] = [t for t in load_box(tooled.box.path).tools if t.name == "certipy"]
+    assert record.build == 2 and record.runtime is None
+
+
+def shop_entry(pyshop):
+    return pyshop.entries[0]
+
+
+def test_leftovers_offer_the_runtime_of_a_tool_they_removed(tooled, pyshop):
+    put(tooled, pyshop.certipy)
+    finish_without_undo(tooled)
+    console = FakeConsole(["y", "y"])
+    toolhooks.leftovers(tooled.paths, console)
+    assert console.asked == ["remove tools left by finished boxes?", RUNTIME_QUESTION]
+    assert ("info", "runtimes  python-3.13 3.13.18") in console.lines
+    assert load_installed(tooled.paths) == {}
+    assert not (tooled.paths.tools / "python-3.13").exists()
+
+
+def test_leftovers_keep_a_runtime_a_tool_still_requires(tooled, pyshop):
+    put(tooled, pyshop.certipy)
+    finish_without_undo(tooled)
+    console = FakeConsole(["n"])
+    toolhooks.leftovers(tooled.paths, console)
+    # the tools stay, so the runtime their tool requires is not offered
+    assert console.asked == ["remove tools left by finished boxes?"]
+    assert runtime_row(tooled.paths) is not None
+
+
+def test_leftovers_offer_no_runtime_while_a_box_cannot_be_read(tooled, pyshop, other):
+    put(tooled, pyshop.certipy)
+    installed = load_installed(tooled.paths)
+    toolinstall.release(
+        tooled.paths, tooled.box, "certipy", installed=installed, unfinished={}
+    )
+    break_box(other.path)
+    console = FakeConsole(["y", "y"])
+    toolhooks.leftovers(tooled.paths, console)
+    assert RUNTIME_QUESTION not in console.asked
+    assert runtime_row(tooled.paths) is not None
+
+
+def test_a_runtime_folder_with_no_row_is_a_stray(tooled, pyshop):
+    put(tooled, pyshop.certipy)
+    installed = load_installed(tooled.paths)
+    del installed["python-3.13"]
+    toolstate.save_installed(tooled.paths, installed)
+    console = FakeConsole(["y"])
+    toolhooks.leftovers(tooled.paths, console)
+    assert console.asked == [SWEEP_QUESTION]
+    assert ("info", f"left      {tooled.paths.tools / 'python-3.13'}") in console.lines

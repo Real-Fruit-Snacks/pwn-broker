@@ -25,6 +25,11 @@ def _index(session: Session) -> Index:
     return toolindex.load_index(session.paths, session.settings, now=session.clock())
 
 
+def _tools(index: Index) -> list[ToolEntry]:
+    # runtimes come with the tools that need them and are never shown on their own
+    return [t for t in index.tools if not toolindex.is_runtime(t)]
+
+
 def _latest(tool: ToolEntry) -> BuildEntry | None:
     try:
         return toolindex.pick_build(tool, None)
@@ -77,7 +82,7 @@ def tool_list(session: Session, args: list[str]) -> None:
     status = _status(session)
     if option is None:
         rows = []
-        for tool in sorted(_index(session).tools, key=lambda t: t.name):
+        for tool in sorted(_tools(_index(session)), key=lambda t: t.name):
             build = _latest(tool)
             rows.append(
                 [
@@ -169,6 +174,23 @@ def _line(session: Session, label: str, text: str) -> None:
     session.console.info(f"{label:<{_LABEL}}{text}")
 
 
+def _requirement(session: Session, index: Index, name: str) -> str:
+    try:
+        runtime = _latest(toolindex.find_runtime(index, name))
+    except ToolError:
+        runtime = None
+    if runtime is None:
+        return f"{name} (not in the index)"
+    try:
+        here = toolinstall.runtime_intact(
+            session.paths, toolstate.load_installed(session.paths).get(name)
+        )
+    except ToolError:
+        here = False
+    state = "installed" if here else "not installed"
+    return f"{name} ({toolinstall.megabytes(runtime.size)} MB, {state})"
+
+
 @command("tool info", "show a tool's details, how to run it and its examples")
 def tool_info(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, required=("tool name",))
@@ -188,6 +210,8 @@ def tool_info(session: Session, args: list[str]) -> None:
         _line(session, "licence", tool.licence)
         _line(session, "upstream", tool.upstream)
         _line(session, "versions", ", ".join(build_id(b.version, b.build) for b in tool.builds))
+        for name in build.requires if build else []:
+            _line(session, "requires", _requirement(session, index, name))
     if item is None:
         return
     paths = session.paths
@@ -219,7 +243,10 @@ def tool_install(session: Session, args: list[str]) -> None:
     if not name or (at and not version):
         raise ValueError(f"expected <name> or <name>@<version>, not {spec}")
     box, console = session.box, session.console
-    tool = toolindex.find_tool(_index(session), name)
+    index = _index(session)
+    tool = toolindex.find_tool(index, name)
+    if toolindex.is_runtime(tool):
+        raise ToolError(toolinstall.runtime_refusal(name))
     build = toolindex.pick_build(tool, version if at else None)
     installed = toolstate.load_installed(session.paths)
     toolinstall.check_recorded(box, build)
@@ -242,17 +269,12 @@ def tool_install(session: Session, args: list[str]) -> None:
     if current is not None and current.home:
         sharing = [unfinished[u] for u in current.users if u != box.id and u in unfinished]
 
-    zip_path = toolindex.fetch_zip(session.paths, session.settings, build)
-    toolinstall.install(
-        session.paths,
-        box,
+    toolhooks.install_tool(
+        session,
+        index,
         build,
-        zip_path,
         installed=installed,
         unfinished=unfinished,
-        home=toolhooks.user_home(),
-        console=console,
-        now=session.clock(),
         # the app's own bin is left out, so another copy is found even once a launcher exists
         on_path=lambda cmd: _lookup(cmd, path=_outside_bin(session)),
     )
@@ -268,6 +290,8 @@ def tool_remove(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, required=("tool name",))
     box, console = session.box, session.console
     if name not in _have(session):
+        if _is_runtime_name(session, name):
+            raise ToolError(toolinstall.runtime_refusal(name))
         raise ToolError(f"{name} is not installed for {box.name}")
     found = toolstate.running(session.paths, tools=[name])
     if found:
@@ -296,10 +320,28 @@ def tool_remove(session: Session, args: list[str]) -> None:
     item = installed.get(name)
     if gone or item is None or not item.users:
         console.ok(f"{name} removed; its files are deleted" if gone else f"{name} removed from {box.name}")
-        return
-    users = [holding.get(u, "another box") for u in item.users]
-    verb = "still uses" if len(users) == 1 else "still use"
-    console.ok(f"{name} removed from {box.name}; {', '.join(users)} {verb} it, so its files stay")
+    else:
+        users = [holding.get(u, "another box") for u in item.users]
+        verb = "still uses" if len(users) == 1 else "still use"
+        console.ok(
+            f"{name} removed from {box.name}; {', '.join(users)} {verb} it, so its files stay"
+        )
+    toolhooks.remove_idle_runtimes(session.paths, installed, console)
+
+
+def _is_runtime_name(session: Session, name: str) -> bool:
+    # only asked once the box is known not to have the name, so a failed lookup means no
+    try:
+        item = toolstate.load_installed(session.paths).get(name)
+    except ToolError:
+        item = None
+    if item is not None:
+        return item.kind == "runtime"
+    try:
+        toolindex.find_runtime(_index(session), name)
+    except ToolError:
+        return False
+    return True
 
 
 @command("tool refresh", "fetch the tool index now")
@@ -308,7 +350,7 @@ def tool_refresh(session: Session, args: list[str]) -> None:
     index = toolindex.load_index(
         session.paths, session.settings, now=session.clock(), force=True
     )
-    session.console.ok(f"index refreshed: {_count(len(index.tools), 'tool')}")
+    session.console.ok(f"index refreshed: {_count(len(_tools(index)), 'tool')}")
 
 
 @command("tool cache clear", "empty the download cache")

@@ -267,3 +267,56 @@ def _build_row(b) -> dict:
     if b.requires:
         row["requires"] = list(b.requires)
     return row
+
+
+def make_python_tool(
+    folder: Path, name: str = "certipy", version: str = "5.1.0", *, build: int = 3, **overrides
+):
+    """A schema 2 Python tool that requires python-3.13, and its index entry."""
+    from pwn_broker.toolindex import BuildEntry
+    from pwn_broker.toolpkg import machine_arch
+
+    wheel = make_wheel(folder / "wheel-source", f"{name}-py", "1.0", module="tool", entry=name)
+    manifest = sample_manifest(
+        name=name, version=version, build=build, arch=machine_arch(), requires=["python-3.13"],
+        command=[{"name": name, "type": "python-entry", "entry": name}], **overrides,
+    )  # fmt: skip
+    zip_path, size, sha = make_package(folder, manifest, {}, wheels=[wheel])
+    entry = BuildEntry(
+        name=name,
+        version=version,
+        build=build,
+        kind=manifest["kind"],
+        needs_root=False,
+        commands=[name],
+        file=zip_path.name,
+        url="",
+        size=size,
+        sha256=sha,
+        requires=list(manifest["requires"]),
+    )
+    return zip_path, entry
+
+
+def no_real_venv(monkeypatch, *, fail: str | None = None):
+    """Stands in for the programs an install runs, so nothing runs.
+
+    Kali's Python reports 3.13; `fail` names a step ("venv" or "pip") that exits 1.
+    """
+    from types import SimpleNamespace
+
+    from pwn_broker import toolinstall
+
+    calls: list[list[str]] = []
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        if argv[1] == "-c":
+            return SimpleNamespace(returncode=0, stdout="3.13\n", stderr="")
+        if fail is not None and fail in argv:
+            return SimpleNamespace(returncode=1, stdout="", stderr=f"{fail} refused\n")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    defaults = {**toolinstall.install.__kwdefaults__, "run": run}
+    monkeypatch.setattr(toolinstall.install, "__kwdefaults__", defaults)
+    return calls

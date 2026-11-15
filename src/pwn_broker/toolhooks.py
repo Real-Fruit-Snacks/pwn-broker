@@ -3,10 +3,11 @@ from pathlib import Path
 
 from pwn_broker import lifecycle, tooldata, toolindex, toolinstall, toolstate
 from pwn_broker.console import Cancelled, Console
-from pwn_broker.model import Box, ToolRecord
+from pwn_broker.model import Box, RuntimeRecord, ToolRecord
 from pwn_broker.paths import AppPaths
 from pwn_broker.session import Session
 from pwn_broker.store import StoreError, save_box
+from pwn_broker.toolindex import BuildEntry, Index
 from pwn_broker.toolpkg import ToolError, build_id
 from pwn_broker.toolstate import Installed, load_installed, unfinished_boxes
 
@@ -33,6 +34,107 @@ def user_homes() -> list[Path]:
 
 def _others(item: Installed, box_id: str, unfinished: dict[str, str]) -> bool:
     return any(u != box_id and u in unfinished for u in item.users)
+
+
+# ---- runtimes
+
+
+def install_tool(
+    session: Session,
+    index: Index,
+    entry: BuildEntry,
+    *,
+    installed: dict[str, Installed],
+    unfinished: dict[str, str],
+    **options,
+) -> Installed:
+    """Installs a tool for the session's box, with the runtime it requires installed first.
+
+    A runtime already on the machine, at any build, is used as it is; otherwise the index's
+    latest build is installed. If the tool then cannot be installed, a runtime this call brought
+    is removed again; one that was there before is left alone.
+    """
+    paths, console = session.paths, session.console
+    # every runtime is found in the index before anything is fetched
+    missing = [
+        toolindex.pick_build(toolindex.find_runtime(index, name), None)
+        for name in entry.requires
+        if not toolinstall.runtime_intact(paths, installed.get(name))
+    ]
+    brought: list[Installed] = []
+    try:
+        for runtime_entry in missing:
+            before = installed.get(runtime_entry.name)
+            zip_path = toolindex.fetch_zip(paths, session.settings, runtime_entry)
+            item = toolinstall.install_runtime(
+                paths, runtime_entry, zip_path, installed=installed, console=console
+            )
+            if item is not before:
+                brought.append(item)
+        runtime = installed.get(entry.requires[0]) if entry.requires else None
+        zip_path = toolindex.fetch_zip(paths, session.settings, entry)
+        return toolinstall.install(
+            paths,
+            session.box,
+            entry,
+            zip_path,
+            installed=installed,
+            unfinished=unfinished,
+            home=user_home(),
+            console=console,
+            now=session.clock(),
+            runtime=runtime,
+            **options,
+        )
+    except BaseException:
+        for item in brought:
+            try:
+                toolinstall.forget_runtime(paths, installed, item.name)
+            except Exception as exc:  # the install's own error is the one to report
+                console.warn(f"{item.name} {item.version}   {exc}")
+        raise
+
+
+def _unreadable_names(paths: AppPaths) -> str:
+    return ", ".join(p.split(":", 1)[0] for p in toolstate.unreadable_boxes(paths))
+
+
+def remove_idle_runtimes(
+    paths: AppPaths, installed: dict[str, Installed], console: Console
+) -> None:
+    """Removes the runtimes no installed tool requires. A failure is a warn line, never raised."""
+    idle = toolstate.idle_runtimes(installed)
+    if not idle:
+        return
+    # a box that cannot be read may have tools of its own, so nothing is judged unused
+    unreadable = _unreadable_names(paths)
+    if unreadable:
+        console.warn(f"{', '.join(t.name for t in idle)} kept: {unreadable} cannot be read")
+        return
+    for item in idle:
+        try:
+            removed = toolinstall.forget_runtime(paths, installed, item.name)
+        except Exception as exc:  # the launch check offers it again
+            console.warn(f"{item.name} {item.version}   {exc}")
+            continue
+        if removed:
+            console.ok(f"{item.name} {item.version} removed (runtime)")
+
+
+def _freed_runtimes(
+    session: Session, installed: dict[str, Installed], holding: dict[str, str]
+) -> list[Installed]:
+    # the runtimes no tool will require once this box's tools are released
+    box = session.box
+    if toolstate.unreadable_boxes(session.paths):
+        return []
+    mine = {t.name for t in box.tools}
+    staying = {
+        name: item
+        for name, item in installed.items()
+        if item.kind == "runtime" or name not in mine or _others(item, box.id, holding)
+    }
+    return toolstate.idle_runtimes(staying)
 
 
 # ---- finish and export
@@ -72,6 +174,15 @@ def summary(session: Session) -> list[str]:
         return []
     names = ", ".join(f"{t.name} {t.version}" for t in box.tools)
     shown = [f"tools     {names}   (will be removed)"]
+    try:
+        holding = toolstate.holding_boxes(session.paths, installed, excluding=box.id)
+        freed = _freed_runtimes(session, installed, holding)
+    except (ToolError, OSError) as exc:
+        session.console.warn(f"the runtimes to remove could not be listed: {exc}")
+        freed = []
+    if freed:
+        runtimes = ", ".join(f"{t.name} {t.version}" for t in freed)
+        shown.append(f"runtimes  {runtimes}   (will be removed)")
     try:
         unfinished = unfinished_boxes(session.paths)
         homes = user_homes()
@@ -176,6 +287,11 @@ def undo(session: Session) -> None:
             save_box(box)
         except (OSError, StoreError) as exc:
             problems.append(f"the box record could not be saved: {exc}")
+    # a runtime left behind is only a warn: the launch check offers it again
+    try:
+        remove_idle_runtimes(session.paths, installed, session.console)
+    except Exception as exc:
+        session.console.warn(f"runtimes could not be checked: {exc}")
     if problems:
         raise ToolError("; ".join(problems))
 
@@ -232,20 +348,25 @@ def _restore(session: Session) -> None:
             if entry.sha256.lower() != record.sha256.lower():
                 console.warn(f"{label}   the index lists a different SHA-256 than the box; skipped")
                 continue
-            zip_path = toolindex.fetch_zip(session.paths, session.settings, entry)
-            toolinstall.install(
-                session.paths,
-                box,
-                entry,
-                zip_path,
-                installed=installed,
-                unfinished=unfinished,
-                home=user_home(),
-                console=console,
-                now=session.clock(),
-            )
+            ran_on = record.runtime
+            install_tool(session, index, entry, installed=installed, unfinished=unfinished)
+            _runtime_changed(console, record.name, ran_on, installed)
         except Exception as exc:  # one tool failing must not stop the rest
             console.warn(f"{label}   {exc}")
+
+
+def _runtime_changed(
+    console: Console, tool: str, ran_on: RuntimeRecord | None, installed: dict[str, Installed]
+) -> None:
+    # any build of a runtime serves its series; the box's record now names the one it has
+    now = installed.get(ran_on.name) if ran_on is not None else None
+    if now is None or (now.version, now.build) == (ran_on.version, ran_on.build):
+        return
+    if now.version == ran_on.version:
+        shown, before = build_id(now.version, now.build), build_id(ran_on.version, ran_on.build)
+    else:
+        shown, before = now.version, ran_on.version
+    console.ok(f"{tool} now runs on {now.name} {shown}; this box used {before} before")
 
 
 def leftovers(paths: AppPaths, console: Console) -> None:
@@ -260,6 +381,12 @@ def leftovers(paths: AppPaths, console: Console) -> None:
         pass
     except Exception as exc:
         console.warn(f"tools left by finished boxes could not be checked: {exc}")
+    try:
+        _idle(paths, console, installed)
+    except Cancelled:
+        pass
+    except Exception as exc:
+        console.warn(f"runtimes no tool requires could not be checked: {exc}")
     # the installed list is the authority on what belongs; it was read, so the rest can be judged
     try:
         _strays(paths, console, installed)
@@ -296,6 +423,24 @@ def _orphans(paths: AppPaths, console: Console, installed: dict[str, Installed])
         # nothing was copied into a box, so the tool's home data is only named
         for path in tooldata.to_delete(item, homes, False):
             console.warn(f"{path} was left by {item.name}; remove it by hand if it is not needed")
+
+
+def _idle(paths: AppPaths, console: Console, installed: dict[str, Installed]) -> None:
+    idle = toolstate.idle_runtimes(installed)
+    # while a box cannot be read nothing is judged unused; _orphans has said so already
+    if not idle or toolstate.unreadable_boxes(paths):
+        return
+    console.info("runtimes  " + ", ".join(f"{t.name} {t.version}" for t in idle))
+    if not console.confirm("remove runtimes no installed tool requires?", default=True):
+        return
+    for item in idle:
+        try:
+            removed = toolinstall.forget_runtime(paths, installed, item.name)
+        except ToolError as exc:
+            console.warn(f"{item.name}   {exc}")
+            continue
+        if removed:
+            console.ok(f"removed {item.name} {item.version} (runtime)")
 
 
 def _strays(paths: AppPaths, console: Console, installed: dict[str, Installed]) -> None:
