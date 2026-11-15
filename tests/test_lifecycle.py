@@ -1,4 +1,5 @@
 import shutil
+import sys
 import tarfile
 import tomllib
 from dataclasses import replace
@@ -15,7 +16,7 @@ from pwn_broker.lifecycle import export_box, finish_box, import_box, reopen_box
 from pwn_broker.model import Flag
 from pwn_broker.note import read_note
 from pwn_broker.paths import AppPaths
-from pwn_broker.store import load_box, load_creds, load_targets, read_toml, save_box
+from pwn_broker.store import StoreError, load_box, load_creds, load_targets, read_toml, save_box
 
 NOFIX = dict(fix=lambda path: 0)
 SAVED = dict(fix=lambda path: 0, unsaved=lambda box: False)
@@ -310,3 +311,169 @@ def test_reopen_box(box):
     reopen_box(box)
     loaded = load_box(box.path)
     assert loaded.status == "active" and loaded.finished is None
+
+
+def record_calls(monkeypatch):
+    calls = []
+
+    def wrap(name):
+        real = getattr(lifecycle, name)
+
+        def inner(*args, **kwargs):
+            if name == "rescan":
+                tag = "rescan-hash" if kwargs.get("hash_all") else "rescan"
+            elif name == "save_box":
+                tag = f"save-{args[0].status}"
+            else:
+                tag = name
+            calls.append(tag)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(lifecycle, name, inner)
+
+    for name in ("refresh", "rescan", "write_manifest", "pack", "save_box"):
+        wrap(name)
+    return calls
+
+
+def fix_recorder(calls):
+    return lambda path: calls.append("fix") or 0
+
+
+def test_export_order(session, monkeypatch):
+    calls = record_calls(monkeypatch)
+    export_box(session, fix=fix_recorder(calls))
+    assert calls == ["fix", "refresh", "rescan-hash", "write_manifest", "pack"]
+
+
+def test_finish_order(session, monkeypatch):
+    calls = record_calls(monkeypatch)
+    answers(session, "y", "n")
+    finish_box(session, fix=fix_recorder(calls), unsaved=lambda b: False)
+    assert calls == [
+        "rescan", "fix", "save-finished", "refresh", "rescan-hash", "write_manifest", "pack",
+    ]  # fmt: skip
+
+
+def assert_rolled_back(session):
+    box = load_box(session.box.path)
+    assert box.status == "active" and box.finished is None
+    assert session.box.status == "active" and session.box.finished is None
+    assert not archive_path(session.paths, session.box, "finished").exists()
+    assert session.box.path.exists()
+
+
+@pytest.mark.parametrize("exc", [KeyboardInterrupt(), ValueError("bad")])
+def test_finish_rolls_back_on_any_exception_and_reraises(session, monkeypatch, exc):
+    ran = []
+    monkeypatch.setattr(lifecycle, "UNDO_HOOKS", [ran.append])
+
+    def boom(*args):
+        raise exc
+
+    monkeypatch.setattr(lifecycle, "pack", boom)
+    answers(session, "y")
+    with pytest.raises(type(exc)):
+        finish_box(session, **SAVED)
+    assert_rolled_back(session)
+    assert ran == []
+
+
+def test_finish_rolls_back_when_fix_fails(session):
+    def bad_fix(path):
+        raise OSError("sudo failed")
+
+    answers(session, "y")
+    assert finish_box(session, fix=bad_fix, unsaved=lambda b: False) is None
+    assert_rolled_back(session)
+    assert len(kinds(session, "fail")) == 1
+
+
+def test_finish_rolls_back_when_refresh_fails_after_status_save(session, monkeypatch):
+    def boom(s):
+        raise StoreError("cannot write creds")
+
+    monkeypatch.setattr(lifecycle, "refresh", boom)
+    answers(session, "y")
+    assert finish_box(session, **SAVED) is None
+    assert_rolled_back(session)
+
+
+def test_finish_rolls_back_when_hashing_rescan_fails(session, monkeypatch):
+    real = lifecycle.rescan
+
+    def flaky(s, *, hash_all=False):
+        if hash_all:
+            raise OSError("io error")
+        return real(s, hash_all=hash_all)
+
+    monkeypatch.setattr(lifecycle, "rescan", flaky)
+    answers(session, "y")
+    assert finish_box(session, **SAVED) is None
+    assert_rolled_back(session)
+
+
+def test_finish_copy_failure_names_the_archive(session, tmp_path):
+    out = tmp_path / "missing"
+    session.settings = Settings(copy_to=out)
+    answers(session, "y")
+    assert finish_box(session, **SAVED) is None
+    line = kinds(session, "fail")[0]
+    archive = archive_path(session.paths, session.box, "finished")
+    assert str(archive) in line and str(out) in line and "still active" in line
+    assert load_box(session.box.path).status == "active"
+
+
+def test_export_copy_failure_is_a_warning_and_keeps_the_export(session, tmp_path):
+    out = tmp_path / "missing"
+    session.settings = Settings(copy_to=out)
+    path = export_box(session, **NOFIX)
+    assert path is not None and path.exists()
+    assert kinds(session, "fail") == []
+    assert str(path) in kinds(session, "warn")[0] and str(out) in kinds(session, "warn")[0]
+
+
+def test_failing_undo_hook_does_not_stop_the_rest(session, monkeypatch):
+    seen = []
+
+    def broken(s):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(lifecycle, "UNDO_HOOKS", [broken, lambda s: seen.append("second")])
+    answers(session, "y", "n")
+    path = finish_box(session, **SAVED)
+    assert path is not None and seen == ["second"]
+    assert kinds(session, "fail") == ["broken failed: nope"]
+    assert session.console.asked[-1] == "remove working folder?"
+
+
+def test_interrupt_in_undo_hook_propagates(session, monkeypatch):
+    def stop(s):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(lifecycle, "UNDO_HOOKS", [stop])
+    answers(session, "y", "n")
+    with pytest.raises(KeyboardInterrupt):
+        finish_box(session, **SAVED)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_remove_guard_resolves_symlinks(session, tmp_path):
+    target = tmp_path / "real"
+    target.mkdir()
+    link = session.paths.active / "link"
+    link.symlink_to(target, target_is_directory=True)
+    session.box.path = link
+    lifecycle._remove_folder(session)
+    assert target.exists() and len(kinds(session, "warn")) == 1
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_import_asks_when_folder_is_a_dangling_symlink(session, tmp_path):
+    archive = export_box(session, **NOFIX)
+    paths = fresh_home(tmp_path)
+    paths.active.mkdir(parents=True)
+    (paths.active / session.box.path.name).symlink_to(tmp_path / "nowhere")
+    console = FakeConsole(["n"])
+    assert import_box(paths, Settings(), console, archive, lambda: NOW) is None
+    assert len(console.asked) == 1

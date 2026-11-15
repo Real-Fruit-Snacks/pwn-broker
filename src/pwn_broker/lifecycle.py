@@ -1,3 +1,4 @@
+import os
 import shutil
 from collections.abc import Callable
 from datetime import datetime
@@ -34,32 +35,47 @@ def reopen_box(box: Box) -> None:
     save_box(box)
 
 
-def _pack(session: Session, kind: str) -> tuple[Path, Path | None]:
+def _pack(session: Session, kind: str) -> Path:
     box = session.box
     refresh(session)
     records = rescan(session, hash_all=True)
     write_manifest(box, records, kind=kind, now=session.clock())
     dest = archive_path(session.paths, box, kind)
     pack(box, dest)
+    return dest
+
+
+def _copy(session: Session, dest: Path) -> Path | None:
     copy_to = session.settings.copy_to
-    return dest, copy_out(dest, copy_to) if copy_to else None
+    return copy_out(dest, copy_to) if copy_to else None
 
 
-def _report(session: Session, dest: Path, copy: Path | None) -> None:
-    session.console.ok(f"archive {dest}")
-    if copy is not None:
-        session.console.ok(f"copy {copy}")
+def _rollback(box: Box) -> None:
+    box.status = "active"
+    box.finished = None
+    try:
+        save_box(box)
+    except Exception:
+        # the original failure is the one worth reporting
+        pass
 
 
 def export_box(session: Session, *, fix: Callable[[Path], int] = fix_ownership) -> Path | None:
     try:
         # ownership first: as a normal user a root-owned file cannot be hashed or packed
         fix(session.box.path)
-        dest, copy = _pack(session, "exported")
+        dest = _pack(session, "exported")
     except _FAILURES as exc:
         session.console.fail(f"export failed: {exc}")
         return None
-    _report(session, dest, copy)
+    session.console.ok(f"archive {dest}")
+    try:
+        copy = _copy(session, dest)
+    except _FAILURES as exc:
+        session.console.warn(f"the export was written to {dest}, but the copy to {session.settings.copy_to} failed: {exc}")
+        return dest
+    if copy is not None:
+        session.console.ok(f"copy {copy}")
     return dest
 
 
@@ -108,26 +124,38 @@ def finish_box(
     if dest.exists() and not console.confirm("replace the existing archive?"):
         return None
 
+    packed: Path | None = None
     try:
         fix(box.path)
         # saved before the rescan so the manifest holds the checksum of the box.toml that gets archived
         box.status = "finished"
         box.finished = session.clock()
         save_box(box)
-        dest, copy = _pack(session, "finished")
+        packed = _pack(session, "finished")
+        copy = _copy(session, packed)
     except _FAILURES as exc:
-        box.status = "active"
-        box.finished = None
-        try:
-            save_box(box)
-        except _FAILURES:
-            pass
-        console.fail(f"finish failed, the box is still active: {exc}")
+        _rollback(box)
+        if packed is None:
+            console.fail(f"finish failed, the box is still active: {exc}")
+        else:
+            console.fail(
+                f"the archive was written to {packed}, but the copy to {session.settings.copy_to} "
+                f"failed: {exc}; the box is still active"
+            )
         return None
+    except BaseException:
+        _rollback(box)
+        raise
 
-    _report(session, dest, copy)
+    dest = packed
+    console.ok(f"archive {dest}")
+    if copy is not None:
+        console.ok(f"copy {copy}")
     for hook in UNDO_HOOKS:
-        hook(session)
+        try:
+            hook(session)
+        except Exception as exc:
+            console.fail(f"{getattr(hook, '__name__', repr(hook))} failed: {exc}")
 
     try:
         remove = console.confirm("remove working folder?")
@@ -149,7 +177,7 @@ def import_box(
         verify(archive)
         folder = peek_folder(archive)
         replace = False
-        if (paths.active / folder).exists():
+        if os.path.lexists(paths.active / folder):
             replace = console.confirm(f"a box named {folder} is already here. replace it?")
             if not replace:
                 return None
