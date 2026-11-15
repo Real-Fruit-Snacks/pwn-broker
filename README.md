@@ -26,9 +26,12 @@ Run the installer as the user who will use pwn-broker, not with `sudo`; it asks 
 | `--from <path>` | Install from a local folder or wheel instead of the latest release |
 | `--config <path>` | Copy a settings file to `/opt/pwn-broker/config.toml` |
 | `--no-path` | Leave the shell config files alone |
+| `--no-asciinema` | Skip the asciinema download; `record` and `replay` will not work |
 | `--help` | Show the options |
 
 Set `PWN_BROKER_OPT` to install somewhere other than `/opt/pwn-broker`. Without `--from`, the installer downloads the wheel from the latest GitHub release and checks its SHA-256 against `SHA256SUMS.txt` before installing anything. That catches a corrupted download; it does not prove who published the release.
+
+The installer also downloads asciinema 3.2.1, the static x86_64 Linux build from asciinema's own GitHub release, for `record` and `replay`. It checks the size and the SHA-256 pinned in the app, and puts it in `/opt/pwn-broker/app/bin/`, which is not on PATH, so Kali's own `asciinema`, if there is one, is untouched. A copy already there with the right checksum is not downloaded again. If the download fails or does not match, nothing is kept, the installer prints a `warn` line and carries on, and everything but `record` and `replay` works; `check` in the prompt offers to download it again. asciinema is GPL-3.0-or-later and is not shipped in this repository.
 
 ## Context
 
@@ -41,6 +44,7 @@ pwn-broker                 open the menu, or the box you are inside
 pwn-broker new             start a new box
 pwn-broker import <file>   unpack an exported box
 pwn-broker resume [name]   reopen an active box
+record [target]            record this terminal window for a target of the open box
 ```
 
 Launch runs a few checks, then offers a new box, an import, any active box to resume, or a finished box that is still on disk to reopen. Only one box is open at a time. The prompt commands:
@@ -62,9 +66,15 @@ Launch runs a few checks, then offers a new box, an import, any active box to re
 | `flag root` | Record the root flag |
 | `flag user` | Record the user flag |
 | `help` | List the commands |
+| `host` | List every hostname in the box and whether it is in `/etc/hosts` |
+| `host add` | Add hostnames to the current target |
+| `host file off` | Take a target's line out of `/etc/hosts` and forget it |
+| `host file on` | Put a target's line into `/etc/hosts` |
+| `host remove` | Take hostnames off the current target |
 | `note` | Open the note in vim |
 | `path` | Print a folder's full path |
 | `quit` | Leave the shell |
+| `replay` | List a target's recordings, or play one |
 | `status` | Show the box at a glance |
 | `target add` | Add a target to this box |
 | `target edit` | Change a target's addresses or scope |
@@ -80,16 +90,21 @@ Launch runs a few checks, then offers a new box, an import, any active box to re
 | `tool refresh` | Fetch the tool index now |
 | `tool remove` | Take a tool off this box |
 | `tool search` | Search the index by name, description or tag |
+| `vpn log` | Show the last 20 lines of OpenVPN's log |
+| `vpn start` | Copy a `.ovpn` file into the box and start OpenVPN |
+| `vpn status` | Whether a tunnel is up, and which box started it |
+| `vpn stop` | Stop the VPN pwn-broker started |
 
 A box lives in `~/pwn-broker/active/<date>_<platform>_<name>/`:
 
 ```
-box.toml              identity, status, dates, flags
+box.toml              identity, status, dates, flags, targets with an /etc/hosts line, VPNs used
 creds.toml            one credential list for the whole box
 files.toml            a record of every file in the box
 notes.md
 lists/                usernames, passwords, pairs, hashes, IPs and hostnames
 screenshots/
+vpn/                  copies of the .ovpn files vpn start used; never archived
 targets/
   dc01/
     target.toml       IPs, hostnames, scope
@@ -115,6 +130,93 @@ The app rebuilds the `lists/` folder from the credential record whenever a crede
 | `works-<target>-userpass.txt`, `works-<target>-userhash.txt` | Pairs confirmed on one target |
 
 Edits made by hand to these files are overwritten at the next rebuild.
+
+### Recording
+
+`record [target]`, typed in any terminal window while a box is open in the prompt, records that window into the target's `recordings/` folder until you exit its shell:
+
+```
+$ record dc01
+ok    recording this window for dc01 (forest)
+    targets/dc01/recordings/2026-11-14_1432.cast
+    exit this shell to stop
+...
+ok    recording saved, 14 min
+    targets/dc01/recordings/2026-11-14_1432.cast
+    targets/dc01/recordings/2026-11-14_1432.txt
+```
+
+That is the shape of the output, not a recorded run.
+
+- The target is a name, an IP or a hostname, matched the way `target use` matches. With none, it records for the box's last-used target. An address that is not a target asks `10.10.10.200 is not a target of forest. add it? [y/N]`, then the `target add` questions with the address filled in, and adds it as `target add` would; the prompt's current target does not change. If the prompt is in the middle of a command for more than five seconds, `record` says so and adds nothing.
+- It starts your own shell (`$SHELL`) under the pinned asciinema, with a title of the box name, the target name and the box ID. asciinema runs with settings folders of the app's own in `/opt/pwn-broker/run/asciinema/`, so nothing in your home folder changes how it records. A recording is only written to the local file; nothing is uploaded.
+- Only what the terminal shows is recorded, never keystrokes. A password typed at a hidden prompt is not recorded; one typed on a command line is.
+- In zsh and bash the prompt starts with `[rec dc01]` while recording. The shell starts from a small startup file of the app's that loads your own first, then adds the prefix. Any other shell records without it.
+- Each window gets its own file, named by its start time to the minute, with `-2`, `-3` and so on when that name is taken. `record` inside a window that is already recording refuses and names its target. With no box open it records nothing and exits with status 1. Run through `sudo` by a normal user, it refuses: run `record` first, then `sudo` inside it.
+
+Beside each `.cast` is a `.txt` of the same name, for vim and grep. An example of its form:
+
+```
+box      forest  6f9c1e0a-52c1-4b7e-9d0c-1a2b3c4d5e6f
+target   dc01
+started  2026-11-14 14:32:07
+cast     2026-11-14_1432.cast
+
+14:32:15  $ nmap -sC -sV 10.10.10.161
+14:32:41  88/tcp  open  kerberos-sec
+14:40:12  [full-screen program until 14:43:30, see the cast]
+---- 2026-11-15 ----
+00:01:10  $ evil-winrm -i 10.10.10.161 -u svc-alfresco
+```
+
+Every line starts with the time its last character was drawn. The app replays the `.cast` through a terminal model (`pyte`) at the recorded size: colours and control sequences are dropped, a line redrawn in place appears once as it last stood, a wrapped line is joined back into one, and a full-screen program (vim, less, a menu) is one line saying when it ran. The text is written when the window closes. `export`, `finish` and `replay` write it for any recording whose text is missing or older than its `.cast`, so a window that was killed still gets one. A `.cast` that cannot be read gets a `warn` line naming it and no text.
+
+`replay` lists the current target's recordings, or a named target's, oldest first, with when each started, its length and size, or `recording now`. `replay <n>` (or `replay <target> <n>`) plays one in the prompt window with the pinned asciinema, idle gaps cut to two seconds; Ctrl-C stops it and returns to the prompt. A recording still being recorded cannot be played until its window exits.
+
+`finish` refuses while a window is recording for the box and names the targets. `export` goes ahead with a `warn` line, and packs a recording still being written up to its last whole line. `quit` warns, and the window keeps recording into the box. `status` has a `recordings` line, and the status bar shows `rec 2` while two windows are recording.
+
+### /etc/hosts
+
+A target with an IP and a hostname can have one line in `/etc/hosts`, its first IP and all its hostnames, marked with the box ID:
+
+```
+10.10.10.161 forest.htb.local  # pwn-broker 6f9c1e0a-52c1-4b7e-9d0c-1a2b3c4d5e6f
+```
+
+`target add` (at launch, in the prompt or from `record`) and `target edit` ask `add dc01's hostnames to /etc/hosts? [Y/n]` when the target has both and no line yet. The default is yes. After that the line follows the target: `target edit`, `host add` and `host remove` rewrite it without asking, `target remove` takes it out, and `finish` removes the box's lines after the archive is verified. Opening a box puts its lines back if they are missing. At launch, lines left by a box that is finished or no longer on disk are offered for removal.
+
+```
+forest/web01 > host add crm.board.htb dev.board.htb
+ok    web01 now answers to 3 names
+ok    /etc/hosts updated
+    10.10.11.5 board.htb crm.board.htb dev.board.htb
+```
+
+- Only the app's marked lines are ever changed. Every other line is written back byte for byte, except that a line break is added before the app's line when the file does not end with one. The file is written in place, not replaced, so its owner and mode stay. Just before writing, it is read again; if another program changed it, the app starts over once, then gives up with a `warn` line. As root the app writes it directly; as a normal user it writes the new content under `/opt/pwn-broker/run` and copies it into place with `sudo cp`. If that fails, nothing is changed and the line is printed for you to add.
+- A hostname already on an unmarked line, one that is not the app's, with the same IP is left off, and the app says it already resolves. With a different IP it is left off too, and the `warn` line shows that line, its number and the `host file on` command to run once you have removed it yourself.
+- A hostname on another of your boxes' lines takes that line out, with a `warn` naming the box; it comes back when that box is opened.
+- Only a plain hostname is written: letters, digits, hyphens and dots, 253 characters at most. If `/etc/hosts` is missing, a link or not a regular file, nothing is written and the app says why.
+
+### VPN
+
+The `vpn` launch check prints a `warn` line when no interface named `tun<n>` has an IPv4 address, and never stops the launch. With several, the lowest-numbered one is used. The status bar shows `vpn 10.10.14.7` or `no vpn`, `status` shows the same, and `{lhost}` in `tool info` examples is filled from it.
+
+```
+forest > vpn start
+vpn file     [/home/kali/Downloads/lab_user.ovpn] >
+ok    copied to vpn/lab_user.ovpn
+ok    vpn up, 10.10.14.7 on tun0
+```
+
+- The question takes a path, with Tab completing it, and defaults to the file used last time on any box. The file is copied into the box's `vpn/` folder, mode 600; a copy of the same name and content is reused, and different content gets `-2`, `-3` and so on. A file over 1 MiB is refused.
+- OpenVPN is started in its own background mode, as root directly or through `sudo` for a normal user, in the original file's folder so a certificate or key named beside it is found. The file's own `up` and `down` scripts, if it has any, run as root, as they would if you ran `openvpn` yourself. What the running VPN needs lives in `/opt/pwn-broker/run/vpn/`, not in the box, so closing a window or quitting the prompt does not end it, and it outlives the box that started it.
+- `vpn start` waits up to 15 seconds for the tunnel. If OpenVPN ends first, it says so and prints the last lines of the log; if it is still trying, it says so and names `vpn log`. If the app's own VPN is already up, it says so, starts nothing, and records that this box used it: `vpn stop` first to change files. If a tunnel is up that the app did not start, it asks `start another? [y/N]`.
+- `vpn stop` signals only the process the app started, checked by its process ID, its start time and its name, `openvpn`. A tunnel you started by hand is reported and never touched.
+- `box.toml` records each VPN the box started or used: the file's name, its SHA-256 and when. The `vpn/` folder is left out of `files.toml`, the manifest and every archive, because the file holds your VPN key. `import` restores the record and starts nothing. At `finish`, if the app's VPN is still up, it asks whether to stop it; the default keeps it for the next box.
+
+### Ping
+
+Each new target with an IP is pinged once at its first IP, with a two-second wait, wherever it was added: `ok    10.10.10.161 answered in 43 ms`, or a `warn` line that it did not answer, since Windows targets often do not. Ctrl-C cancels the ping and nothing else. With no `ping` on the machine, the app says once per session that it did not check.
 
 ## Tools
 
@@ -150,8 +252,9 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 
 ## Tested on
 
-- The unit tests, on Windows 11 with Python 3.13: 1425 passed, 37 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer, virtual environments and launchers).
-- The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13, and again as root on 3.13 (the `test-root` job). On Linux they include real tool installs into a virtual environment and the launchers. No Linux count is given here, because none has been recorded for this version.
+- The unit tests, on Windows 11 with Python 3.13: 2077 passed, 54 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, inodes, `/proc`, signals, the installer, virtual environments and launchers, the recorded shell's startup files) and the two real recordings, which run only in CI.
+- The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13, and again as root on 3.13 (the `test-root` job). On Linux they include real tool installs into a virtual environment and the launchers. The `/etc/hosts` code is tested there against a file in a temporary folder, as root and as a normal user, including that the lines that are not the app's survive. No Linux count is given here, because none has been recorded for this version.
+- The pinned asciinema, in CI's `recording` job on Ubuntu 24.04: the app's own download code fetches it and checks it against its pin, and it reports version 3.2.1. `record` then records a real bash session and a real zsh session through a pseudo-terminal, and the test checks the `[rec dc01]` prefix, the recording marker, the `.cast` header and the text copy. A run of the bash session showed that asciinema writes the recording to disk as it happens, not at the end. The zsh session is checked in the same job.
 - The six packages, in `pwn-shop`'s CI: it built each on Ubuntu 24.04 and installed it through this app's own code under Python 3.12 and 3.13, then started each command once.
 - `install.sh`, run twice from a checkout on Ubuntu 24.04 in CI: the first run builds the environment, installs the package and writes the launcher and the PATH line; the second reuses the environment and adds no second PATH line.
 - The vimrc, run by Vim 9.2 in headless mode on a note the app wrote: folds, fold text, `F8`, colours, settings, and the reload after the app changes the note. Timers and focus events do not fire in that mode, so the tests run the check by hand.
@@ -159,10 +262,23 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 - *Not* tested: any real tool package on Kali. None of the six in `pwn-shop` has been installed there.
 - *Not* tested: the installer's download. No release exists, so fetching the wheel and checking its SHA-256 has not run.
 - *Not* tested: the note window and the prompt on a real terminal.
+- *Not* tested: `record`, `replay` and the `[rec]` prefix on Kali, under Kali's own zsh settings.
+- *Not* tested: `vpn start` and `vpn stop` against a real OpenVPN. No test starts a VPN.
+- *Not* tested: writing a real `/etc/hosts`, as root or through `sudo`, and the ping. The tests use a file in a temporary folder and a stand-in for `ping`.
 
 ## Known issues
 
-- Recording is not in this release. It is a later phase in `docs/design.md`.
+- Nothing in the recording, `/etc/hosts`, VPN and ping part has been run on Kali yet. The checks are in `docs/kali-checks.md`.
+- A window still recording has no text copy until it closes or the box is exported.
+- A full-screen program (vim, less, a menu) appears only in the `.cast`. The text copy has one line saying when it ran.
+- A password typed on a command line in a recorded window is recorded, and goes into the archive. One typed at a hidden prompt is not.
+- The `[rec]` prefix is for zsh and bash only. Any other shell records without it.
+- `finish` refuses while a window is recording for the box. Exit those windows first.
+- Only `tun` interfaces count as a VPN, and there is no setting for it.
+- Only OpenVPN files can be started, and the app keeps track of one VPN at a time: `vpn stop` before starting another file.
+- An archive holds no copy of the VPN file, only its name and SHA-256. Keep the `.ovpn` file yourself.
+- A tunnel the app did not start is never stopped by it, at `vpn stop` or at `finish`.
+- Lines in `/etc/hosts` that are not the app's are never changed. One that names the same host with another address has to be removed by hand; the `warn` line gives its number and the command to run after.
 - The published tool index is private for now, because `pwn-shop` is. Until it is public, `tools_index` must point at a folder that holds `index.toml` and the zips it names, and a folder filled by `sh fetch.sh <folder>` in a clone of `pwn-shop` is the way to get one.
 - Nothing has been run on Kali yet. The checks to run there are in `docs/kali-checks.md`.
 - Stop a tool before you type `finish`. `finish` refuses while one of the box's tools is running, but a tool started after that check can write into its home folder while the box is being archived, and those files are deleted without being copied.

@@ -533,6 +533,7 @@ ok  recording saved, 14 min
 - Recording starts only when I type the command, and ends when I exit that shell.
 - Every window gets its own file, named by its start time to the minute. If that name is taken, `-2`, `-3` and so on are added.
 - Inside a window that is already recording, `record` refuses and names the target that window records for.
+- An argument that starts with `-` is never taken as a target: `record --help` prints the usage, and any other option is refused with it.
 - It starts my own shell (`$SHELL`) under the pinned `asciinema`, quietly, with a title of the box name, the target name and the box ID. That title is the recording's header naming the box.
 - Keystrokes are never captured, only what the terminal shows. A password typed at a hidden prompt is not recorded. One typed on a command line is, and goes into the archive.
 - asciinema is run with an empty settings folder of the app's own, so nothing in my home folder changes how it records. Recordings are only ever written to a local file. Nothing is uploaded.
@@ -607,7 +608,7 @@ forest/dc01 > replay 1
 | `replay [target]` | Lists the recordings of the current target, or the named one, oldest first |
 | `replay [target] <n>` | Plays one in the prompt window. Idle gaps longer than two seconds are cut to two. Space pauses, Ctrl-C stops and returns to the prompt |
 
-Playing needs `asciinema`. Listing does not.
+Playing needs `asciinema`. Listing does not. A recording whose window is still recording is listed as `recording now` and is not played until that window exits.
 
 ### 7.6 Finish, export, import, status
 
@@ -630,7 +631,7 @@ A target with an IP and a hostname can have one line in `/etc/hosts`:
 - `box.toml` records which targets have a line. The box's lines in the file are always rewritten as a set from that record, so `target edit` changes the line and `target remove` takes it out.
 - `finish` removes exactly the lines marked with the box's ID, after the archive is verified. If it cannot, the box is still finished, the lines are printed, and the next launch offers to remove them.
 - Opening a box (new, resumed, reopened or imported) puts its recorded lines back if they are missing, and says so.
-- At launch, lines marked with the ID of a box that is finished or no longer on disk are offered for removal.
+- At launch, lines marked with the ID of a box that is finished or no longer on disk are offered for removal, one question per box, default yes like the question that added them. While another prompt has a box open, launch does not look.
 
 **Clashes.** The first line in `/etc/hosts` that names a host wins, so a second one would do nothing.
 
@@ -664,7 +665,7 @@ ok  /etc/hosts updated
 
 **Writing the file.**
 
-- The whole file is read, changed in memory and written back in place, not renamed over: the file can be a mount, and its owner and mode must not change. Every byte that is not one of my marked lines is kept as it was.
+- The whole file is read, changed in memory and written back in place, not renamed over: the file can be a mount, and its owner and mode must not change. Every byte that is not one of my marked lines is kept as it was, apart from a line break added before my line when the file does not end with one. My lines always go at the end.
 - Just before writing, the file is read again. If it changed, the app starts over once, then gives up with a `warn`.
 - As root the app writes it directly. As a normal user it writes the new content under `/opt/pwn-broker/run` and copies it into place with `sudo`. If that fails or I decline, nothing is changed and the line is printed for me to add.
 - Only a plain hostname is written: letters, digits, hyphens and dots, 253 characters at most. Anything else is refused with a `warn`, so a hostname can never carry a second entry or a comment into the file.
@@ -674,7 +675,7 @@ ok  /etc/hosts updated
 
 **The check.**
 
-- A launch check, `vpn`: `warn  vpn  no VPN tunnel is up. start one with: vpn start` when no interface named `tun<n>` has an IPv4 address. It never blocks.
+- A launch check, `vpn`: `warn  vpn   no VPN tunnel is up`, then `start one with: vpn start` on the next line, when no interface named `tun<n>` has an IPv4 address. It never blocks.
 - With several tunnels, the lowest-numbered one with an address is used.
 - The status bar shows `vpn 10.10.14.7`, or `no vpn`. It is read again with each command, and at most every ten seconds while the bar redraws. A read that fails counts as no VPN and never holds the prompt up.
 - `status` shows the same.
@@ -693,11 +694,11 @@ ok  vpn up, 10.10.14.7 on tun0
 |---|---|
 | `vpn start` | Asks for the `.ovpn` file, copies it into the box, starts OpenVPN in the background and waits for the tunnel |
 | `vpn stop` | Stops the VPN the app started |
-| `vpn status` | Whether a tunnel is up, its address and interface, since when, from which file, and which box started it |
+| `vpn status` | Whether a tunnel is up, its address and interface, since when, from which file, and which box started it. For a tunnel the app did not start, only that one is up |
 | `vpn log` | The last 20 lines of OpenVPN's log |
 
 - The question takes a full path, with Tab completing it. Its default is the file used last time, on any box, so the next box is one Enter.
-- The file is copied into `vpn/` in the box, readable only by me. A copy of the same name with the same content is reused; with different content the new one gets `-2`, `-3` and so on.
+- The file is copied into `vpn/` in the box, readable only by me. A copy of the same name with the same content is reused; with different content the new one gets `-2`, `-3` and so on. A file larger than 1 MiB is refused: no `.ovpn` file is that big.
 - OpenVPN runs in its own background mode, not in a window and not in tmux. Closing any window, or quitting the prompt, does not end it. Nothing extra has to be installed.
 - What the running VPN needs lives in `/opt/pwn-broker/run/vpn/`, not in the box: a second copy of the file that OpenVPN is started from, its log, its process ID, and a marker holding the process start time, the box that started it, the file's name and its SHA-256. A VPN therefore outlives the box that started it.
 - OpenVPN is started with the original file's folder as its working folder, so a file that names a certificate or key beside it still works.
@@ -1049,7 +1050,7 @@ Not undone: the PATH line and the download cache. Those belong to the app, not t
 
 ## 10. To verify on Kali
 
-These could not be checked while designing. Each must be confirmed before the part that depends on it is built.
+These could not be checked while designing. Each was meant to be confirmed before the part that depends on it was built. The recording and Kali parts were built first, against CI on Ubuntu, so every phase 2 line below is still open; the steps are in `docs/kali-checks.md`.
 
 - The terminal reports focus changes to vim, so the note can save on leaving and reload on return. Fallback: a short reload timer.
 - `x-terminal-emulator` exists and accepts a command to run.
@@ -1062,6 +1063,8 @@ These could not be checked while designing. Each must be confirmed before the pa
 - The VPN interface on Hack The Box is `tun0`.
 - `vpn start` with a real Hack The Box file: the tunnel comes up, survives closing every window and quitting the prompt, and `vpn stop` ends it.
 - OpenVPN asks for a username and password in the prompt window before it goes to the background.
+- What `asciinema play` returns, and how it leaves the terminal, after Ctrl-C during `replay`.
+- Whether Kali's Ctrl-P prompt toggle drops the `[rec <target>]` prefix until the next command.
 - Kali's own `ligolo-ng` package installs a command named `ligolo-proxy`. Confirm it, and that with mine installed a bare `ligolo-proxy` runs mine and a bare `sudo ligolo-proxy` runs Kali's.
 - What `ligolo-proxy` writes, and where, on its first run, so its package lists the right data paths.
 - PEASS-ng's licence, read in full, before `pwn-shop` is made public.

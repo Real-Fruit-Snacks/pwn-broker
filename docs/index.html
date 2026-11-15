@@ -67,7 +67,7 @@ sh install.sh --from .</code></pre><button class="copy" type="button" data-copy=
 cd pwn-broker
 sh install.sh --from .">Copy</button></div>
                 </div>
-                <p class="install-note">Run it as the user who will use pwn-broker, not with <code>sudo</code>; it asks for <code>sudo</code> itself, once, if it has to create <code>/opt/pwn-broker</code>. It builds a virtual environment there and adds <code>/opt/pwn-broker/bin</code> to PATH in <code>~/.zshrc</code>. Nothing goes into the system Python. Run it again to upgrade.</p>
+                <p class="install-note">Run it as the user who will use pwn-broker, not with <code>sudo</code>; it asks for <code>sudo</code> itself, once, if it has to create <code>/opt/pwn-broker</code>. It builds a virtual environment there, adds <code>/opt/pwn-broker/bin</code> to PATH in <code>~/.zshrc</code>, and downloads asciinema 3.2.1 for <code>record</code>, checked against a pinned SHA-256 (<code>--no-asciinema</code> skips it). Nothing goes into the system Python. Run it again to upgrade.</p>
             </div>
         </div>
 
@@ -127,7 +127,7 @@ sh install.sh --from .">Copy</button></div>
             </div>
             <div class="block">
                 <h3>A prompt for the whole session</h3>
-                <p>It stays open as <code>forest/dc01 &gt;</code>, with commands for targets, credentials, flags, files and status. <code>help</code> lists them. Only one box is open at a time.</p>
+                <p>It stays open as <code>forest/dc01 &gt;</code>, with commands for targets, hostnames, credentials, flags, files, recordings, the VPN and status. <code>help</code> lists them. Only one box is open at a time.</p>
             </div>
             <div class="block">
                 <h3>Credentials kept as typed</h3>
@@ -144,6 +144,14 @@ sh install.sh --from .">Copy</button></div>
             <div class="block">
                 <h3>Tools, installed and taken off again</h3>
                 <p><code>tool install &lt;name&gt;</code> installs a package from the index: size and SHA-256 checked, no install script, and a Python tool gets its own virtual environment from bundled wheels with no network. Kali's own copies are never touched. A tool that needs root is run as <code>sudo &lt;full path&gt;</code>, which the app prints: a bare <code>sudo</code> finds nothing, or Kali's own command of that name, as with the <code>ligolo-proxy</code> that Kali's <code>ligolo-ng</code> installs. <code>finish</code> removes the box's tools unless another unfinished box still uses them. The first set of packages is x86_64 only. A tool's data in the home folder is the one thing removed outside <code>/opt/pwn-broker</code>, at <code>finish</code> or when the last box that uses the tool removes it, and only if it did not exist before the install. It is copied into the box first, and a path that could not be copied in full is kept, with a warning.</p>
+            </div>
+            <div class="block">
+                <h3>Recording a window</h3>
+                <p><code>record [target]</code>, typed in any terminal while a box is open, records that window under a pinned asciinema 3.2.1 into the target's <code>recordings/</code> folder, with <code>[rec dc01]</code> in front of the zsh or bash prompt. Beside each <code>.cast</code> the app writes a <code>.txt</code> with the time on every line, for grep. <code>replay</code> lists and plays them. Keystrokes are not recorded, but a password typed on a command line is.</p>
+            </div>
+            <div class="block">
+                <h3>/etc/hosts and the VPN</h3>
+                <p>A target with an IP and a hostname can have one line in <code>/etc/hosts</code>, marked with the box ID; <code>host add</code> adds names to it and <code>finish</code> takes it out. Lines that are not the app's are never changed. <code>vpn start</code> copies a <code>.ovpn</code> file into the box and starts OpenVPN in the background; the file is never archived, and <code>vpn stop</code> stops only the process the app started. Each new target is pinged once.</p>
             </div>
         </div>
     </div>
@@ -204,10 +212,14 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
                 <li><b>Not tested: any real tool package on Kali.</b> None of the six in <code>pwn-shop</code> (kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng, peass-ng) has been installed there.</li>
                 <li><b>Not tested: the installer's download.</b> No release exists, so fetching the wheel and checking its SHA-256 has not run.</li>
                 <li><b>Not tested: the note window and the prompt on a real terminal.</b></li>
+                <li><b>Not tested: <code>record</code>, <code>replay</code> and the <code>[rec]</code> prefix on Kali,</b> under Kali's own zsh settings.</li>
+                <li><b>Not tested: <code>vpn start</code> and <code>vpn stop</code> against a real OpenVPN.</b> No test starts a VPN.</li>
+                <li><b>Not tested: writing a real <code>/etc/hosts</code>, and the ping.</b> The tests use a file in a temporary folder and a stand-in for <code>ping</code>.</li>
             </ul>
             <ul aria-label="Tested">
-                <li><b>The unit tests, on Windows 11 with Python 3.13:</b> 1425 passed, 37 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer, virtual environments and launchers).</li>
+                <li><b>The unit tests, on Windows 11 with Python 3.13:</b> 2077 passed, 54 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, inodes, <code>/proc</code>, signals, the installer, virtual environments and launchers, the recorded shell's startup files) and the two real recordings, which run only in CI.</li>
                 <li><b>The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13:</b> on Linux they include real tool installs into a virtual environment and the launchers. No Linux count is given here, because none has been recorded for this version.</li>
+                <li><b>The pinned asciinema, in CI on Ubuntu 24.04:</b> the app's own download code fetches it and checks it against its pin, and it reports version 3.2.1. <code>record</code> then records a real bash session and a real zsh session through a pseudo-terminal. A run of the bash session showed that asciinema writes the recording to disk as it happens. The zsh session is checked in the same job.</li>
                 <li><b>The six packages, in <code>pwn-shop</code>'s CI:</b> it built each on Ubuntu 24.04 and installed it through this app's own code under Python 3.12 and 3.13, then started each command once.</li>
                 <li><b><code>install.sh</code>, run twice from a checkout on Ubuntu 24.04 in CI:</b> the first run builds the environment, installs the package and writes the launcher and the PATH line; the second reuses the environment and adds no second PATH line.</li>
                 <li><b>The vimrc, run by Vim 9.2 in headless mode on a note the app wrote:</b> folds, fold text, <kbd>F8</kbd>, colours, settings, and the reload after the app changes the note. Timers and focus events do not fire in that mode, so the tests run the check by hand.</li>
@@ -220,7 +232,12 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
     <div class="wrap">
         <h2 id="issues-h">Known issues</h2>
         <ul>
-            <li>Recording is not in this release. It is a later phase in <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/design.md">the design</a>.</li>
+            <li>Nothing in the recording, <code>/etc/hosts</code>, VPN and ping part has been run on Kali yet. The checks are in <code>docs/kali-checks.md</code>.</li>
+            <li>A window still recording has no text copy until it closes or the box is exported. A full-screen program appears only in the <code>.cast</code>.</li>
+            <li>A password typed on a command line in a recorded window is recorded, and goes into the archive. The <code>[rec]</code> prefix is for zsh and bash only.</li>
+            <li><code>finish</code> refuses while a window is recording for the box.</li>
+            <li>Only <code>tun</code> interfaces count as a VPN. Only OpenVPN files can be started, one VPN at a time, and an archive holds no copy of the VPN file. A tunnel the app did not start is never stopped by it.</li>
+            <li>Lines in <code>/etc/hosts</code> that are not the app's are never changed, so one that names the same host with another address has to be removed by hand.</li>
             <li>The published tool index is private for now, because <code>pwn-shop</code> is. Until it is public, <code>tools_index</code> must point at a folder that holds <code>index.toml</code> and the zips it names, and a folder filled by <code>sh fetch.sh &lt;folder&gt;</code> in a clone of <code>pwn-shop</code> is the way to get one.</li>
             <li>No release has been published, so the <code>curl</code> install line does not work yet. Install from a clone.</li>
             <li><code>cred list</code> marks a secret it cannot show exactly (a tab, another control character, or a space at either end) with <code>*</code> after the number. <code>cred show</code> prints it unchanged.</li>

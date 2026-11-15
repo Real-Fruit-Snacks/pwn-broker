@@ -16,7 +16,7 @@ Remove real credentials, flags and addresses from the output first.
 
 1. Branch from `main`.
 2. Write the test first. A change to behaviour comes with a test that fails without it.
-3. Keep the dependencies few: `prompt_toolkit`, `rich` and `tomli-w` are all there is. Each one ships to every user.
+3. Keep the dependencies few: `prompt_toolkit`, `rich`, `tomli-w` and `pyte` are all there is. Each one ships to every user. `pyte` is pinned to 0.8.2, because the text copy of a recording leans on how it works inside.
 4. Add a line to `CHANGELOG.md` under the version being worked on.
 
 The design is in [docs/design.md](docs/design.md). Read the intent and the anti-goals before changing behaviour; most of the rules below come from there.
@@ -39,7 +39,7 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -q -W error
 ```
 
-Some tests run a real vim and skip themselves when it is absent, so install `vim` to run them. On Windows, 15 tests skip (symlinks, named pipes, file modes, ownership, backslash file names, the installer) and run only on Linux, which is what CI is for. CI runs the suite on Python 3.11, 3.12 and 3.13, once more as root, and checks `install.sh` with `sh -n`, `dash -n` and `shellcheck`, then installs it into a temporary folder.
+Some tests run a real vim and skip themselves when it is absent, so install `vim` to run them. On Windows, the tests that need Linux skip (symlinks, named pipes, file modes, ownership, the installer, the recorded shell's startup files) and run there, which is what CI is for. CI runs the suite on Python 3.11, 3.12 and 3.13, once more as root, records real zsh and bash sessions under the pinned asciinema in its `recording` job, and checks `install.sh` with `sh -n`, `dash -n` and `shellcheck`, then installs it into a temporary folder.
 
 `install.sh` must stay POSIX `sh`. Test it from a checkout with `sh install.sh --from .`; set `PWN_BROKER_OPT` and `HOME` to temporary folders to keep it off your own system.
 
