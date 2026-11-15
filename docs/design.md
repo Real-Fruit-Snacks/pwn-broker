@@ -704,7 +704,8 @@ ok  vpn up, 10.10.14.7 on tun0
 - As root the app starts it directly. As a normal user it starts it through `sudo`.
 - `vpn start` waits up to 15 seconds for a `tun` interface with an address. If OpenVPN ends before that, the app says so and prints the last lines of the log. If it is still trying, the app says so and names `vpn log`.
 - A file that asks for a username or password is asked for it in the prompt window, by OpenVPN itself, before it goes to the background.
-- If a tunnel is already up, `vpn start` says whose it is and asks before starting another. The default is no. If the app started it for an earlier box, saying no simply uses it, and this box records that it did.
+- If the VPN the app started is already up, `vpn start` says so, starts nothing, and this box records that it used it. To change to another file, `vpn stop` first: the app keeps track of one VPN at a time.
+- If a tunnel is up that the app did not start, `vpn start` says so and asks before starting another. The default is no.
 - `vpn stop` stops only a process the app started: the process ID must be alive, have the recorded start time and be `openvpn`. It waits up to five seconds and says whether the tunnel is gone. A tunnel I started by hand is reported and never touched.
 - A marker whose process is gone is cleared, as for tools.
 - With no `openvpn` on the machine, `vpn start` says how to install it and starts nothing.
@@ -1119,6 +1120,7 @@ For recording and Kali changes:
 - `vpn log` and `vpn status` exist beside `vpn start` and `vpn stop`.
 - The `vpn start` question defaults to the file used last time.
 - A tunnel the app did not start is never stopped.
+- The app keeps track of one VPN at a time; while its own is up, `vpn start` starts nothing.
 - A new target is pinged wherever it is added, including from `record`.
 - A failed asciinema download does not stop the install.
 - The asciinema pin lives in the app, not in `install.sh`, so the installer and the launch check share it.
