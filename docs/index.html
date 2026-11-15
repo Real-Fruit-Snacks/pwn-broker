@@ -54,7 +54,7 @@
         <div class="hero-text">
             <h1 class="wordmark">pwn-broker</h1>
             <p class="lead">Keeps a box's targets, notes, creds and tools in order</p>
-            <p class="sub">I launch it when I start a Hack The Box machine. It asks a few questions, builds the workspace, opens my notes in vim, and stays open as a prompt for the whole session. When the box is done it packs everything into one archive. It is for Kali Linux with a desktop session, and it has not been run on Kali yet: see <a href="#tested">tested on</a>.</p>
+            <p class="sub">I launch it when I start a Hack The Box machine. It asks a few questions, builds the workspace, opens my notes in vim, and stays open as a prompt for the whole session. When the box is done it packs everything into one archive. It is for Kali Linux with a desktop session. One whole box has run in the official Kali image in CI, as root; a real Kali desktop has not: see <a href="#tested">tested on</a>.</p>
 
             <div class="install" id="install">
                 <p class="install-label">Install, once a release exists</p>
@@ -214,18 +214,17 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
         <h2 id="tested-h">Tested on</h2>
         <div class="tested-grid">
             <ul class="untested" aria-label="Not tested">
-                <li><b>Not tested: Kali Linux.</b> The app has not been run there, and the checks in <code>docs/kali-checks.md</code>, the tool checks included, have not been run yet.</li>
+                <li><b>Not tested: a real Kali desktop session and its terminal.</b> The Kali run used a virtual display and <code>xterm</code>, so the window manager, focus and the terminal Kali opens by default have not been tried. Nor has your own VM.</li>
+                <li><b>Not tested: a normal user.</b> The Kali run is root, so <code>sudo</code> for <code>/etc/hosts</code> and OpenVPN has not run.</li>
+                <li><b>Not tested: a real Hack The Box connection.</b> The OpenVPN file in the Kali run has no server behind it.</li>
                 <li><b>Not tested: any real tool package on Kali.</b> None of the six in <code>pwn-shop</code> (kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng, peass-ng) has been installed there.</li>
                 <li><b>Not tested: the installer's download.</b> No release exists, so fetching the wheel and checking its SHA-256 has not run.</li>
-                <li><b>Not tested: the note window and the prompt on a real terminal.</b></li>
-                <li><b>Not tested: <code>record</code>, <code>replay</code> and the <code>[rec]</code> prefix on Kali,</b> under Kali's own zsh settings.</li>
-                <li><b>Not tested: <code>replay</code> playing a recording with the real asciinema, anywhere.</b> CI only records.</li>
-                <li><b>Not tested: <code>vpn start</code> and <code>vpn stop</code> against a real OpenVPN.</b> No test starts a VPN.</li>
-                <li><b>Not tested: writing a real <code>/etc/hosts</code>, and the ping.</b> The tests use a file in a temporary folder and a stand-in for <code>ping</code>.</li>
             </ul>
             <ul aria-label="Tested">
-                <li><b>The unit tests, on Windows 11 with Python 3.13:</b> 2113 passed, 54 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, inodes, <code>/proc</code>, signals, the installer, virtual environments and launchers, the recorded shell's startup files) and the three tests of the real asciinema (the zsh session, the bash session and its version), which run only in CI's <code>recording</code> job.</li>
-                <li><b>The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13:</b> on Linux they include real tool installs into a virtual environment and the launchers. On Python 3.13, and again as root: 2159 passed, 8 skipped, with warnings treated as errors; 3.11 and 3.12 also pass.</li>
+                <li><b>The unit tests, on Windows 11 with Python 3.13:</b> 2119 passed, 54 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, inodes, <code>/proc</code>, signals, the installer, virtual environments and launchers, the recorded shell's startup files) and the three tests of the real asciinema (the zsh session, the bash session and its version), which run only in CI's <code>recording</code> job.</li>
+                <li><b>The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12, 3.13 and 3.14:</b> on Linux they include real tool installs into a virtual environment and the launchers. On Python 3.13, and again as root: 2159 passed, 8 skipped, with warnings treated as errors; on 3.14: 2163 passed, 8 skipped; 3.11 and 3.12 also pass.</li>
+                <li><b>One whole box in the official Kali image, as root, in CI:</b> <code>kalilinux/kali-rolling</code>, Kali 2026.3 at the time, with Python 3.14.8, zsh 5.9.2 and OpenVPN 2.7.8. The real installer, then a new box, the <code>/etc/hosts</code> line written and later removed byte for byte, a ping, the note window in vim, a credential, a recording under Kali's own zsh settings with the <code>[rec dc01]</code> prefix and its text copy, <code>export</code> while recording, <code>replay</code>, <code>vpn start</code> and <code>vpn stop</code> with a real OpenVPN and <code>tun0</code>, a tool installed and removed, <code>finish</code>, and <code>import</code>. Each step is checked on disk or in the system. Stand-ins: a virtual display with <code>xterm</code>, the container's gateway as the target, an OpenVPN file with no server behind it, and a small test package for the tool.</li>
+                <li><b>The unit tests inside that Kali image, as root, on Python 3.14.8:</b> with the real asciinema, 2170 passed, 1 skipped, with warnings treated as errors.</li>
                 <li><b>The pinned asciinema, in CI on Ubuntu 24.04:</b> the app's own download code fetches it and checks it against its pin, and it reports version 3.2.1. <code>record</code> then records a real bash session and a real zsh session through a pseudo-terminal. All three tests pass: both sessions are recorded, and both show that asciinema writes the recording to disk as it happens. The same job runs the installer without <code>--no-asciinema</code>: it downloads asciinema 3.2.1 and checks it, and <code>record --help</code> runs from the installed launcher.</li>
                 <li><b>The six packages, in <code>pwn-shop</code>'s CI:</b> it built each on Ubuntu 24.04 and installed it through this app's own code under Python 3.12 and 3.13, then started each command once.</li>
                 <li><b><code>install.sh</code>, run twice from a checkout on Ubuntu 24.04 in CI:</b> the first run builds the environment, installs the package and writes the launcher and the PATH line; the second reuses the environment and adds no second PATH line.</li>
@@ -239,7 +238,9 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
     <div class="wrap">
         <h2 id="issues-h">Known issues</h2>
         <ul>
-            <li>Nothing in the recording, <code>/etc/hosts</code>, VPN and ping part has been run on Kali yet. The checks are in <code>docs/kali-checks.md</code>.</li>
+            <li>The recording, <code>/etc/hosts</code>, VPN and ping part has run on Kali only as root, in a container, with a virtual display and an OpenVPN file with no server. The checks still to run by hand are in <code>docs/kali-checks.md</code>.</li>
+            <li>Kali now ships Python 3.14. The Python tool packages published so far, <code>certipy</code> and <code>targetedkerberoast</code>, are built for Python 3.12 and 3.13, so on Kali <code>tool install</code> refuses them until they are rebuilt. The other four tools are not affected.</li>
+            <li>After <code>finish</code> removes the working folder, the note window stays open on a file that no longer exists. Close it by hand.</li>
             <li>A window still recording has no text copy until it closes or the box is exported. A full-screen program appears only in the <code>.cast</code>.</li>
             <li>A password typed on a command line in a recorded window is recorded, and goes into the archive. The <code>[rec]</code> prefix is for zsh and bash only.</li>
             <li><code>finish</code> refuses while a window is recording for the box. <code>quit</code> leaves the box's <code>/etc/hosts</code> lines in place; only <code>finish</code> removes them.</li>

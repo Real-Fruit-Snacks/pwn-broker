@@ -1050,24 +1050,24 @@ Not undone: the PATH line and the download cache. Those belong to the app, not t
 
 ## 10. To verify on Kali
 
-These could not be checked while designing. Each was meant to be confirmed before the part that depends on it was built. None of them has been confirmed on Kali yet, phase 1's included; the parts were built and tested on Windows and on Ubuntu in CI. Of the pinned asciinema, CI on Ubuntu has shown that it writes to disk as it records; whether it runs on Kali is still open. The steps for every line are in `docs/kali-checks.md`.
+These could not be checked while designing. Each was meant to be confirmed before the part that depends on it was built; the parts were built and tested on Windows and on Ubuntu in CI first. CI's `kali` job now runs one whole box in the official Kali image (`kalilinux/kali-rolling`, Kali 2026.3 when it first passed), as root, in a container, with a virtual display and `xterm`, the container's gateway as the target and an OpenVPN file with no server behind it. Each line below says what that run confirmed and what is still open; anything that needs a real desktop, a Hack The Box tunnel or a normal user with `sudo` is still open. The steps for every line are in `docs/kali-checks.md`.
 
-- The terminal reports focus changes to vim, so the note can save on leaving and reload on return. Fallback: a short reload timer.
-- `x-terminal-emulator` exists and accepts a command to run.
-- How vim signals unsaved changes in a way the app can detect before `finish`.
-- `python3 -m venv` works on a fresh Kali, and its Python is 3.12 or 3.13, the versions the bundled wheels cover.
-- The pinned `asciinema` runs on Kali, and writes to disk as it records rather than at the end.
-- The `[rec <target>]` prefix shows with Kali's own zsh settings, survives its prompt toggle, and leaves the rest of my shell setup as it was.
-- The text copy of a real session on Kali reads cleanly: command lines as typed, with zsh's suggestions and highlighting gone.
-- Writing `/etc/hosts` in place works on Kali, as root and through `sudo`.
-- The VPN interface on Hack The Box is `tun0`.
-- `vpn start` with a real Hack The Box file: the tunnel comes up, survives closing every window and quitting the prompt, and `vpn stop` ends it.
-- OpenVPN asks for a username and password in the prompt window before it goes to the background.
-- What `asciinema play` returns, and how it leaves the terminal, after Ctrl-C during `replay`.
-- Whether Kali's Ctrl-P prompt toggle drops the `[rec <target>]` prefix until the next command.
-- Kali's own `ligolo-ng` package installs a command named `ligolo-proxy`. Confirm it, and that with mine installed a bare `ligolo-proxy` runs mine and a bare `sudo ligolo-proxy` runs Kali's.
-- What `ligolo-proxy` writes, and where, on its first run, so its package lists the right data paths.
-- PEASS-ng's licence, read in full, before `pwn-shop` is made public.
+- The terminal reports focus changes to vim, so the note can save on leaving and reload on return. Fallback: a short reload timer. Still open: the Kali run has no real desktop.
+- `x-terminal-emulator` exists and accepts a command to run. Confirmed in the Kali image, where it is Debian's xterm and takes `-e`. Still open for the terminal a Kali desktop opens by default.
+- How vim signals unsaved changes in a way the app can detect before `finish`. Still open: the Kali run never leaves the note unsaved.
+- `python3 -m venv` works on a fresh Kali, and its Python is 3.12 or 3.13, the versions the bundled wheels cover. The first half is confirmed in the Kali image. The second is not: Kali's Python is now 3.14 (3.14.8 in the Kali 2026.3 image), which the bundled wheels of the two Python tools, `certipy` and `targetedkerberoast`, do not cover yet, so `tool install` refuses them there until they are rebuilt.
+- The pinned `asciinema` runs on Kali, and writes to disk as it records rather than at the end. Confirmed in the Kali image: the real-asciinema tests pass there as root, and the run records a window and plays it back.
+- The `[rec <target>]` prefix shows with Kali's own zsh settings, survives its prompt toggle, and leaves the rest of my shell setup as it was. That it shows, in front of Kali's own two-line prompt, is confirmed in the Kali image. The prompt toggle and the rest of the shell setup are still open.
+- The text copy of a real session on Kali reads cleanly: command lines as typed, with zsh's suggestions and highlighting gone. Still open: the Kali run records two short commands, and its text copy has the timed output line, but not a session with suggestions and highlighting.
+- Writing `/etc/hosts` in place works on Kali, as root and through `sudo`. As root, confirmed in the Kali image: the line is written and removed, and every other byte stays as it was. Through `sudo`, still open.
+- The VPN interface on Hack The Box is `tun0`. Still open: the Kali run's tunnel is `tun0`, but it has no Hack The Box server behind it.
+- `vpn start` with a real Hack The Box file: the tunnel comes up, survives closing every window and quitting the prompt, and `vpn stop` ends it. With a file that has no server, confirmed in the Kali image: the tunnel comes up on `tun0` with OpenVPN 2.7.8, OpenVPN runs with PID 1 as its parent and no controlling terminal, and `vpn stop` ends it and takes `tun0` away. A real Hack The Box file, closing the windows and quitting the prompt with the tunnel up are still open.
+- OpenVPN asks for a username and password in the prompt window before it goes to the background. Still open.
+- What `asciinema play` returns, and how it leaves the terminal, after Ctrl-C during `replay`. Still open for Ctrl-C. Played to the end in the Kali image, it returns without a status warning and the prompt takes the next command.
+- Whether Kali's Ctrl-P prompt toggle drops the `[rec <target>]` prefix until the next command. Still open.
+- Kali's own `ligolo-ng` package installs a command named `ligolo-proxy`. Confirm it, and that with mine installed a bare `ligolo-proxy` runs mine and a bare `sudo ligolo-proxy` runs Kali's. Still open.
+- What `ligolo-proxy` writes, and where, on its first run, so its package lists the right data paths. Still open.
+- PEASS-ng's licence, read in full, before `pwn-shop` is made public. Still open; this one is not about Kali.
 
 ## 11. Not yet confirmed
 

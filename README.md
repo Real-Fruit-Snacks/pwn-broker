@@ -252,24 +252,23 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 
 ## Tested on
 
-- The unit tests, on Windows 11 with Python 3.13: 2113 passed, 54 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, inodes, `/proc`, signals, the installer, virtual environments and launchers, the recorded shell's startup files) and the three tests of the real asciinema (the zsh session, the bash session and its version), which run only in CI's `recording` job.
-- The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13, and again as root on 3.13 (the `test-root` job). On Linux they include real tool installs into a virtual environment and the launchers. The `/etc/hosts` code is tested there against a file in a temporary folder, as root and as a normal user, including that the lines that are not the app's survive. On Python 3.13, and again as root: 2159 passed, 8 skipped, with warnings treated as errors; 3.11 and 3.12 also pass.
+- The unit tests, on Windows 11 with Python 3.13: 2119 passed, 54 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, inodes, `/proc`, signals, the installer, virtual environments and launchers, the recorded shell's startup files) and the three tests of the real asciinema (the zsh session, the bash session and its version), which run only in CI's `recording` job.
+- The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12, 3.13 and 3.14, and again as root on 3.13 (the `test-root` job). On Linux they include real tool installs into a virtual environment and the launchers. The `/etc/hosts` code is tested there against a file in a temporary folder, as root and as a normal user, including that the lines that are not the app's survive. On Python 3.13, and again as root: 2159 passed, 8 skipped, with warnings treated as errors; on 3.14: 2163 passed, 8 skipped; 3.11 and 3.12 also pass.
+- One whole box in the official Kali image (`kalilinux/kali-rolling`, Kali 2026.3 at the time, with Python 3.14.8, zsh 5.9.2 and OpenVPN 2.7.8), as root, in CI's `kali` job. The real installer, including its asciinema download, then a new box, the `/etc/hosts` line written and later removed byte for byte, a ping, the note window in vim, a credential, a hostname added later, a recording under Kali's own zsh settings with the `[rec dc01]` prefix and its text copy, `export` while recording, `replay`, `vpn start` and `vpn stop` with a real OpenVPN and `tun0`, a tool installed and removed, `finish`, and `import`, which puts the line and the tool back. Each step is checked on disk or in the system, not only in what the app prints. Stand-ins: a virtual display with `xterm` for the desktop, the container's gateway as the target, an OpenVPN file with no server behind it, and a small test package for the tool.
+- The unit tests inside that Kali image, as root, on Python 3.14.8 with the real asciinema: 2170 passed, 1 skipped, with warnings treated as errors.
 - The pinned asciinema, in CI's `recording` job on Ubuntu 24.04: the app's own download code fetches it and checks it against its pin, and it reports version 3.2.1. `record` then records a real bash session and a real zsh session through a pseudo-terminal, and the test checks the `[rec dc01]` prefix, the recording marker, the `.cast` header and the text copy. All three tests pass: both sessions are recorded, and both show that asciinema writes the recording to disk as it happens, not at the end. The same job runs the installer without `--no-asciinema`: it downloads asciinema 3.2.1 and checks it, and `record --help` runs from the installed launcher.
 - The six packages, in `pwn-shop`'s CI: it built each on Ubuntu 24.04 and installed it through this app's own code under Python 3.12 and 3.13, then started each command once.
 - `install.sh`, run twice from a checkout on Ubuntu 24.04 in CI: the first run builds the environment, installs the package and writes the launcher and the PATH line; the second reuses the environment and adds no second PATH line.
 - The vimrc, run by Vim 9.2 in headless mode on a note the app wrote: folds, fold text, `F8`, colours, settings, and the reload after the app changes the note. Timers and focus events do not fire in that mode, so the tests run the check by hand.
-- *Not* tested: Kali Linux. The app has not been run there, and the checks in `docs/kali-checks.md`, the tool checks included, have not been run yet.
+- *Not* tested: a real Kali desktop session and its terminal. The Kali run used a virtual display and `xterm`, so the window manager, focus and the terminal Kali opens by default have not been tried. Nor has your own VM.
+- *Not* tested: a normal user. The Kali run is root, so `sudo` for `/etc/hosts` and OpenVPN has not run.
+- *Not* tested: a real Hack The Box connection. The OpenVPN file in the Kali run has no server behind it.
 - *Not* tested: any real tool package on Kali. None of the six in `pwn-shop` has been installed there.
 - *Not* tested: the installer's download. No release exists, so fetching the wheel and checking its SHA-256 has not run.
-- *Not* tested: the note window and the prompt on a real terminal.
-- *Not* tested: `record`, `replay` and the `[rec]` prefix on Kali, under Kali's own zsh settings.
-- *Not* tested: `replay` playing a recording with the real asciinema, anywhere. CI only records.
-- *Not* tested: `vpn start` and `vpn stop` against a real OpenVPN. No test starts a VPN.
-- *Not* tested: writing a real `/etc/hosts`, as root or through `sudo`, and the ping. The tests use a file in a temporary folder and a stand-in for `ping`.
 
 ## Known issues
 
-- Nothing in the recording, `/etc/hosts`, VPN and ping part has been run on Kali yet. The checks are in `docs/kali-checks.md`.
+- The recording, `/etc/hosts`, VPN and ping part has run on Kali only as root, in a container, with a virtual display and an OpenVPN file with no server. The checks still to run by hand are in `docs/kali-checks.md`.
 - A window still recording has no text copy until it closes or the box is exported.
 - A full-screen program (vim, less, a menu) appears only in the `.cast`. The text copy has one line saying when it ran.
 - A password typed on a command line in a recorded window is recorded, and goes into the archive. One typed at a hidden prompt is not.
@@ -284,7 +283,8 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 - `quit` leaves the box's `/etc/hosts` lines in place. Only `finish` removes them; until then the hostnames go on resolving to the box's targets.
 - Lines in `/etc/hosts` that are not the app's are never changed. One that names the same host with another address has to be removed by hand; the `warn` line gives its number and the command to run after.
 - The published tool index is private for now, because `pwn-shop` is. Until it is public, `tools_index` must point at a folder that holds `index.toml` and the zips it names, and a folder filled by `sh fetch.sh <folder>` in a clone of `pwn-shop` is the way to get one.
-- Nothing has been run on Kali yet. The checks to run there are in `docs/kali-checks.md`.
+- Kali now ships Python 3.14. The Python tool packages published so far, `certipy` and `targetedkerberoast`, are built for Python 3.12 and 3.13, so on Kali `tool install` refuses them, naming the versions they support and the one the machine has, until they are rebuilt. The other four tools are not affected.
+- After `finish` removes the working folder, the note window stays open on a file that no longer exists. Close it by hand.
 - Stop a tool before you type `finish`. `finish` refuses while one of the box's tools is running, but a tool started after that check can write into its home folder while the box is being archived, and those files are deleted without being copied.
 - Tool data that could not be copied into the box in full is left in the home folder with a `warn` line. A later install of the same tool treats it as having been there before, so it is never copied or deleted again. Move it yourself.
 - Within one install of a tool, a second `export` or `finish` replaces the box's copy of that tool's data with the current one. Files the tool deleted in between are only in the earlier archive.

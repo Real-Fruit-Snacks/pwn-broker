@@ -39,11 +39,11 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -q -W error
 ```
 
-Some tests run a real vim and skip themselves when it is absent, so install `vim` to run them. On Windows, the tests that need Linux skip (symlinks, named pipes, file modes, ownership, the installer, the recorded shell's startup files) and run there, which is what CI is for. CI runs the suite on Python 3.11, 3.12 and 3.13, once more as root, records real zsh and bash sessions under the pinned asciinema in its `recording` job, and checks `install.sh` with `sh -n`, `dash -n` and `shellcheck`, then installs it into a temporary folder.
+Some tests run a real vim and skip themselves when it is absent, so install `vim` to run them. On Windows, the tests that need Linux skip (symlinks, named pipes, file modes, ownership, the installer, the recorded shell's startup files) and run there, which is what CI is for. CI runs the suite on Python 3.11, 3.12, 3.13 and 3.14, once more as root, records real zsh and bash sessions under the pinned asciinema in its `recording` job, and checks `install.sh` with `sh -n`, `dash -n` and `shellcheck`, then installs it into a temporary folder. Its `kali` job runs one whole box in the official Kali image as root, through `.github/scripts/kali-cycle.sh` and `kali-cycle.py`, and runs the suite there too; when it fails, the `kali-evidence` artifact holds `steps.txt`, each terminal's transcript and the files it checked.
 
 `install.sh` must stay POSIX `sh`. Test it from a checkout with `sh install.sh --from .`; set `PWN_BROKER_OPT` and `HOME` to temporary folders to keep it off your own system.
 
-Some things only show on a real Kali desktop (the note window, colours, `sudo` tools). [docs/kali-checks.md](docs/kali-checks.md) is the list to run by hand, once as root and once as a normal user. In the PR, say what you ran it against.
+Some things only show on a real Kali desktop (the note window's terminal and focus, colours, `sudo` tools, a Hack The Box tunnel). [docs/kali-checks.md](docs/kali-checks.md) is the list to run by hand, once as root and once as a normal user, and marks the steps the `kali` job already covers. In the PR, say what you ran it against.
 
 ## Commits
 

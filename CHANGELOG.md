@@ -20,4 +20,6 @@
 - Installer: downloads asciinema 3.2.1 from its upstream release and checks it against a pinned SHA-256; `--no-asciinema` skips it. The launch check `asciinema` offers to download it again, and the `record` launcher is put back if it is missing. `pyte` 0.8.2 is a new dependency.
 - `record`, `asciinema`, `openvpn`, `ping` and `ip` join the command names a tool package may not use.
 - Settings in `config.toml`: `home`, `copy_to`, `default_platform`, `terminal`, `check_updates`, `tools_index`.
-- The published tool index is private for now, so `tools_index` must point at a folder. Recording, `/etc/hosts`, the VPN commands and the ping have not been run on Kali yet.
+- The published tool index is private for now, so `tools_index` must point at a folder. Recording, `/etc/hosts`, the VPN commands and the ping have run on Kali only as root, in CI's container, not at a real desktop or as a normal user.
+- CI: a `kali` job runs one whole box in the official Kali image as root, with the real installer, `/etc/hosts`, ping, asciinema, OpenVPN and a note window under a virtual display, and runs the unit suite there too. Python 3.14 joins the test matrix.
+- A download the server refuses now closes the response that came with the error, including one that arrives after the index fetch has given up waiting.
