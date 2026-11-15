@@ -22,6 +22,10 @@ from pwn_broker.console import FakeConsole
 from pwn_broker.vpn import Tunnel
 
 
+def _no_tunnel():
+    return None
+
+
 def _env(paths, **extra):
     env = {"DISPLAY": ":0", "PATH": f"{paths.bin}{os.pathsep}/usr/bin"}
     env.update(extra)
@@ -85,7 +89,7 @@ def test_launch_checks_pass_the_tunnel_reader_through(paths, tmp_path):
 
 def test_missing_vim_fails_with_install_hint(paths):
     _ready(paths)
-    results = run_checks(paths, Settings(), _env(paths), which=_missing("vim"))
+    results = run_checks(paths, Settings(), _env(paths), which=_missing("vim"), tunnel=_no_tunnel)
     vim = _by_name(results)["vim"]
     assert vim.status == "fail"
     assert "apt install vim" in vim.hint
@@ -93,7 +97,7 @@ def test_missing_vim_fails_with_install_hint(paths):
 
 def test_missing_tar_fails_with_install_hint(paths):
     _ready(paths)
-    results = run_checks(paths, Settings(), _env(paths), which=_missing("tar"))
+    results = run_checks(paths, Settings(), _env(paths), which=_missing("tar"), tunnel=_no_tunnel)
     tar = _by_name(results)["tar"]
     assert tar.status == "fail"
     assert "apt install tar" in tar.hint
@@ -102,7 +106,7 @@ def test_missing_tar_fails_with_install_hint(paths):
 def test_missing_terminal_names_setting_and_config_file(paths):
     _ready(paths)
     results = run_checks(
-        paths, Settings(terminal="kitty"), _env(paths), which=_missing("kitty")
+        paths, Settings(terminal="kitty"), _env(paths), which=_missing("kitty"), tunnel=_no_tunnel
     )
     term = _by_name(results)["terminal"]
     assert term.status == "fail"
@@ -113,7 +117,7 @@ def test_missing_terminal_names_setting_and_config_file(paths):
 def test_no_display_warns_with_manual_command(paths):
     _ready(paths)
     env = {"PATH": str(paths.bin), "DISPLAY": ""}
-    display = _by_name(run_checks(paths, Settings(), env, which=_found))["display"]
+    display = _by_name(run_checks(paths, Settings(), env, which=_found, tunnel=_no_tunnel))["display"]
     assert display.status == "warn"
     assert f"vim -u {paths.vim_dir / 'vimrc'} notes.md" in display.hint
 
@@ -121,7 +125,7 @@ def test_no_display_warns_with_manual_command(paths):
 def test_wayland_counts_as_display(paths):
     _ready(paths)
     env = {"PATH": str(paths.bin), "WAYLAND_DISPLAY": "wayland-0"}
-    assert _by_name(run_checks(paths, Settings(), env, which=_found))["display"].status == "ok"
+    assert _by_name(run_checks(paths, Settings(), env, which=_found, tunnel=_no_tunnel))["display"].status == "ok"
 
 
 def test_path_missing_warns_and_can_repair(paths):
@@ -129,7 +133,7 @@ def test_path_missing_warns_and_can_repair(paths):
     called = []
     results = run_checks(
         paths, Settings(), {"DISPLAY": ":0", "PATH": "/usr/bin"}, which=_found,
-        repair_path=lambda: called.append(1),
+        repair_path=lambda: called.append(1), tunnel=_no_tunnel,
     )  # fmt: skip
     path = _by_name(results)["path"]
     assert path.status == "warn"
@@ -141,11 +145,11 @@ def test_path_missing_warns_and_can_repair(paths):
 def test_path_must_match_an_entry_exactly(paths):
     _ready(paths)
     env = {"DISPLAY": ":0", "PATH": f"{paths.bin}-old{os.pathsep}/usr/bin"}
-    assert _by_name(run_checks(paths, Settings(), env, which=_found))["path"].status == "warn"
+    assert _by_name(run_checks(paths, Settings(), env, which=_found, tunnel=_no_tunnel))["path"].status == "warn"
 
 
 def test_folders_missing_are_repairable(paths):
-    results = run_checks(paths, Settings(), _env(paths), which=_found, run=_venv_ok)
+    results = run_checks(paths, Settings(), _env(paths), which=_found, run=_venv_ok, tunnel=_no_tunnel)
     folders = _by_name(results)["folders"]
     assert folders.status == "warn"
     folders.repair()
@@ -254,7 +258,7 @@ def test_path_repair_also_writes_bashrc_when_it_exists(paths, tmp_path):
     home = tmp_path / "user"
     home.mkdir()
     (home / ".bashrc").write_text("# mine\n", encoding="utf-8")
-    [path] = [r for r in launch_checks(paths, Settings(), {"PATH": ""}, home, include_version=False) if r.name == "path"]
+    [path] = [r for r in launch_checks(paths, Settings(), {"PATH": ""}, home, include_version=False, tunnel=_no_tunnel) if r.name == "path"]
     path.repair()
     for rc in (".zshrc", ".bashrc"):
         assert paths.bin.as_posix() in (home / rc).read_text(encoding="utf-8")
@@ -264,7 +268,7 @@ def test_path_repair_also_writes_bashrc_when_it_exists(paths, tmp_path):
 def test_path_repair_leaves_a_missing_bashrc_alone(paths, tmp_path):
     home = tmp_path / "user"
     home.mkdir()
-    [path] = [r for r in launch_checks(paths, Settings(), {"PATH": ""}, home, include_version=False) if r.name == "path"]
+    [path] = [r for r in launch_checks(paths, Settings(), {"PATH": ""}, home, include_version=False, tunnel=_no_tunnel) if r.name == "path"]
     path.repair()
     assert (home / ".zshrc").exists() and not (home / ".bashrc").exists()
 
@@ -339,7 +343,7 @@ def test_venv_check_passes_when_python_can_make_environments(paths):
         return SimpleNamespace(returncode=0)
 
     _ready(paths)
-    venv = _by_name(run_checks(paths, Settings(), _env(paths), which=_found, run=run))["venv"]
+    venv = _by_name(run_checks(paths, Settings(), _env(paths), which=_found, run=run, tunnel=_no_tunnel))["venv"]
     # venv --help works without python3-venv; ensurepip is the part that package adds
     assert venv.status == "ok" and seen == [["python3", "-c", "import ensurepip"]]
 
@@ -356,7 +360,7 @@ def test_venv_check_warns_with_the_package_hint(paths, failure):
         return SimpleNamespace(returncode=1)
 
     _ready(paths)
-    venv = _by_name(run_checks(paths, Settings(), _env(paths), which=_found, run=run))["venv"]
+    venv = _by_name(run_checks(paths, Settings(), _env(paths), which=_found, run=run, tunnel=_no_tunnel))["venv"]
     assert venv.status == "warn" and venv.hint == "apt install python3-venv"
 
 
@@ -365,7 +369,7 @@ def test_a_missing_venv_does_not_stop_the_app(paths):
         return SimpleNamespace(returncode=1)
 
     _ready(paths)
-    results = run_checks(paths, Settings(), _env(paths), which=_found, run=run)
+    results = run_checks(paths, Settings(), _env(paths), which=_found, run=run, tunnel=_no_tunnel)
     assert not any(r.status == "fail" for r in results)
     console = FakeConsole()
     checks.report(console, results)

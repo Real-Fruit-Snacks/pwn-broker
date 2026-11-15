@@ -55,7 +55,8 @@ def run_checks(
     which: Callable[[str], str | None] = shutil.which,
     repair_path: Callable[[], None] | None = None,
     run: Callable = subprocess.run,
-    tunnel: Callable[[], vpn.Tunnel | None] = vpn.tunnel,
+    *,
+    tunnel: Callable[[], vpn.Tunnel | None],
 ) -> list[CheckResult]:
     results = [
         _tool("vim", "vim", which, "apt install vim"),
@@ -218,7 +219,8 @@ def launch_checks(
     env: Mapping[str, str],
     home: Path,
     include_version: bool = True,
-    tunnel: Callable[[], vpn.Tunnel | None] = vpn.tunnel,
+    *,
+    tunnel: Callable[[], vpn.Tunnel | None],
 ) -> list[CheckResult]:
     def add_path_lines() -> None:
         # the same rc files the installer writes to

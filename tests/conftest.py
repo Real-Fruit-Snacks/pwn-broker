@@ -188,3 +188,14 @@ def env(paths, tmp_path, ran):
         home=tmp_path / "user",
         run=ran.append,
     )
+
+
+@pytest.fixture(autouse=True)
+def no_real_ip(monkeypatch):
+    """vpn.tunnel without a `run` of its own would run `ip`; make that an error."""
+    from pwn_broker import vpn
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a test reached the real `ip`; pass a tunnel reader or a run")
+
+    monkeypatch.setattr(vpn.tunnel, "__defaults__", (refuse,))

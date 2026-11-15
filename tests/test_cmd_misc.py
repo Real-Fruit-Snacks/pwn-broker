@@ -194,12 +194,12 @@ def test_check_command_does_not_wait_long_for_the_update_check(session, monkeypa
 def test_launch_checks_repairs_path_and_adds_version(paths, tmp_path, monkeypatch):
     newer = CheckResult("version", "warn", "9.9 is available, this is 0.1")
     monkeypatch.setattr(checks, "version_check", lambda settings: newer)
-    results = checks.launch_checks(paths, Settings(), {"PATH": ""}, tmp_path)
+    results = checks.launch_checks(paths, Settings(), {"PATH": ""}, tmp_path, tunnel=lambda: None)
     assert results[-1] is newer
     next(r for r in results if r.name == "path").repair()
     assert paths.bin.as_posix() in (tmp_path / ".zshrc").read_text(encoding="utf-8")
     monkeypatch.setattr(checks, "version_check", lambda settings: None)
-    results = checks.launch_checks(paths, Settings(), {}, tmp_path)
+    results = checks.launch_checks(paths, Settings(), {}, tmp_path, tunnel=lambda: None)
     assert all(r.name != "version" for r in results)
 
 

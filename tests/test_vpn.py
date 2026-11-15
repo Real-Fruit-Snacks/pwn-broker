@@ -38,8 +38,8 @@ def test_asks_ip_for_json_with_output_captured_and_a_one_second_limit():
 
 
 def test_the_lowest_numbered_tunnel_wins():
-    run = _ip(_iface("tun10", "10.10.9.1"), _iface("tun1", "10.10.14.9"), _iface("tun0", "10.10.14.7"))
-    assert tunnel(run) == Tunnel("tun0", "10.10.14.7")
+    run = _ip(_iface("tun10", "10.10.9.1"), _iface("tun2", "10.10.14.9"))
+    assert tunnel(run) == Tunnel("tun2", "10.10.14.9")
 
 
 def test_a_tunnel_without_an_address_is_skipped():

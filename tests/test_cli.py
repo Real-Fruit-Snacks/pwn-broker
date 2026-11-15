@@ -426,9 +426,9 @@ def test_start_setup_subcommand(env, monkeypatch, ran):
 def test_launch_checks_can_skip_version(paths, tmp_path, monkeypatch):
     called = []
     monkeypatch.setattr(checks, "version_check", lambda s: called.append(1))
-    checks.launch_checks(paths, Settings(), {}, tmp_path, include_version=False)
+    checks.launch_checks(paths, Settings(), {}, tmp_path, include_version=False, tunnel=lambda: None)
     assert called == []
-    checks.launch_checks(paths, Settings(), {}, tmp_path)
+    checks.launch_checks(paths, Settings(), {}, tmp_path, tunnel=lambda: None)
     assert called == [1]
 
 
