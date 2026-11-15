@@ -50,6 +50,39 @@ jobs:
       - name: Tests as root
         run: sudo -E env "PATH=$PATH" python -m pytest -q -W error -p no:cacheprovider
 
+  recording:
+    # record under the real pinned asciinema: a zsh and a bash session recorded through a
+    # pseudo-terminal, their casts written as they record, and their text copies checked.
+    # Only this job fetches asciinema; tests/test_record_real.py skips everywhere else.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: zsh
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Fetch the pinned asciinema
+        run: |
+          python -c '
+          import os
+          from pathlib import Path
+          from pwn_broker import recorder
+          from pwn_broker.paths import AppPaths
+          root = Path(os.environ["RUNNER_TEMP"]) / "asciinema"
+          paths = AppPaths(opt=root / "opt", home=root / "home")
+          recorder.fetch(paths)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"PWN_BROKER_REAL_ASCIINEMA={paths.asciinema}\n")
+          print(paths.asciinema)
+          '
+      - name: Real recordings
+        run: |
+          test -f "$PWN_BROKER_REAL_ASCIINEMA"
+          python -m pytest -q -W error tests/test_record_real.py
+
   installer:
     # install.sh: syntax under sh and dash, shellcheck, then a real install from this checkout
     # into a temporary install folder and home, run twice.
