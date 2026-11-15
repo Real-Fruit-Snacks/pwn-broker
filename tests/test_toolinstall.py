@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import sys
@@ -120,8 +121,8 @@ def test_binary_launcher_text(paths, tmp_path):
     assert lines[1] == "# pwn-broker tool: kerbrute"
     assert lines[2] == f"run='{paths.run.as_posix()}'"
     assert (
-        "{ sed 's/.*) //' \"/proc/$$/stat\" | cut -d' ' -f20; } > \"$run/tools/kerbrute.$$\" "
-        "2>/dev/null || : > \"$run/tools/kerbrute.$$\" 2>/dev/null || true"
+        "{ { sed 's/.*) //' \"/proc/$$/stat\" | cut -d' ' -f20; } > \"$run/tools/kerbrute.$$\"; } "
+        "2>/dev/null || true"
     ) in lines
     assert 'data=' not in text
     assert lines[-2] == f"exec '{folder.as_posix()}/files/kerbrute' \"$@\""
@@ -178,6 +179,8 @@ def test_launcher_refuses_line_breaks_and_bad_env_names(paths, tmp_path):
     manifest = manifest_of(tmp_path)
     folder = paths.tools / "kerbrute" / "1"
     for cmd in (
+        *(Command("k", "binary", path="files/kerbrute", env={v: "x"}) for v in
+          ("data", "box", "run", "pid")),
         Command("k", "binary", path="files/kerbrute", env={"A": "a\nb"}),
         Command("k", "binary", path="files/kerbrute", args=["a\0b"]),
         Command("k", "binary", path="files/kerbrute", env={"A B": "x"}),
@@ -186,13 +189,11 @@ def test_launcher_refuses_line_breaks_and_bad_env_names(paths, tmp_path):
             launcher_text(paths, manifest, cmd, folder)
 
 
-def run_sh(args, env_extra=None, **kw):
+def run_sh(args, env_extra=None, shell="sh", **kw):
     env = {"PATH": "/usr/bin:/bin"}
     env.update(env_extra or {})
-    import os
-
     env = {**os.environ, **env}
-    return subprocess.run(["sh", *args], capture_output=True, text=True, env=env, **kw)
+    return subprocess.run([shell, *args], capture_output=True, text=True, env=env, **kw)
 
 
 @pytest.mark.skipif(shutil.which("sh") is None, reason="needs sh")
@@ -213,6 +214,26 @@ def test_binary_launcher_runs_under_sh(paths, tmp_path):
     assert len(list((paths.run / "tools").glob("kerbrute.*"))) == 1
 
 
+SHELLS = [s for s in ("sh", "dash") if shutil.which(s)]
+
+
+@pytest.mark.skipif(not SHELLS, reason="needs sh")
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("state", ["missing", "a file"])
+def test_launcher_survives_an_unwritable_marker_folder(paths, tmp_path, shell, state):
+    manifest = manifest_of(tmp_path)
+    folder = tmp_path / "unpacked"
+    paths.run.mkdir(parents=True)
+    if state == "a file":
+        (paths.run / "tools").write_text("not a folder")
+    cmd = Command("kerbrute", "binary", path="files/kerbrute")
+    script = tmp_path / "launcher.sh"
+    script.write_bytes(launcher_text(paths, manifest, cmd, folder).encode())
+    (folder / "files" / "kerbrute").write_bytes(b"#!/bin/sh\necho ran\nexit 7\n")
+    result = run_sh([script.as_posix()], shell=shell)
+    assert (result.returncode, result.stdout.strip(), result.stderr) == (7, "ran", "")
+
+
 # ---- python_version
 
 
@@ -230,6 +251,8 @@ def test_python_version():
     for bad in (missing, failing):
         with pytest.raises(ToolError, match="python3 was not found"):
             python_version("py", bad)
+    with pytest.raises(ToolError, match="could not report"):
+        python_version("py", FakeRun(version=""))
 
 
 # ---- install: kali tools
@@ -289,7 +312,8 @@ def test_needs_root_and_uploads_print_lines(paths, box, tmp_path):
 
 
 @posix_only
-def test_upload_keeps_mode(paths, box, tmp_path):
+def test_upload_is_executable(paths, box, tmp_path):
+    # unpacking marks everything under files/ executable, and the copy keeps that
     zip_path, entry = build(
         tmp_path, files={"files/tool.sh": SCRIPT}, kind="upload",
         command=None, upload=[{"path": "files/tool.sh", "as": "tool.sh"}],
@@ -492,17 +516,140 @@ def test_warns_about_a_name_elsewhere_on_path(paths, box, tmp_path):
     assert not [1 for kind, _t in paths2_console.lines if kind == "warn"]
 
 
-def test_failure_in_launcher_step_removes_earlier_launchers(paths, box, tmp_path):
+def test_failure_in_launcher_step_removes_earlier_launchers(paths, box, tmp_path, monkeypatch):
+    from pwn_broker import toolinstall
+
     zip_path, entry = build(
         tmp_path, files={"files/a": SCRIPT, "files/b": SCRIPT},
         command=[
             {"name": "first", "type": "binary", "path": "files/a"},
-            {"name": "second", "type": "binary", "path": "files/b", "env": {"A B": "x"}},
+            {"name": "second", "type": "binary", "path": "files/b"},
         ],
     )  # fmt: skip
-    with pytest.raises(ToolError):
+    real = toolinstall.write_text
+    written = []
+
+    def flaky(path, text, **kw):
+        if written:
+            raise OSError("disk full")
+        real(path, text, **kw)
+        written.append(path)
+
+    monkeypatch.setattr(toolinstall, "write_text", flaky)
+    with pytest.raises(OSError):
         do_install(paths, box, entry, zip_path, tmp_path)
+    assert written and not written[0].exists()
     assert_nothing_left(paths)
+
+
+def test_foreign_launchers_are_never_overwritten_or_removed(paths, box, tmp_path):
+    zip_path, entry = build(
+        tmp_path, files={"files/a": SCRIPT, "files/b": SCRIPT},
+        command=[
+            {"name": "first", "type": "binary", "path": "files/a"},
+            {"name": "second", "type": "binary", "path": "files/b"},
+        ],
+    )  # fmt: skip
+    paths.bin.mkdir(parents=True)
+    foreign = paths.bin / "second"
+    foreign.write_bytes(b"#!/bin/sh\necho mine\n")
+    with pytest.raises(ToolError, match="second"):
+        do_install(paths, box, entry, zip_path, tmp_path)
+    assert foreign.read_bytes() == b"#!/bin/sh\necho mine\n"
+    assert not (paths.bin / "first").exists()
+    assert not (paths.tools / "kerbrute").exists()
+
+
+@posix_only
+def test_symlink_at_a_launcher_path_is_refused(paths, box, tmp_path):
+    zip_path, entry = build(tmp_path)
+    target = tmp_path / "elsewhere"
+    target.write_bytes(b"#!/bin/sh\n# pwn-broker tool: kerbrute\n")
+    paths.bin.mkdir(parents=True)
+    (paths.bin / "kerbrute").symlink_to(target)
+    with pytest.raises(ToolError, match="kerbrute"):
+        do_install(paths, box, entry, zip_path, tmp_path)
+    assert (paths.bin / "kerbrute").is_symlink()
+    assert target.read_bytes() == b"#!/bin/sh\n# pwn-broker tool: kerbrute\n"
+
+
+@pytest.mark.parametrize("where", ["upload copy", "save_box"])
+def test_interrupt_leaves_nothing(paths, box, tmp_path, monkeypatch, where):
+    from pwn_broker import toolinstall
+
+    zip_path, entry = build(
+        tmp_path, files={"files/kerbrute": SCRIPT, "files/a": b"A"}, kind="both",
+        upload=[{"path": "files/a", "as": "a"}],
+    )  # fmt: skip
+
+    def interrupt(*_a, **_k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(toolinstall, "_copy_uploads" if where == "upload copy" else "save_box", interrupt)
+    installed = {}
+    with pytest.raises(KeyboardInterrupt):
+        do_install(paths, box, entry, zip_path, tmp_path, installed=installed)
+    assert installed == {} and box.tools == []
+    assert [p for p in snapshot(paths) if p != "tools/installed.toml"] == []
+    assert load_installed(paths) == {}
+
+
+def test_unrestorable_installed_list_is_reported(paths, box, tmp_path, monkeypatch):
+    from pwn_broker import toolinstall
+
+    zip_path, entry = build(tmp_path)
+    calls = []
+
+    def save(_paths, _installed):
+        calls.append(1)
+        if len(calls) > 1:
+            raise OSError("read-only")
+
+    def boom(_box):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(toolinstall, "save_installed", save)
+    monkeypatch.setattr(toolinstall, "save_box", boom)
+    with pytest.raises(ToolError, match="installed.toml") as caught:
+        do_install(paths, box, entry, zip_path, tmp_path)
+    assert isinstance(caught.value.__cause__, OSError) and "disk full" in str(caught.value.__cause__)
+
+
+def test_join_failure_restores_the_saved_users(paths, box, other, tmp_path, monkeypatch):
+    from pwn_broker import toolinstall
+
+    zip_path, entry = build(tmp_path)
+    unfinished = {box.id: box.name, other.id: other.name}
+    _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path, unfinished=unfinished)
+
+    def boom(_box):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(toolinstall, "save_box", boom)
+    with pytest.raises(OSError):
+        do_install(paths, other, entry, zip_path, tmp_path, installed=installed, unfinished=unfinished)
+    assert installed["kerbrute"].users == [box.id]
+    assert load_installed(paths)["kerbrute"].users == [box.id]
+    assert other.tools == []
+
+
+def test_box_with_another_build_is_refused_untouched(paths, box, tmp_path):
+    zip_path, entry = build(tmp_path)
+    _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path)
+    zip2, entry2 = build(tmp_path, build=2)
+    files = {
+        "launcher": (paths.bin / "kerbrute").read_bytes(),
+        "state": paths.tools_state.read_bytes(),
+        "box": (box.path / "box.toml").read_bytes(),
+    }
+    with pytest.raises(ToolError, match="tool remove kerbrute"):
+        do_install(paths, box, entry2, zip2, tmp_path, installed=installed)
+    assert (paths.tools / "kerbrute" / "1.0.3-1" / "files" / "kerbrute").is_file()
+    assert not (paths.tools / "kerbrute" / "1.0.3-2").exists()
+    assert (paths.bin / "kerbrute").read_bytes() == files["launcher"]
+    assert paths.tools_state.read_bytes() == files["state"]
+    assert (box.path / "box.toml").read_bytes() == files["box"]
+    assert installed["kerbrute"].build == 1
 
 
 def test_failure_in_upload_step_removes_launchers_and_folders(paths, box, tmp_path):
@@ -627,6 +774,31 @@ def test_remove_files_leaves_foreign_launchers(paths, tmp_path):
     assert (paths.bin / "kerbrute").exists() and (paths.bin / "plain").exists()
     assert not (paths.bin / "mine").exists()
     assert not folder.exists()
+
+
+@posix_only
+def test_remove_files_with_a_symlinked_launcher(paths, tmp_path):
+    folder = paths.tools / "kerbrute" / "1-1"
+    folder.mkdir(parents=True)
+    (paths.upload / "kerbrute").mkdir(parents=True)
+    paths.bin.mkdir(parents=True)
+    target = tmp_path / "outside.txt"
+    target.write_text("keep")
+    (paths.bin / "kerbrute").symlink_to(target)
+    with pytest.raises(ToolError, match=r"bin.kerbrute"):
+        remove_files(paths, item_for(paths, uploads=["x"]))
+    assert not folder.exists() and not (paths.upload / "kerbrute").exists()
+    assert (paths.bin / "kerbrute").is_symlink() and target.read_text() == "keep"
+
+
+@posix_only
+def test_remove_files_does_not_follow_a_symlinked_tool_folder(paths, tmp_path):
+    victim = paths.tools / "victim" / "1-1"
+    victim.mkdir(parents=True)
+    (paths.tools / "kerbrute").symlink_to(paths.tools / "victim")
+    with pytest.raises(ToolError):
+        remove_files(paths, item_for(paths))
+    assert victim.is_dir()
 
 
 def test_failed_release_keeps_an_orphan_entry(paths, box, tmp_path):

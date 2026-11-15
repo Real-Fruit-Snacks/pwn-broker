@@ -27,6 +27,7 @@ from pwn_broker.toolstate import Installed, save_installed
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _MARK = "# pwn-broker tool: "
 _DATA = "{data}"
+_OWN_VARIABLES = ("data", "box", "run", "pid")
 
 
 # ---- launchers
@@ -78,8 +79,9 @@ def launcher_text(paths: AppPaths, manifest: Manifest, command: Command, folder:
         "    kill -0 \"$pid\" 2>/dev/null || box=''",
         "fi",
         # the process start time lets a later reader tell a reused process ID from this run
-        "{ sed 's/.*) //' \"/proc/$$/stat\" | cut -d' ' -f20; } > "
-        f"{marker} 2>/dev/null || : > {marker} 2>/dev/null || true",
+        # a failed redirection must not end the shell, so the whole group is silenced and forgiven
+        "{ { sed 's/.*) //' \"/proc/$$/stat\" | cut -d' ' -f20; } > "
+        f"{marker}; }} 2>/dev/null || true",
     ]
     if uses_data:
         lines += [
@@ -87,7 +89,7 @@ def launcher_text(paths: AppPaths, manifest: Manifest, command: Command, folder:
             f'if [ -n "$box" ]; then data="$box/tooldata/{tool}"; mkdir -p "$data"; fi',
         ]
     for name, value in command.env.items():
-        if not _ENV_NAME.fullmatch(name):
+        if not _ENV_NAME.fullmatch(name) or name in _OWN_VARIABLES:
             raise ToolError(f"{name!r} is not a valid environment variable name")
         export = f"export {name}={_value(value)}"
         if _DATA in value:
@@ -118,7 +120,10 @@ def python_version(python: str, run=subprocess.run) -> str:
         raise ToolError(f"python3 was not found ({exc})") from exc
     if result.returncode != 0:
         raise ToolError("python3 was not found or did not run")
-    return (result.stdout or "").strip()
+    version = (result.stdout or "").strip()
+    if not version:
+        raise ToolError("python3 could not report its version")
+    return version
 
 
 def _tail(result) -> str:
@@ -135,17 +140,18 @@ def _run_checked(run, argv: list[str], what: str) -> None:
         raise ToolError(f"{what} failed (exit {result.returncode}):\n{_tail(result)}")
 
 
-def _inside(path: Path, root: Path) -> bool:
+def _inside(path: Path, root: Path, *, resolve_root: bool = True) -> bool:
     # strictly inside: the root itself does not count
     try:
-        resolved, base = path.resolve(), root.resolve()
+        resolved = path.resolve()
+        base = root.resolve() if resolve_root else root
     except (OSError, RuntimeError):
         return False
     return resolved != base and base in resolved.parents
 
 
-def _check_inside(path: Path, root: Path, what: str) -> None:
-    if not _inside(path, root):
+def _check_inside(path: Path, root: Path, what: str, *, resolve_root: bool = True) -> None:
+    if not _inside(path, root, resolve_root=resolve_root):
         raise ToolError(f"refusing to touch {what} {path}: it is not inside {root}")
 
 
@@ -198,11 +204,22 @@ def install(
         raise ToolError(f"{name!r} is not a valid tool name")
     wanted = build_id(entry.version, entry.build)
 
+    for record in box.tools:
+        if record.name == name and build_id(record.version, record.build) != wanted:
+            raise ToolError(
+                f"{box.name} already has {name} {build_id(record.version, record.build)}; "
+                f"run tool remove {name} first"
+            )
+
     current = installed.get(name)
     if current is not None:
         users = [u for u in current.users if u in unfinished]
         others = [u for u in users if u != box.id]
         same = build_id(current.version, current.build) == wanted
+        if box.id in users and not same:
+            raise ToolError(
+                f"{box.name} already has {name} {current.version}; run tool remove {name} first"
+            )
         if others and not same:
             raise ToolError(
                 f"{name} {current.version} is in use by {unfinished[others[0]]}; "
@@ -241,7 +258,7 @@ def install(
             raise ToolError(f"{name} is built for {manifest.arch}, this machine is {machine_arch()}")
         if manifest.python is not None:
             _build_venv(manifest, folder, python, run)
-        made_launchers = _write_launchers(paths, manifest, folder, installed, console, on_path)
+        _write_launchers(paths, manifest, folder, installed, console, on_path, made_launchers)
         if manifest.uploads:
             made_uploads = True
             _copy_uploads(manifest, folder, uploads_dir)
@@ -259,10 +276,10 @@ def install(
         )
         _record(box, ToolRecord(name, entry.version, entry.build, entry.sha256, now))
         installed[name] = item
+        saved_installed = True  # set first: an interrupt inside the save must still be undone
         save_installed(paths, installed)
-        saved_installed = True
         save_box(box)
-    except BaseException:
+    except BaseException as exc:
         box.tools = old_tools
         installed.pop(name, None)
         for launcher in made_launchers:
@@ -278,13 +295,19 @@ def install(
         except OSError:
             pass
         if saved_installed:
-            try:
-                save_installed(paths, installed)
-            except OSError:
-                pass
+            _restore_list(paths, installed, exc)
         raise
     _show(paths, console, item, entry.version)
     return item
+
+
+def _restore_list(paths: AppPaths, installed: dict[str, Installed], cause: BaseException) -> None:
+    try:
+        save_installed(paths, installed)
+    except OSError:
+        raise ToolError(
+            f"the installed list could not be restored; check {paths.tools_state}"
+        ) from cause
 
 
 def _join(
@@ -299,11 +322,15 @@ def _join(
     old_users, old_tools = current.users, list(box.tools)
     current.users = users if box.id in users else users + [box.id]
     _record(box, ToolRecord(current.name, current.version, current.build, current.sha256, now))
+    saved = False
     try:
+        saved = True
         save_installed(paths, installed)
         save_box(box)
-    except BaseException:
+    except BaseException as exc:
         current.users, box.tools = old_users, old_tools
+        if saved:
+            _restore_list(paths, installed, exc)
         raise
     _show(paths, console, current, current.version)
     return current
@@ -335,30 +362,27 @@ def _write_launchers(
     installed: dict[str, Installed],
     console: Console,
     on_path: Callable[[str], str | None],
-) -> list[Path]:
+    made: list[Path],
+) -> None:
     taken = {
         c: t.name for t in installed.values() if t.name != manifest.name for c in t.commands
     }
     for command in manifest.commands:
         if command.name in taken:
             raise ToolError(f"the command {command.name} already belongs to {taken[command.name]}")
-        _check_inside(paths.bin / command.name, paths.bin, "a launcher")
+        dest = paths.bin / command.name
+        _check_inside(dest, paths.bin, "a launcher")
+        if os.path.lexists(dest) and not _is_ours(dest, manifest.name):
+            raise ToolError(f"{dest} exists and is not a {manifest.name} launcher; not touching it")
     texts = [launcher_text(paths, manifest, c, folder) for c in manifest.commands]
-    made: list[Path] = []
-    try:
-        for command, text in zip(manifest.commands, texts, strict=True):
-            other = on_path(command.name)
-            if other and not _inside(Path(other), paths.bin):
-                console.warn(f"{command.name} also exists at {other}; the installed one wins")
-            dest = paths.bin / command.name
-            write_text(dest, text)
-            made.append(dest)
-            dest.chmod(0o755)
-    except BaseException:
-        for dest in made:
-            dest.unlink(missing_ok=True)
-        raise
-    return made
+    for command, text in zip(manifest.commands, texts, strict=True):
+        other = on_path(command.name)
+        if other and not _inside(Path(other), paths.bin):
+            console.warn(f"{command.name} also exists at {other}; the installed one wins")
+        dest = paths.bin / command.name
+        made.append(dest)  # listed first, so a failure or interrupt in the write removes it
+        write_text(dest, text)
+        dest.chmod(0o755)
 
 
 def _copy_uploads(manifest: Manifest, folder: Path, target: Path) -> None:
@@ -422,14 +446,14 @@ def remove_files(paths: AppPaths, item: Installed) -> None:
     if not valid_tool_name(name):
         raise ToolError(f"{name!r} is not a valid tool name")
     raw = Path(item.folder)
-    _check_inside(raw, paths.tools / name, "the tool folder")
-    _check_inside(paths.upload / name, paths.upload, "the upload folder")
+    # the root is resolved, the tool's own folder name is not followed
+    _check_inside(raw, paths.tools.resolve() / name, "the tool folder", resolve_root=False)
     launchers = []
     for command in item.commands:
         if not valid_command_name(command):
             raise ToolError(f"{command!r} is not a valid command name")
+        # judged where it sits, not where a link leads: the name has no separator
         launchers.append(paths.bin / command)
-        _check_inside(launchers[-1], paths.bin, "a launcher")
 
     problems: list[str] = []
     for launcher in launchers:
