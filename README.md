@@ -279,6 +279,8 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 - Only OpenVPN files can be started, and the app keeps track of one VPN at a time: `vpn stop` before starting another file.
 - An archive holds no copy of the VPN file, only its name and SHA-256. Keep the `.ovpn` file yourself.
 - A tunnel the app did not start is never stopped by it, at `vpn stop` or at `finish`.
+- Ctrl-C while `vpn start` waits for OpenVPN to write its process ID can leave an OpenVPN running that the app does not track. `vpn stop` calls it a tunnel not started by pwn-broker; stop it by hand.
+- Starting a second tunnel while one the app did not start is up is reported as not up after 15 seconds, because the app reads only the lowest-numbered tunnel.
 - `quit` leaves the box's `/etc/hosts` lines in place. Only `finish` removes them; until then the hostnames go on resolving to the box's targets.
 - Lines in `/etc/hosts` that are not the app's are never changed. One that names the same host with another address has to be removed by hand; the `warn` line gives its number and the command to run after.
 - The published tool index is private for now, because `pwn-shop` is. Until it is public, `tools_index` must point at a folder that holds `index.toml` and the zips it names, and a folder filled by `sh fetch.sh <folder>` in a clone of `pwn-shop` is the way to get one.
