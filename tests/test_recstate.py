@@ -112,3 +112,11 @@ def test_live_casts_leaves_out_a_cast_that_has_vanished(paths, box):
 def test_live_casts_of_a_box_with_nothing_recording(paths, box):
     assert recstate.live_casts(paths, box, alive=lambda pid: True, started=lambda pid: "1") == {}
 
+
+
+@pytest.mark.parametrize(
+    "seconds, shown",
+    [(-5, "under a minute"), (0, "under a minute"), (59.9, "under a minute"), (60, "1 min"), (899, "14 min")],
+)
+def test_length_counts_whole_minutes(seconds, shown):
+    assert recstate.length(seconds) == shown

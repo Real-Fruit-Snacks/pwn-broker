@@ -22,6 +22,11 @@ def windows(count: int) -> str:
     return "1 window is" if count == 1 else f"{count} windows are"
 
 
+def length(seconds: float) -> str:
+    """How long a recording ran: `under a minute`, or whole minutes as `14 min`."""
+    return "under a minute" if seconds < 60 else f"{int(seconds // 60)} min"
+
+
 def marker_path(paths: AppPaths, pid: int) -> Path:
     return paths.run_recordings / str(pid)
 

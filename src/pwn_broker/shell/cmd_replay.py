@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from pwn_broker import boxes, casttext, recorder
+from pwn_broker import boxes, casttext, recorder, recstate
 from pwn_broker.cast import CastError, read_header
 from pwn_broker.model import Target
 from pwn_broker.session import Session, recordings
@@ -41,10 +41,6 @@ def _from_name(cast: Path, session: Session) -> datetime | None:
     return named.replace(tzinfo=session.clock().tzinfo)
 
 
-def _length(seconds: float) -> str:
-    return "under a minute" if seconds < 60 else f"{int(seconds // 60)} min"
-
-
 def _row(session: Session, n: int, cast: Path, live: bool) -> list[str]:
     tz = session.clock().tzinfo
     try:
@@ -69,7 +65,7 @@ def _row(session: Session, n: int, cast: Path, live: bool) -> list[str]:
     if header is None or start is None:
         length = "-"
     else:
-        length = _length(max(0.0, info.st_mtime - start.timestamp()))
+        length = recstate.length(max(0.0, info.st_mtime - start.timestamp()))
     return [str(n), started, length, human_size(info.st_size)]
 
 

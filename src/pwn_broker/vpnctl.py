@@ -27,7 +27,7 @@ POLL = 0.5
 # how long openvpn's background process has to write its process ID after the start returns
 PID_WAIT = 5.0
 LOG_LINES = 5
-NOT_OURS = "no VPN started by pwn-broker is running"
+NONE_RUNNING = "no VPN started by pwn-broker is running"
 INSTALL = "openvpn is not installed. install it with: apt install openvpn"
 
 
@@ -331,7 +331,7 @@ def stop(
     """Signal the process only once ours() has checked its ID, start time and name."""
     marker = ours(paths, **checks)
     if marker is None:
-        raise VpnError(NOT_OURS)
+        raise VpnError(NONE_RUNNING)
     run(["kill", "-TERM", str(marker.pid)])
     polls = math.ceil(wait / POLL)
     for attempt in range(polls + 1):

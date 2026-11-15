@@ -146,10 +146,6 @@ def _interrupts_ignored() -> Iterator[None]:
         signal.signal(signal.SIGINT, previous)
 
 
-def _length(minutes: int) -> str:
-    return "under a minute" if minutes < 1 else f"{minutes} min"
-
-
 def run(env: Env, argv: list[str]) -> int:
     console = env.console
     if argv in (["--help"], ["-h"]):
@@ -253,8 +249,7 @@ def _record(env: Env, box: Box, target: Target) -> int:
         console.warn(f"no text copy of {shown(cast)}: {exc.reason}")
     except OSError as exc:
         console.warn(f"no text copy of {shown(cast)}: {exc.strerror or exc}")
-    minutes = int((env.clock() - started).total_seconds() // 60)
-    console.ok(f"recording saved, {_length(minutes)}")
+    console.ok(f"recording saved, {recstate.length((env.clock() - started).total_seconds())}")
     console.info(f"    {shown(cast)}")
     if text is not None:
         console.info(f"    {shown(text)}")

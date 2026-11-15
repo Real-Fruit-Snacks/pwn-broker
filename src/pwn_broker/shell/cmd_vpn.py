@@ -7,7 +7,7 @@ from pwn_broker.session import Session, current_tunnel, vpn_checks
 from pwn_broker.shell.commands import command, take_args
 from pwn_broker.vpn import Tunnel
 
-NOT_OURS = "a tunnel is up that pwn-broker did not start"
+TUNNEL_NOT_OURS = "a tunnel is up that pwn-broker did not start"
 
 
 def _where(found: Tunnel) -> str:
@@ -47,7 +47,7 @@ def vpn_start(session: Session, args: list[str]) -> None:
         vpnctl.use(session.paths, session.box, marker, session.clock())
         return
     if found is not None:
-        console.warn(f"{NOT_OURS}: {_where(found)}")
+        console.warn(f"{TUNNEL_NOT_OURS}: {_where(found)}")
         if not console.confirm("start another?", default=False):
             return
     if session.which(vpnctl.COMMAND) is None:
@@ -95,7 +95,7 @@ def vpn_stop(session: Session, args: list[str]) -> None:
         if current_tunnel(session, fresh=True) is not None:
             console.fail("this tunnel was not started by pwn-broker; stop it yourself")
             return
-        raise vpnctl.VpnError(vpnctl.NOT_OURS)
+        raise vpnctl.VpnError(vpnctl.NONE_RUNNING)
     stop(session, marker)
 
 
@@ -119,7 +119,7 @@ def vpn_status(session: Session, args: list[str]) -> None:
     marker = vpnctl.ours(session.paths, **vpn_checks(session))
     found = current_tunnel(session, fresh=True)
     if marker is None:
-        console.info(NOT_OURS if found else "not up")
+        console.info(TUNNEL_NOT_OURS if found else "not up")
         return
     since = marker.started.astimezone(session.clock().tzinfo)
     rows = [
