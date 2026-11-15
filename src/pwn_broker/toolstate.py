@@ -181,6 +181,11 @@ def needed_runtimes(installed: dict[str, Installed]) -> set[str]:
     return {r for t in installed.values() if t.kind != "runtime" for r in t.requires}
 
 
+def tools_requiring(installed: dict[str, Installed], name: str) -> list[str]:
+    """The installed tools that require the runtime of that name, sorted."""
+    return sorted(t.name for t in installed.values() if t.kind != "runtime" and name in t.requires)
+
+
 def idle_runtimes(installed: dict[str, Installed]) -> list[Installed]:
     """The installed runtimes no installed tool requires."""
     needed = needed_runtimes(installed)

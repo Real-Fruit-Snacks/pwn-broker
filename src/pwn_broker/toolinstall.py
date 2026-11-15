@@ -27,7 +27,7 @@ from pwn_broker.toolpkg import (
     valid_tool_name,
     verify_zip,
 )
-from pwn_broker.toolstate import Installed, needed_runtimes, save_installed
+from pwn_broker.toolstate import Installed, needed_runtimes, save_installed, tools_requiring
 
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _MARK = "# pwn-broker tool: "
@@ -598,6 +598,23 @@ def _drop_row(paths: AppPaths, installed: dict[str, Installed], name: str) -> No
         ) from exc
 
 
+def damaged_runtime_refusal(item: Installed, tools: list[str], why: str) -> str:
+    """What to say when a runtime installed tools require is damaged and cannot be put back
+    as the build their environments were made by."""
+    if len(tools) == 1:
+        needed = f"{tools[0]} requires it: remove {tools[0]} and install it again"
+    else:
+        needed = f"{', '.join(tools)} require it: remove them and install them again"
+    shown = build_id(item.version, item.build)
+    return f"{item.name} {shown} is missing or damaged, and {why}; {needed}"
+
+
+def same_runtime_build(item: Installed, entry: BuildEntry) -> bool:
+    return (item.version, item.build, item.sha256.lower()) == (
+        entry.version, entry.build, entry.sha256.lower(),
+    )  # fmt: skip
+
+
 def install_runtime(
     paths: AppPaths,
     entry: BuildEntry,
@@ -609,7 +626,9 @@ def install_runtime(
     """Installs a runtime, or returns the one already there, at any build, unchanged.
 
     The row returned is the very object already in `installed` when the runtime was there, so a
-    caller can tell whether this call brought it, and undo it with forget_runtime if so.
+    caller can tell whether this call brought it, and undo it with forget_runtime if so. A
+    damaged runtime that installed tools require is only replaced by the build it was: their
+    environments point into its folder. Given another build, nothing is touched.
     """
     name = entry.name
     if not valid_tool_name(name):
@@ -622,6 +641,10 @@ def install_runtime(
             raise ToolError(f"{name} is installed as a tool, not a runtime")
         if runtime_intact(paths, current):
             return current
+        tools = tools_requiring(installed, name)
+        if tools and not same_runtime_build(current, entry):
+            why = f"{build_id(entry.version, entry.build)} is not that build"
+            raise ToolError(damaged_runtime_refusal(current, tools, why))
         # its files are gone or damaged: whatever is left under its name goes with the row
         leftover = paths.tools / name
         _check_inside(leftover, paths.tools, "the runtime folder")

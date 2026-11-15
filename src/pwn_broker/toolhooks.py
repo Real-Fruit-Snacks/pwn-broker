@@ -121,14 +121,16 @@ def install_tool(
     """Installs a tool for the session's box, with the runtime it requires installed first.
 
     A runtime already on the machine, at any build, is used as it is; otherwise the index's
-    latest build is installed. If the tool then cannot be installed, a runtime this call brought
-    is removed again; one that was there before is left alone.
+    latest build is installed. A damaged one that installed tools require is installed again at
+    the build it was, or refused if the index no longer lists it. If the tool then cannot be
+    installed, a runtime this call brought is removed again; one that was there before is left
+    alone.
     """
     paths, console = session.paths, session.console
     # a tool the box would refuse costs no download; nor does a runtime the index lacks
     toolinstall.check_install(session.box, entry, installed=installed, unfinished=unfinished)
     missing = [
-        toolindex.pick_build(toolindex.find_runtime(index, name), None)
+        _runtime_build(index, installed, name)
         for name in entry.requires
         if not toolinstall.runtime_intact(paths, installed.get(name))
     ]
@@ -172,6 +174,24 @@ def install_tool(
         log_tool(session, "install", runtime_item, kind="runtime")
     log_tool(session, "install", tool)
     return tool
+
+
+def _runtime_build(index: Index, installed: dict[str, Installed], name: str) -> BuildEntry:
+    # the build to install for a runtime that is not there as it should be
+    current = installed.get(name)
+    tools = toolstate.tools_requiring(installed, name)
+    if current is None or current.kind != "runtime" or not tools:
+        return toolindex.pick_build(toolindex.find_runtime(index, name), None)
+    # the tools' environments point into the folder of the build they were made by
+    try:
+        builds = toolindex.find_runtime(index, name).builds
+    except ToolError:
+        builds = []
+    for build in builds:
+        if toolinstall.same_runtime_build(current, build):
+            return build
+    why = "the index no longer lists that build"
+    raise ToolError(toolinstall.damaged_runtime_refusal(current, tools, why))
 
 
 def _unreadable_names(paths: AppPaths) -> str:

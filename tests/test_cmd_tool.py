@@ -1064,6 +1064,86 @@ def test_a_runtime_under_a_tool_another_box_shares_stays(session, shop, pyshop, 
     assert runtime_row(session) is not None
 
 
+def damage_the_runtime(session):
+    # the row stays; the interpreter the tools' environments were made by is gone
+    rt = runtime_row(session)
+    Path(rt.python).unlink()
+    return rt
+
+
+def files_under(folder):
+    return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*"))
+
+
+def test_a_damaged_runtime_tools_require_is_installed_again_at_its_own_build(
+    session, shop, pyshop, other
+):
+    install_on_runtime_for(other, session, shop, pyshop, pyshop.certipy)
+    before = damage_the_runtime(session)
+    _z, newer = toolkit.make_runtime(shop.folder, build=2)
+    toolkit.write_index(shop.folder, [*pyshop.entries, newer])
+    console = run(session, "tool install certipy")
+    assert lines(console, "ok") == [RT_LINE, "certipy 5.1.0 installed"]
+    assert lines(console, "fail") == []
+    rt = runtime_row(session)
+    # the same folder and interpreter, so the environment certipy was made with works again
+    assert (rt.build, rt.folder, rt.python) == (1, before.folder, before.python)
+    assert Path(rt.python).is_file()
+    assert [p.name for p in (session.paths.tools / "python-3.13").iterdir()] == ["3.13.18-1"]
+    certipy = toolstate.load_installed(session.paths)["certipy"]
+    assert certipy.users == [other.id, session.box.id]
+
+
+def test_a_failed_install_keeps_a_damaged_runtime_it_put_back_for_other_tools(
+    session, shop, pyshop, other, monkeypatch
+):
+    install_on_runtime_for(other, session, shop, pyshop, pyshop.certipy)
+    before = damage_the_runtime(session)
+    toolkit.no_real_venv(monkeypatch, fail="pip")
+    console = run(session, "tool install bloodhound")
+    assert len(lines(console, "fail")) == 1 and lines(console, "ok") == [RT_LINE]
+    nothing_of(session, "bloodhound")
+    # certipy still requires it, so it stays, working again
+    assert runtime_row(session).folder == before.folder and Path(before.python).is_file()
+    assert load_box(session.box.path).tools == []
+
+
+def test_a_damaged_runtime_whose_build_the_index_lost_is_refused_and_kept(
+    session, shop, pyshop, other
+):
+    install_on_runtime_for(other, session, shop, pyshop, pyshop.certipy)
+    damage_the_runtime(session)
+    _z, newer = toolkit.make_runtime(shop.folder, build=2)
+    others = [e for e in pyshop.entries if e.name != "python-3.13"]
+    toolkit.write_index(shop.folder, [*others, newer])
+    state = session.paths.tools_state.read_bytes()
+    kept = files_under(session.paths.tools)
+    pyshop.fetched.clear()
+    console = run(session, "tool install bloodhound")
+    assert lines(console, "fail") == [
+        "python-3.13 3.13.18-1 is missing or damaged, and the index no longer lists that "
+        "build; certipy requires it: remove certipy and install it again"
+    ]
+    assert lines(console, "ok") == [] and pyshop.fetched == []
+    assert session.paths.tools_state.read_bytes() == state
+    assert files_under(session.paths.tools) == kept
+    assert load_box(session.box.path).tools == []
+
+
+def test_the_refusal_names_every_tool_that_requires_the_damaged_runtime(
+    session, shop, pyshop, other
+):
+    install_on_runtime_for(other, session, shop, pyshop, pyshop.certipy)
+    install_on_runtime_for(other, session, shop, pyshop, pyshop.bloodhound)
+    damage_the_runtime(session)
+    toolkit.write_index(shop.folder, [e for e in pyshop.entries if e.name != "python-3.13"])
+    console = run(session, "tool install certipy")
+    assert lines(console, "fail") == [
+        "python-3.13 3.13.18-1 is missing or damaged, and the index no longer lists that "
+        "build; bloodhound, certipy require it: remove them and install them again"
+    ]
+
+
 def test_no_runtime_is_removed_while_a_box_cannot_be_read(session, shop, pyshop):
     run(session, "tool install certipy")
     break_a_box(session)

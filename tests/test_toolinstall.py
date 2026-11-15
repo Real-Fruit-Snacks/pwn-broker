@@ -1281,6 +1281,34 @@ def test_a_runtime_whose_files_are_gone_is_installed_afresh(paths, tmp_path, mis
     assert console.lines == [("ok", "python-3.13 3.13.18 installed (runtime, 1 MB)")]
 
 
+def a_tool_on(runtime: Installed) -> Installed:
+    # a row for a tool whose environment was made by the runtime's interpreter
+    return Installed(
+        name="certipy", version="5.1.0", build=3, sha256="ab" * 32,
+        folder="/opt/pwn-broker/tools/certipy/5.1.0-3", commands=["certipy"], uploads=[],
+        needs_root=False, users=["box"], home={}, requires=[runtime.name],
+    )  # fmt: skip
+
+
+def test_a_damaged_runtime_a_tool_requires_is_only_replaced_by_its_own_build(paths, tmp_path):
+    first, _c, installed = rt_install(paths, tmp_path)
+    installed["certipy"] = a_tool_on(first)
+    python = Path(first.python)
+    python.unlink()
+    before = snapshot(paths)
+    zip_path, entry = toolkit.make_runtime(tmp_path / "newer", build=2)
+    with pytest.raises(ToolError, match="python-3.13 3.13.18-1 is missing or damaged") as err:
+        rt_install(paths, tmp_path, zip_path, entry, installed=installed)
+    assert "certipy requires it: remove certipy and install it again" in str(err.value)
+    assert snapshot(paths) == before and installed["python-3.13"] is first
+    # the build it was: the same folder and interpreter again
+    zip_path, entry = toolkit.make_runtime(tmp_path / "same")
+    item, console, _i = rt_install(paths, tmp_path, zip_path, entry, installed=installed)
+    assert (item.folder, item.python) == (first.folder, first.python)
+    assert python.is_file() and load_installed(paths)["python-3.13"] == item
+    assert console.lines == [("ok", "python-3.13 3.13.18 installed (runtime, 1 MB)")]
+
+
 def test_install_runtime_refuses_a_package_that_is_not_a_runtime(paths, tmp_path):
     zip_path, entry = build(tmp_path)
     installed = {}
@@ -1448,7 +1476,7 @@ def test_forget_runtime_keeps_a_runtime_another_tool_requires(paths, box, tmp_pa
     do_install(paths, box, entry, zip_path, tmp_path, installed=installed, runtime=rt)
     # its row goes stale, so the next install brings it afresh and looks like this command's own
     Path(rt.python).unlink()
-    again_zip, again = toolkit.make_runtime(tmp_path / "again", build=2)
+    again_zip, again = toolkit.make_runtime(tmp_path / "again")
     fresh, _c, _i = rt_install(paths, tmp_path, again_zip, again, installed=installed)
     assert fresh is not rt
     assert forget_runtime(paths, installed, "python-3.13") is False
