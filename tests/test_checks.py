@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,6 +31,10 @@ def _found(name):
     return "/usr/bin/" + name
 
 
+def _venv_ok(argv, **kwargs):
+    return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+
 def _ready(paths):
     paths.active.mkdir(parents=True)
     paths.wrapped.mkdir(parents=True)
@@ -45,9 +50,9 @@ def _missing(wanted):
 
 def test_all_checks_pass(paths):
     _ready(paths)
-    results = run_checks(paths, Settings(), _env(paths), which=_found)
+    results = run_checks(paths, Settings(), _env(paths), which=_found, run=_venv_ok)
     assert all(r.status == "ok" for r in results)
-    assert [r.name for r in results] == ["vim", "terminal", "tar", "display", "path", "folders"]
+    assert [r.name for r in results] == ["vim", "terminal", "tar", "venv", "display", "path", "folders"]
 
 
 def test_missing_vim_fails_with_install_hint(paths):
@@ -112,7 +117,7 @@ def test_path_must_match_an_entry_exactly(paths):
 
 
 def test_folders_missing_are_repairable(paths):
-    results = run_checks(paths, Settings(), _env(paths), which=_found)
+    results = run_checks(paths, Settings(), _env(paths), which=_found, run=_venv_ok)
     folders = _by_name(results)["folders"]
     assert folders.status == "warn"
     folders.repair()
@@ -296,3 +301,31 @@ def test_version_check_quiet_when_fetch_fails():
         raise OSError("offline")
 
     assert version_check(Settings(), "0.1.0", fetch=fetch) is None
+
+
+def test_venv_check_passes_when_python_can_make_environments(paths):
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(argv)
+        return SimpleNamespace(returncode=0)
+
+    _ready(paths)
+    venv = _by_name(run_checks(paths, Settings(), _env(paths), which=_found, run=run))["venv"]
+    assert venv.status == "ok" and seen == [["python3", "-m", "venv", "--help"]]
+
+
+@pytest.mark.parametrize("failure", ["exit", "missing", "hang"])
+def test_venv_check_fails_with_the_package_hint(paths, failure):
+    import subprocess
+
+    def run(argv, **kwargs):
+        if failure == "missing":
+            raise FileNotFoundError("python3")
+        if failure == "hang":
+            raise subprocess.TimeoutExpired(argv, 20)
+        return SimpleNamespace(returncode=1)
+
+    _ready(paths)
+    venv = _by_name(run_checks(paths, Settings(), _env(paths), which=_found, run=run))["venv"]
+    assert venv.status == "fail" and venv.hint == "apt install python3-venv"

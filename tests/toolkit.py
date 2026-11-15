@@ -81,3 +81,63 @@ def make_package(
         for name, data in entries.items():
             zf.writestr(name, data)
     return path, path.stat().st_size, sha256_file(path)
+
+
+def make_entry(folder: Path, manifest_overrides: dict | None = None, files: dict | None = None):
+    # a binary package built for this machine, with its index entry
+    from pwn_broker.toolindex import BuildEntry
+    from pwn_broker.toolpkg import machine_arch
+
+    manifest = sample_manifest(arch=machine_arch(), **(manifest_overrides or {}))
+    if files is None:
+        files = {"files/kerbrute": b"#!/bin/sh\necho hi\n"}
+    zip_path, size, sha = make_package(folder, manifest, files)
+    entry = BuildEntry(
+        name=manifest["name"],
+        version=manifest["version"],
+        build=manifest["build"],
+        kind=manifest["kind"],
+        needs_root=manifest.get("needs_root", False),
+        commands=[c["name"] for c in manifest["command"]],
+        file=zip_path.name,
+        url="",
+        size=size,
+        sha256=sha,
+    )
+    return zip_path, entry
+
+
+def write_index(folder: Path, entries: list) -> Path:
+    # a folder index (tools_index pointing at a directory): index.toml next to the zips
+    tools: dict[str, list] = {}
+    for e in entries:
+        tools.setdefault(e.name, []).append(e)
+    rows = []
+    for name, builds in tools.items():
+        rows.append(
+            {
+                "name": name,
+                "description": f"{name} stand-in",
+                "tags": [],
+                "licence": "MIT",
+                "upstream": "https://example.invalid/" + name,
+                "latest": f"{builds[-1].version}-{builds[-1].build}",
+                "build": [
+                    {
+                        "version": b.version,
+                        "build": b.build,
+                        "kind": b.kind,
+                        "needs_root": b.needs_root,
+                        "commands": b.commands,
+                        "file": b.file,
+                        "size": b.size,
+                        "sha256": b.sha256,
+                    }
+                    for b in builds
+                ],
+            }
+        )
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "index.toml"
+    path.write_text(tomli_w.dumps({"schema": 1, "tool": rows}), encoding="utf-8")
+    return path

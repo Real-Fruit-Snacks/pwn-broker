@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import subprocess
 import threading
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -32,12 +33,24 @@ def _tool(name: str, binary: str, which: Callable[[str], str | None], hint: str)
     return CheckResult(name, "fail", f"{binary} not found", hint)
 
 
+def _venv(run: Callable) -> CheckResult:
+    try:
+        done = run(["python3", "-m", "venv", "--help"], capture_output=True, timeout=20)
+        working = done.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        working = False
+    if working:
+        return CheckResult("venv", "ok", "python3 can make virtual environments")
+    return CheckResult("venv", "fail", "python3 -m venv does not work", "apt install python3-venv")
+
+
 def run_checks(
     paths: AppPaths,
     settings: Settings,
     env: Mapping[str, str],
     which: Callable[[str], str | None] = shutil.which,
     repair_path: Callable[[], None] | None = None,
+    run: Callable = subprocess.run,
 ) -> list[CheckResult]:
     results = [
         _tool("vim", "vim", which, "apt install vim"),
@@ -48,6 +61,7 @@ def run_checks(
             f"install {settings.terminal} or set terminal in {paths.config_file}",
         ),
         _tool("tar", "tar", which, "apt install tar"),
+        _venv(run),
     ]
 
     if has_display(env):

@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from pwn_broker import __version__, boxes, checks, config, lifecycle, note, notewindow, privilege
-from pwn_broker import questions, session as sessions, setup
+from pwn_broker import questions, session as sessions, setup, toolhooks
 from pwn_broker.boxes import BoxError
 from pwn_broker.config import ConfigError, Settings
 from pwn_broker.console import Cancelled, Console, TermConsole
@@ -141,6 +141,10 @@ def choose(env: Env) -> Session | None:
     assert box is not None
     if kind == "reopen":
         lifecycle.reopen_box(box)
+        session = _load(env, box)
+        for hook in lifecycle.RESTORE_HOOKS:
+            hook(session)
+        return session
     return _load(env, box)
 
 
@@ -242,6 +246,8 @@ def _prepare(env: Env) -> int | None:
     if any(r.status == "fail" for r in results):
         return 1
 
+    toolhooks.leftovers(env.paths, console)
+
     newer = checks.newer_release_within(env.settings)
     if newer is not None:
         console.warn(f"{newer.name}   {newer.message}")
@@ -295,6 +301,8 @@ def main(argv: list[str] | None = None) -> int:
         TermConsole(os.environ).fail(str(exc))
         return 1
     import pwn_broker.shell  # noqa: F401  (importing it fills the command registry)
+
+    toolhooks.register()
 
     try:
         cwd = Path.cwd()

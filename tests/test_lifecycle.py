@@ -577,3 +577,60 @@ def test_import_asks_when_folder_is_a_dangling_symlink(session, tmp_path):
     console = FakeConsole(["n"])
     assert import_box(paths, Settings(), console, archive, lambda: NOW) is None
     assert len(console.asked) == 1
+
+
+def test_block_hook_reasons_stop_finish_before_anything_else(session, monkeypatch):
+    monkeypatch.setattr(lifecycle, "BLOCK_HOOKS", [lambda s: "kerbrute is running", lambda s: None])
+    console = answers(session).console
+    assert finish_box(session, **SAVED) is None
+    assert [t for k, t in console.lines if k == "fail"] == ["kerbrute is running"]
+    assert console.asked == [] and not archive_path(session.paths, session.box, "finished").exists()
+    assert load_box(session.box.path).status == "active"
+
+
+def test_block_reasons_and_an_unsaved_note_are_both_reported(session, monkeypatch):
+    monkeypatch.setattr(lifecycle, "BLOCK_HOOKS", [lambda s: "a tool is running"])
+    answers(session)
+    assert finish_box(session, fix=lambda p: 0, unsaved=lambda b: True) is None
+    assert len(kinds(session, "fail")) == 2
+
+
+def test_summary_hook_lines_follow_the_existing_ones_before_the_question(session, monkeypatch):
+    monkeypatch.setattr(lifecycle, "SUMMARY_HOOKS", [lambda s: ["extra     one", "extra     two"]])
+    console = answers(session, "n").console
+    shown = []
+    original = console.confirm
+    console.confirm = lambda q, default=False: shown.extend(console.lines) or original(q, default)
+    finish_box(session, **SAVED)
+    info = [t for k, t in shown if k == "info"]
+    assert info[-2:] == ["extra     one", "extra     two"]
+    assert info[-3].startswith("archive   ")
+
+
+def test_pre_pack_hooks_run_after_ownership_and_before_refresh(session, monkeypatch):
+    calls = record_calls(monkeypatch)
+    monkeypatch.setattr(lifecycle, "PRE_PACK_HOOKS", [lambda s: calls.append("hook")])
+    export_box(session, fix=fix_recorder(calls))
+    assert calls == ["fix", "hook", "refresh", "rescan-hash", "write_manifest", "pack"]
+    del calls[:]
+    answers(session, "y", "n")
+    finish_box(session, fix=fix_recorder(calls), unsaved=lambda b: False)
+    assert calls[:3] == ["rescan", "fix", "hook"]
+    assert calls.index("hook") < calls.index("refresh")
+
+
+def test_a_failing_pre_pack_hook_rolls_finish_back_and_stops_export(session, monkeypatch):
+    from pwn_broker.toolpkg import ToolError
+
+    def boom(s):
+        raise ToolError("the disk is full")
+
+    monkeypatch.setattr(lifecycle, "PRE_PACK_HOOKS", [boom])
+    answers(session, "y")
+    assert finish_box(session, **SAVED) is None
+    assert_rolled_back(session)
+    assert export_box(session, **NOFIX) is None
+    assert [t for t in kinds(session, "fail")] == [
+        "finish failed, the box is still active: the disk is full",
+        "export failed: the disk is full",
+    ]

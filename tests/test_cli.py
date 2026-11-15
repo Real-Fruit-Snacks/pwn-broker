@@ -530,3 +530,43 @@ def test_main_survives_a_deleted_cwd(monkeypatch, tmp_path):
 
     monkeypatch.setattr(Path, "cwd", staticmethod(gone))
     assert main([]) == 0 and seen == [Path.home()]
+
+
+def test_reopen_runs_the_restore_hooks_with_the_loaded_session(env, monkeypatch):
+    _, done = two_boxes(env)
+    seen = []
+    monkeypatch.setattr(lifecycle, "RESTORE_HOOKS", [lambda s: seen.append((s.box.path, s.box.status))])
+    env.console = FakeConsole(["4"])
+    choose(env)
+    assert seen == [(done.path, "active")]
+
+
+def test_resume_does_not_run_the_restore_hooks(env, monkeypatch):
+    two_boxes(env)
+    seen = []
+    monkeypatch.setattr(lifecycle, "RESTORE_HOOKS", [seen.append])
+    env.console = FakeConsole(["3"])
+    choose(env)
+    assert seen == []
+
+
+def test_start_offers_to_remove_tools_left_by_finished_boxes(env, quiet, box, ran, monkeypatch):
+    from pwn_broker import toolhooks
+
+    seen = []
+    monkeypatch.setattr(toolhooks, "leftovers", lambda paths, console: seen.append((paths, console)))
+    env.cwd = box.path
+    assert start(env, []) == 0
+    assert seen == [(env.paths, env.console)]
+
+
+def test_main_registers_the_tool_hooks(tmp_path, monkeypatch):
+    from pwn_broker import toolhooks
+
+    for name in ("BLOCK_HOOKS", "SUMMARY_HOOKS", "PRE_PACK_HOOKS", "UNDO_HOOKS", "RESTORE_HOOKS"):
+        monkeypatch.setattr(lifecycle, name, [])
+    monkeypatch.setattr(cli, "start", lambda env, argv: 0)
+    monkeypatch.setenv("PWN_BROKER_OPT", str(tmp_path))
+    assert main([]) == 0
+    assert toolhooks.block in lifecycle.BLOCK_HOOKS
+    assert toolhooks.restore in lifecycle.RESTORE_HOOKS

@@ -22,11 +22,15 @@ from pwn_broker.paths import AppPaths
 from pwn_broker.privilege import fix_ownership
 from pwn_broker.session import Session, load_session, refresh, rescan
 from pwn_broker.store import StoreError, load_box, save_box
+from pwn_broker.toolpkg import ToolError
 
+BLOCK_HOOKS: list[Callable[[Session], str | None]] = []
+SUMMARY_HOOKS: list[Callable[[Session], list[str]]] = []
+PRE_PACK_HOOKS: list[Callable[[Session], None]] = []
 UNDO_HOOKS: list[Callable[[Session], None]] = []
 RESTORE_HOOKS: list[Callable[[Session], None]] = []
 
-_FAILURES = (ArchiveError, StoreError, OSError)
+_FAILURES = (ArchiveError, StoreError, OSError, ToolError)
 _SHOWN = 10
 
 
@@ -74,6 +78,8 @@ def export_box(
     try:
         # ownership first: as a normal user a root-owned file cannot be hashed or packed
         fix(session.box.path)
+        for hook in PRE_PACK_HOOKS:
+            hook(session)
         dest, left_out = _pack(session, "exported")
     except _FAILURES as exc:
         session.console.fail(f"export failed: {exc}")
@@ -116,11 +122,16 @@ def finish_box(
 ) -> Path | None:
     box = session.box
     console = session.console
+    reasons = [reason for reason in (hook(session) for hook in BLOCK_HOOKS) if reason]
+    for reason in reasons:
+        console.fail(reason)
     if unsaved(box):
         console.fail(
             "the note has unsaved changes; save it in vim with :w, "
             "or run note to reopen the window if it is closed"
         )
+        return None
+    if reasons:
         return None
 
     dest = archive_path(session.paths, box, "finished")
@@ -133,6 +144,9 @@ def finish_box(
     console.info(f"targets   {len(session.targets)}")
     console.info(f"files     {len(files)}")
     console.info(f"archive   {dest}")
+    for hook in SUMMARY_HOOKS:
+        for line in hook(session):
+            console.info(line)
 
     if not console.confirm("finish this box?"):
         return None
@@ -142,6 +156,8 @@ def finish_box(
     packed: Path | None = None
     try:
         fix(box.path)
+        for hook in PRE_PACK_HOOKS:
+            hook(session)
         # saved before the rescan so the manifest holds the checksum of the box.toml that gets archived
         box.status = "finished"
         box.finished = session.clock()
