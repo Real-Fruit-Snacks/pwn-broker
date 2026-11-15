@@ -87,7 +87,7 @@ Three phases. Each is usable when it is done.
 | Phase | Contents |
 |---|---|
 | 1. Organiser | Install, launch checks, new box questions, targets and folders, notes window, the prompt, creds, file records, flags, `finish`, `export`, `import` |
-| 2. Recording and Kali changes | `record`, `replay`, `/etc/hosts` management, VPN check, ping on target add |
+| 2. Recording and Kali changes | `record`, `replay`, `/etc/hosts` management, starting and checking the VPN, ping on target add |
 | 3. Tools | The `pwn-shop` repo and its release workflow, the first six packages, the `tool` commands |
 
 Phases 1 and 3 are built. Phase 2 is built last, is specified in full in section 7, and ships with the other two in the first release.
@@ -101,7 +101,7 @@ Phases 1 and 3 are built. Phase 2 is built last, is specified in full in section
   templates/notes.md             note template, editable
   vim/vimrc                      loaded with vim -u
   vim/nightshift.vim             Nightshift colours for vim
-  run/                           which box is open and its lock, running tools, recording windows
+  run/                           which box is open and its lock, running tools, recording windows, the running VPN
   state.toml                     last-used values, rebuilt when missing
   tools/<name>/<version>/        phase 3
   upload/<name>/                 phase 3
@@ -138,6 +138,7 @@ Everything the app owns is under `/opt/pwn-broker`. Uninstalling it is deleting 
       exploits/
       screenshots/
       recordings/       phase 2
+  vpn/                  phase 2: the VPN file this box started, never archived
   tooldata/             phase 3: data that tools write while they run
 ```
 
@@ -499,7 +500,7 @@ On a fresh VM the file does not exist. The installer takes `--config <path>` to 
 
 ## 7. Phase 2: recording and Kali changes
 
-Ships in the first release, with phases 1 and 3. It adds `record` and `replay`, the box's lines in `/etc/hosts`, a VPN check and a ping for each new target.
+Ships in the first release, with phases 1 and 3. It adds `record` and `replay`, the box's lines in `/etc/hosts`, the `host` and `vpn` commands, a VPN check and a ping for each new target.
 
 ### 7.1 Approaches
 
@@ -669,13 +670,54 @@ ok  /etc/hosts updated
 - Only a plain hostname is written: letters, digits, hyphens and dots, 253 characters at most. Anything else is refused with a `warn`, so a hostname can never carry a second entry or a comment into the file.
 - If `/etc/hosts` is missing, a link, or not a regular file, nothing is written and the app says why.
 
-### 7.8 VPN check
+### 7.8 VPN
 
-- A launch check, `vpn`: `warn` when no interface named `tun<n>` has an IPv4 address. It never blocks and never starts a VPN.
+**The check.**
+
+- A launch check, `vpn`: `warn  vpn  no VPN tunnel is up. start one with: vpn start` when no interface named `tun<n>` has an IPv4 address. It never blocks.
 - With several tunnels, the lowest-numbered one with an address is used.
 - The status bar shows `vpn 10.10.14.7`, or `no vpn`. It is read again with each command and each redraw of the bar. A read that fails counts as no VPN and never holds the prompt up.
 - `status` shows the same.
 - `{lhost}` in `tool info` examples is filled from this address.
+
+**Starting one.**
+
+```
+forest > vpn start
+vpn file     [/root/Downloads/lab_user.ovpn] >
+ok  copied to vpn/lab_user.ovpn
+ok  vpn up, 10.10.14.7 on tun0
+```
+
+| Command | Does |
+|---|---|
+| `vpn start` | Asks for the `.ovpn` file, copies it into the box, starts OpenVPN in the background and waits for the tunnel |
+| `vpn stop` | Stops the VPN the app started |
+| `vpn status` | Whether a tunnel is up, its address and interface, since when, from which file, and which box started it |
+| `vpn log` | The last 20 lines of OpenVPN's log |
+
+- The question takes a full path, with Tab completing it. Its default is the file used last time, on any box, so the next box is one Enter.
+- The file is copied into `vpn/` in the box, readable only by me. A copy of the same name with the same content is reused; with different content the new one gets `-2`, `-3` and so on.
+- OpenVPN runs in its own background mode, not in a window and not in tmux. Closing any window, or quitting the prompt, does not end it. Nothing extra has to be installed.
+- What the running VPN needs lives in `/opt/pwn-broker/run/vpn/`, not in the box: a second copy of the file that OpenVPN is started from, its log, its process ID, and a marker holding the process start time, the box that started it, the file's name and its SHA-256. A VPN therefore outlives the box that started it.
+- OpenVPN is started with the original file's folder as its working folder, so a file that names a certificate or key beside it still works.
+- As root the app starts it directly. As a normal user it starts it through `sudo`.
+- `vpn start` waits up to 15 seconds for a `tun` interface with an address. If OpenVPN ends before that, the app says so and prints the last lines of the log. If it is still trying, the app says so and names `vpn log`.
+- A file that asks for a username or password is asked for it in the prompt window, by OpenVPN itself, before it goes to the background.
+- If a tunnel is already up, `vpn start` says whose it is and asks before starting another. The default is no. If the app started it for an earlier box, saying no simply uses it, and this box records that it did.
+- `vpn stop` stops only a process the app started: the process ID must be alive, have the recorded start time and be `openvpn`. It waits up to five seconds and says whether the tunnel is gone. A tunnel I started by hand is reported and never touched.
+- A marker whose process is gone is cleared, as for tools.
+- With no `openvpn` on the machine, `vpn start` says how to install it and starts nothing.
+
+**The box's record.**
+
+- `box.toml` records each VPN the box started or used: the file's name, its SHA-256 and when.
+- The `vpn/` folder is left out of `files.toml`, the manifest and every archive, because the file holds my VPN key. An archive carries only the record above. `finish` deletes the folder with the rest of the box.
+- `import` restores the record and starts nothing.
+
+**Finish.**
+
+- If a VPN the app started is still up, `finish` says so with its address and asks `stop it? [y/N]`. The default keeps it, so the next box can use it. `export` and `quit` never touch it.
 
 ### 7.9 Ping
 
@@ -692,7 +734,7 @@ ok  /etc/hosts updated
 - `record` is a launcher in `/opt/pwn-broker/bin`, written by setup and put back by the launch check if it is missing.
 - `pyte` 0.8.2 becomes a dependency of the app, pinned exactly because the text copy leans on how it works inside.
 - New launch checks: `asciinema` (present and matching its pin; a `warn` says to run the installer again) and `vpn`.
-- `record` and `asciinema` join the command names a tool package may not use, in both repositories.
+- `record`, `asciinema`, `openvpn`, `ping` and `ip` join the command names a tool package may not use, in both repositories. The app runs each of them by name, and a tool's command would be found first.
 - asciinema is GPL-3.0-or-later and is fetched from upstream at install, never shipped in this repository. `pyte` is LGPL-3.0 and is installed by `pip` as a dependency.
 
 ### 7.11 What changes in pwn-broker
@@ -701,13 +743,14 @@ ok  /etc/hosts updated
 - The target commands call the `/etc/hosts` offer and the ping.
 - `finish`, `export` and `import` gain recording and hosts steps through the same hook lists the tools use.
 - The status bar and `status` gain the VPN address and the recording count.
+- The file scan and the archive leave the box's `vpn/` folder out.
 - CI installs the pinned `asciinema`, zsh and bash on Ubuntu and runs real recordings there.
 
 ### 7.12 Testing
 
 - The text copy is plain Python over a `.cast`, tested everywhere. Its cases: a zsh session and a bash session recorded by the real `asciinema` in CI and committed, and hand-written files for a wrapped line, a redrawn line, a full-screen program, a cleared screen, a resize to a shorter window, midnight, and a cut-off last line.
 - `/etc/hosts` is tested against a file in a temporary folder, as root and as a normal user, including that every other byte survives.
-- The VPN read, the ping and `asciinema` are each run through a seam the tests replace. The real `asciinema` runs only in CI on Linux; those tests skip elsewhere.
+- The VPN read, the ping, `openvpn` and `asciinema` are each run through a seam the tests replace. No test starts a real VPN. The real `asciinema` runs only in CI on Linux; those tests skip elsewhere.
 - The prompt prefix, the window behaviour and Kali's own zsh settings are checked by hand on Kali, and `docs/kali-checks.md` gains those steps.
 
 ### 7.13 Accepted trades
@@ -717,6 +760,8 @@ ok  /etc/hosts updated
 - A password typed on a command line is recorded.
 - The `[rec]` prefix exists for zsh and bash only.
 - Only `tun` interfaces count as a VPN.
+- An archive holds no copy of the VPN file, only its name and checksum.
+- Only OpenVPN files are started. WireGuard is not handled.
 
 ## 8. Phase 3: tools
 
@@ -994,6 +1039,7 @@ Whatever a box changes on Kali, `finish` undoes. Each change is recorded in `box
 | Change | Phase | Undone by |
 |---|---|---|
 | Lines in `/etc/hosts` | 2 | Removing the lines marked with the box ID |
+| A VPN the app started | 2 | Asking whether to stop it. The default keeps it for the next box |
 | Installed tools | 3 | Removing each tool's commands, upload files and folder |
 | Tool data in the home folder | 3 | Copying it into the box, then deleting it |
 
@@ -1012,6 +1058,8 @@ These could not be checked while designing. Each must be confirmed before the pa
 - The text copy of a real session on Kali reads cleanly: command lines as typed, with zsh's suggestions and highlighting gone.
 - Writing `/etc/hosts` in place works on Kali, as root and through `sudo`.
 - The VPN interface on Hack The Box is `tun0`.
+- `vpn start` with a real Hack The Box file: the tunnel comes up, survives closing every window and quitting the prompt, and `vpn stop` ends it.
+- OpenVPN asks for a username and password in the prompt window before it goes to the background.
 - Kali's own `ligolo-ng` package installs a command named `ligolo-proxy`. Confirm it, and that with mine installed a bare `ligolo-proxy` runs mine and a bare `sudo ligolo-proxy` runs Kali's.
 - What `ligolo-proxy` writes, and where, on its first run, so its package lists the right data paths.
 - PEASS-ng's licence, read in full, before `pwn-shop` is made public.
@@ -1065,6 +1113,11 @@ For recording and Kali changes:
 - `host add`, `host remove`, `host`, `host file on` and `host file off` exist, and act on the current target.
 - Within a box a hostname belongs to one target.
 - Only `tun` interfaces count as a VPN, and there is no setting for it.
+- OpenVPN runs in its own background mode, not in tmux.
+- The running VPN's files live in `/opt/pwn-broker/run/vpn/`, so it outlives the box that started it; the box's `vpn/` folder holds only the copy of the file.
+- `vpn log` and `vpn status` exist beside `vpn start` and `vpn stop`.
+- The `vpn start` question defaults to the file used last time.
+- A tunnel the app did not start is never stopped.
 - A new target is pinged wherever it is added, including from `record`.
 - A failed asciinema download does not stop the install.
 - The prompt and `record` share a lock, and the prompt reloads the box from disk when it has changed.
