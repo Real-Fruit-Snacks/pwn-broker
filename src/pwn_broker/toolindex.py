@@ -217,6 +217,16 @@ def _opener(*extra: urllib.request.BaseHandler) -> urllib.request.OpenerDirector
 _OPENER = _opener()
 
 
+def close_response(exc: BaseException) -> None:
+    """An HTTP error carries the response it came with; close it once the error is handled."""
+    close = getattr(exc, "close", None)
+    if callable(close):
+        try:
+            close()
+        except OSError:
+            pass
+
+
 def _open(url: str, timeout: float):
     request = urllib.request.Request(url, headers={"User-Agent": "pwn-broker"})
     return _OPENER.open(request, timeout=timeout)
@@ -343,6 +353,7 @@ def load_index(
         raw = _with_deadline(fetch, where, FORCED_TIMEOUT if force else QUICK_TIMEOUT)
         fresh = _parse_bytes(raw)
     except Exception as exc:
+        close_response(exc)
         if cached is not None and not force:
             return cached
         raise _not_found(where, str(exc) or type(exc).__name__) from exc
@@ -477,6 +488,7 @@ def fetch_zip(
             except ToolError:
                 raise
             except Exception as exc:
+                close_response(exc)
                 raise ToolError(
                     f"cannot download {entry.url}: {str(exc) or type(exc).__name__}"
                 ) from exc

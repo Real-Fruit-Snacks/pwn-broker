@@ -63,6 +63,7 @@ def fetch(
             os.chmod(temp, 0o755)
             os.replace(temp, target)
         except (ToolError, OSError) as exc:
+            toolindex.close_response(exc)
             raise RecorderError(str(exc)) from exc
     finally:
         try:

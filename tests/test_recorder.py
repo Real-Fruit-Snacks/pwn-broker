@@ -96,6 +96,20 @@ def test_fetch_replaces_a_wrong_copy(paths):
     assert paths.asciinema.read_bytes() == GOOD
 
 
+def test_fetch_closes_a_refused_response(paths):
+    import io
+    import urllib.error
+
+    body = io.BytesIO(b"not found")
+
+    def refused(url, dest, limit, timeout):
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, body)
+
+    with pytest.raises(RecorderError):
+        fetch(paths, download=refused, size=SIZE, sha256=SUM)
+    assert body.closed
+
+
 def raising(error):
     def download(url, dest, limit, timeout):
         dest.write_bytes(b"partial")

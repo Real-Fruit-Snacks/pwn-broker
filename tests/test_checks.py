@@ -318,6 +318,19 @@ def test_latest_version_swallows_errors():
     assert latest_version(fetch=fetch) is None
 
 
+def test_latest_version_closes_a_refused_response():
+    import io
+    import urllib.error
+
+    body = io.BytesIO(b"not found")
+
+    def fetch(url, timeout):
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, body)
+
+    assert latest_version(fetch=fetch) is None
+    assert body.closed
+
+
 def test_version_check_off():
     def fetch(url, timeout):
         raise AssertionError("must not be called")

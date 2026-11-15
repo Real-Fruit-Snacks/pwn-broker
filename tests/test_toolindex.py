@@ -618,6 +618,39 @@ def test_fetch_zip_failed_download(paths, tmp_path):
     assert list(paths.cache.iterdir()) == []
 
 
+def _http_error(url, body):
+    import urllib.error
+
+    return urllib.error.HTTPError(url, 404, "Not Found", {}, body)
+
+
+def test_a_refused_index_closes_the_response_it_came_with(paths):
+    import io
+
+    body = io.BytesIO(b"not found")
+
+    def refused(url, timeout):
+        raise _http_error(url, body)
+
+    with pytest.raises(ToolError):
+        toolindex.load_index(paths, url_settings(), now=NOW, fetch=refused)
+    assert body.closed
+
+
+def test_a_refused_zip_closes_the_response_it_came_with(paths, tmp_path):
+    import io
+
+    body = io.BytesIO(b"not found")
+    entry = make_zip_entry(tmp_path)
+
+    def refused(url, dest, limit, timeout):
+        raise _http_error(url, body)
+
+    with pytest.raises(ToolError, match="cannot download"):
+        toolindex.fetch_zip(paths, url_settings(), entry, download=refused)
+    assert body.closed
+
+
 def test_fetch_zip_url_location_needs_a_url(paths, tmp_path):
     entry = make_zip_entry(tmp_path, url="")
     with pytest.raises(ToolError, match="no download address"):

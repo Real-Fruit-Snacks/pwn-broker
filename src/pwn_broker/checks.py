@@ -13,6 +13,7 @@ from pwn_broker.config import Settings
 from pwn_broker.console import Cancelled, Console
 from pwn_broker.notewindow import has_display
 from pwn_broker.paths import AppPaths
+from pwn_broker.toolindex import close_response
 
 RELEASES_URL = "https://api.github.com/repos/Real-Fruit-Snacks/pwn-broker/releases/latest"
 
@@ -190,7 +191,8 @@ def latest_version(
     try:
         data = json.loads(fetch(RELEASES_URL, timeout))
         tag = data["tag_name"]
-    except Exception:
+    except Exception as exc:
+        close_response(exc)
         return None
     if not isinstance(tag, str):
         return None
