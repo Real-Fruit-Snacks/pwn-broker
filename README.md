@@ -42,6 +42,7 @@ Launch runs a few checks, then offers a new box, an import, any active box to re
 |---|---|
 | `check` | Run the setup checks again |
 | `cred add` | Save a credential |
+| `cred clear` | Empty a credential's secret or note |
 | `cred edit` | Change a credential |
 | `cred import` | Add usernames from a file, one per line |
 | `cred list` | List the credentials |
@@ -110,7 +111,6 @@ Edits made by hand to these files are overwritten at the next rebuild.
 
 - Recording and tool install are not in this release. They are later phases in `docs/design.md`.
 - No release has been published, so the `curl` install line does not work yet. Install from a clone.
-- `cred edit` cannot clear a secret or a note. Remove the credential and add it again.
 - A file whose name contains a backslash stops `finish` and `export` until it is renamed.
 - Tabs inside a secret show as spaces in `cred list`. `cred show` prints them unchanged.
 - Links and special files (named pipes, sockets, devices) in a box are not archived. `export` and `finish` list them, and `finish` says how many will go when the folder is removed.

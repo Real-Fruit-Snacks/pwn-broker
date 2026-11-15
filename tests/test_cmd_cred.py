@@ -8,7 +8,7 @@ from pwn_broker import shell  # noqa: F401  (fills the command registry)
 from pwn_broker import store
 from pwn_broker.boxes import add_target
 from pwn_broker.config import Settings
-from pwn_broker.console import FakeConsole, TermConsole
+from pwn_broker.console import Cancelled, FakeConsole, TermConsole
 from pwn_broker.creds import KINDS, has_edge_space
 from pwn_broker.questions import CredAnswers, ask_cred, ask_value
 from pwn_broker.session import Session
@@ -591,3 +591,99 @@ def test_cred_show_writes_a_tab_secret_exactly_to_the_terminal(session, env):
     _seed(session, secret="tab\there  ")
     dispatch(session, "cred show 1")
     assert out.getvalue() == "tab\there  \n"
+
+
+def _clear_seed(session, **overrides):
+    return _seed(session, secret="s3cret", note="a note", works_on=["dc01"], **overrides)
+
+
+def test_cred_clear_secret(session):
+    _clear_seed(session, username="bob")
+    session.console = FakeConsole(["y"])
+    dispatch(session, "cred clear 1 secret")
+    [c] = load_creds(session.box)
+    assert (c.secret, c.kind, c.works_on, c.note) == ("", "", [], "a note")
+    assert [c.secret for c in session.creds] == [""]
+    lists = session.box.path / "lists"
+    assert "s3cret" not in (lists / "passwords.txt").read_text(encoding="utf-8")
+    assert "s3cret" not in (lists / "userpass.txt").read_text(encoding="utf-8")
+    assert not (lists / "works-dc01-userpass.txt").exists()
+    assert (lists / "usernames.txt").read_text(encoding="utf-8").splitlines() == ["bob"]
+    assert session.console.asked == ["clear the secret of cred 1?"]
+    assert session.console.lines[0] == ("info", "bob, found on dc01")
+    assert session.console.lines[1:3] == [
+        ("ok", "cred 1 secret cleared"),
+        ("ok", "cred 1 no longer marked as working on dc01"),
+    ]
+    assert session.console.lines[3][1].startswith("lists updated: ")
+
+
+def test_cred_clear_secret_without_works_on_has_one_ok_line_before_lists(session):
+    _seed(session, secret="s3cret", found_on="")
+    session.console = FakeConsole(["y"])
+    dispatch(session, "cred clear 1 secret")
+    assert session.console.lines[0] == ("info", "administrator")
+    assert session.console.lines[1] == ("ok", "cred 1 secret cleared")
+    assert session.console.lines[2][1].startswith("lists updated: ")
+    assert len(session.console.lines) == 3
+
+
+def test_cred_clear_note(session):
+    _clear_seed(session)
+    session.console = FakeConsole(["y"])
+    dispatch(session, "cred clear 1 note")
+    [c] = load_creds(session.box)
+    assert (c.note, c.secret, c.kind, c.works_on) == ("", "s3cret", "password", ["dc01"])
+    assert session.console.asked == ["clear the note of cred 1?"]
+    assert ("ok", "cred 1 note cleared") in session.console.lines
+    assert not any("no longer marked" in t for _, t in session.console.lines)
+
+
+@pytest.mark.parametrize("answer", ["", "n", "maybe"])
+def test_cred_clear_declined_changes_nothing(session, answer):
+    _clear_seed(session)
+    session_module.save_creds(session.box, session.creds)
+    before = (session.box.path / "creds.toml").read_bytes()
+    session.console = FakeConsole([answer])
+    dispatch(session, "cred clear 1 secret")
+    assert (session.box.path / "creds.toml").read_bytes() == before
+    assert session.creds[0].secret == "s3cret"
+    assert _lines(session, "ok") == []
+
+
+@pytest.mark.parametrize("field", ["secret", "note"])
+def test_cred_clear_already_empty(session, field):
+    _seed(session, secret="", kind="", note="")
+    dispatch(session, f"cred clear 1 {field}")
+    assert session.console.lines == [("fail", f"cred 1 has no {field}")]
+    assert session.console.asked == []
+
+
+def test_cred_clear_bad_field(session):
+    _clear_seed(session)
+    dispatch(session, "cred clear 1 kind")
+    assert session.console.lines == [("fail", "field must be secret or note: kind")]
+    assert session.creds[0].secret == "s3cret"
+
+
+@pytest.mark.parametrize("line", ["cred clear", "cred clear 1", "cred clear 1 note x", "cred clear x note", "cred clear 0 note", "cred clear 9 note"])
+def test_cred_clear_bad_arguments(session, line):
+    _clear_seed(session)
+    dispatch(session, line)
+    assert [k for k, _ in session.console.lines] == ["fail"]
+    assert session.creds[0].note == "a note"
+
+
+def test_cred_clear_cancel_leaves_the_file_alone(session, monkeypatch):
+    _clear_seed(session)
+    session_module.save_creds(session.box, session.creds)
+    before = (session.box.path / "creds.toml").read_bytes()
+
+    def cancel(question, default=False):
+        raise Cancelled()
+
+    session.console.confirm = cancel
+    dispatch(session, "cred clear 1 secret")
+    assert (session.box.path / "creds.toml").read_bytes() == before
+    assert session.creds[0].secret == "s3cret"
+    assert session.console.lines[-1] == ("info", "cancelled")

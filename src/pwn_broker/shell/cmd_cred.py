@@ -141,6 +141,34 @@ def cred_edit(session: Session, args: list[str]) -> None:
     _report_lists(session, summary)
 
 
+@command("cred clear", "empty a credential's secret or note")
+def cred_clear(session: Session, args: list[str]) -> None:
+    text, field = take_args(args, ("cred number", "field"))
+    cred = _get(session, text)
+    if field not in ("secret", "note"):
+        raise ValueError(f"field must be secret or note: {field}")
+    console = session.console
+    if getattr(cred, field) == "":
+        console.fail(f"cred {cred.n} has no {field}")
+        return
+    console.info(f"{cred.username}, found on {cred.found_on}" if cred.found_on else cred.username)
+    if not console.confirm(f"clear the {field} of cred {cred.n}?"):
+        return
+    # the confirmations and the kind were for that secret
+    changes = {"secret": "", "kind": "", "works_on": []} if field == "secret" else {"note": ""}
+    dropped = list(cred.works_on) if field == "secret" else []
+
+    def change() -> ListSummary:
+        creds.edit_cred(session.creds, cred.n, **changes)
+        return refresh(session)
+
+    summary = _guarded(session, change)
+    console.ok(f"cred {cred.n} {field} cleared")
+    if dropped:
+        console.ok(f"cred {cred.n} no longer marked as working on {', '.join(dropped)}")
+    _report_lists(session, summary)
+
+
 @command("cred works", "record where a credential works")
 def cred_works(session: Session, args: list[str]) -> None:
     if not args:

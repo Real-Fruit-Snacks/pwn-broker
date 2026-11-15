@@ -337,7 +337,7 @@ Built on `prompt_toolkit` for the prompt and `rich` for tables.
 | `target edit <name>` | Asks the target's questions again with the current answers as defaults. This is how an IP is changed after a respawn, or a newly found hostname added |
 | `target rename <name>` | Renames the target everywhere: its folder, its row and section heading in the note, its file records, and the "found on" of its credentials |
 | `target remove <name>` | Removes a target that holds no files, after asking. If its folder holds anything, it refuses and says what is there. It never deletes collected work |
-| `cred add` · `cred list` · `cred show <n>` · `cred edit <n>` · `cred works <n>` · `cred remove <n>` · `cred import <file>` | Section 6.8 |
+| `cred add` · `cred list` · `cred show <n>` · `cred edit <n>` · `cred clear <n> <field>` · `cred works <n>` · `cred remove <n>` · `cred import <file>` | Section 6.8 |
 | `files [target]` | Lists recorded files |
 | `flag user` · `flag root` | Asks for the flag and records it with the time |
 | `path [folder]` | Prints the full path of the current target's folder, or one of its subfolders, to copy into my own terminal |
@@ -373,6 +373,7 @@ ok  lists updated: 3 usernames, 2 passwords, 2 pairs
 - The secret may be left blank. That records a username I have found but have no password for, and the kind question is skipped.
 - `cred list` shows the table. `cred show <n>` prints one secret alone on a line, ready to copy.
 - `cred edit <n>` asks the questions again with the current answers as defaults. `cred remove <n>` asks first.
+- `cred clear <n> secret` or `cred clear <n> note` empties that field, after asking. Clearing the secret also clears its kind and where it was marked as working.
 - `cred works <n> [target ...]` marks a credential as confirmed on one or more targets, defaulting to the current one. The record keeps the list of targets, `cred list` shows it in a "works on" column, and `cred edit` can take a target back off.
 - `cred import <file>` loads a file of usernames, one per line. It asks the domain and where they were found once for the whole file, skips blank lines and names already in the record, and reports how many it added.
 - Anything that is a file, such as a ticket or a private key, is saved into the target's `creds/` folder and recorded like any other file.
