@@ -97,6 +97,34 @@ def test_start_uses_the_last_file_by_default(session, paths, openvpn, source):
     assert [r.file for r in load_box(session.box.path).vpn] == ["lab_user.ovpn"]
 
 
+def test_start_whose_box_record_cannot_be_saved_is_one_fail_line_and_keeps_the_marker(
+    session, paths, openvpn, source, monkeypatch
+):
+    from pwn_broker import vpnctl
+    from pwn_broker.store import StoreError
+
+    def broken(box):
+        raise StoreError("box.toml: disk full")
+
+    real_save = vpnctl.save_box
+    monkeypatch.setattr(vpnctl, "save_box", broken)
+    session.console = FakeConsole([str(source)])
+    dispatch(session, "vpn start")
+    assert lines(session) == [
+        ("ok", "copied to vpn/lab_user.ovpn"),
+        ("fail", "openvpn is running, but the box's record of it could not be saved: "
+                 "box.toml: disk full. run vpn start again to record it"),
+    ]  # fmt: skip
+    assert (paths.run_vpn / "marker.toml").exists()
+    assert session.box.vpn == [] and load_box(session.box.path).vpn == []
+    assert PID in openvpn.system.processes
+    monkeypatch.setattr(vpnctl, "save_box", real_save)
+    session.console = FakeConsole()
+    dispatch(session, "vpn start")
+    assert lines(session) == [("ok", "vpn already up, 10.10.14.7 on tun0, started for forest")]
+    assert [r.file for r in load_box(session.box.path).vpn] == ["lab_user.ovpn"]
+
+
 def test_start_expands_home_and_saves_the_original_path(
     session, paths, openvpn, source, monkeypatch
 ):

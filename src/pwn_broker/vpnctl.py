@@ -295,7 +295,15 @@ def start(
     write_toml(_marker_path(paths), asdict(marker))
     record = VpnRecord(marker.file, marker.sha256, marker.started)
     box.vpn.append(record)
-    save_box(box)
+    try:
+        save_box(box)
+    except StoreError as exc:
+        # the marker stays: the VPN is running and vpn stop must still find it
+        box.vpn.pop()
+        raise VpnError(
+            f"openvpn is running, but the box's record of it could not be saved: {exc}. "
+            "run vpn start again to record it"
+        ) from exc
     polls = math.ceil(wait / POLL)
     for attempt in range(polls + 1):
         found = tunnel()
