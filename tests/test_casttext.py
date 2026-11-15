@@ -227,6 +227,16 @@ def test_a_bad_cast_leaves_no_text_and_no_temporary_file(tmp_path, text):
     assert [p.name for p in path.parent.iterdir()] == ["bad.cast"]
 
 
+def test_a_cast_pyte_cannot_render_is_a_cast_error(tmp_path):
+    # origin mode with no margins, then CSI d: pyte fails an assert of its own
+    path = write_cast(tmp_path / "recordings" / "odd.cast", [(0, "o", "a\r\n\x1b[?6h\x1b[5d")])
+    with pytest.raises(CastError, match="could not be rendered") as err:
+        casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
+    assert str(path) in str(err.value)
+    assert isinstance(err.value.__cause__, AssertionError)
+    assert [p.name for p in path.parent.iterdir()] == ["odd.cast"]
+
+
 def test_stale(tmp_path):
     path = write_cast(tmp_path / "a.cast", [(0, "o", "a")])
     assert casttext.stale(path)

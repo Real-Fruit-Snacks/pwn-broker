@@ -294,7 +294,12 @@ def text_path(cast_path: Path) -> Path:
 
 def write(cast_path: Path, *, box_name: str, box_id: str, target: str, tz: tzinfo) -> Path:
     header = read_header(cast_path)
-    body = list(render(header, events(cast_path), tz))
+    try:
+        body = list(render(header, events(cast_path), tz))
+    except (CastError, OSError):
+        raise
+    except Exception as exc:  # pyte's own failures on input it cannot handle
+        raise CastError(f"{cast_path}: could not be rendered ({type(exc).__name__})") from exc
     if header.timestamp is None:
         started = "unknown"
     else:
