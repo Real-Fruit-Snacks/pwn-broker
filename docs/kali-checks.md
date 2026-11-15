@@ -1,6 +1,6 @@
 # Checks to run by hand on Kali
 
-Run the unit tests first: `python3 -m venv .venv && .venv/bin/pip install -e ".[dev]" && .venv/bin/python -m pytest`. The tests that skip on Windows because they need Linux (symlinks, named pipes, file modes, ownership, inodes, `/proc`, signals, the installer, virtual environments, the recorded shell's startup files) run there. The three tests of the real asciinema skip unless `PWN_BROKER_REAL_ASCIINEMA` names the pinned binary: after the install below, run them with `PWN_BROKER_REAL_ASCIINEMA=/opt/pwn-broker/app/bin/asciinema .venv/bin/python -m pytest tests/test_record_real.py`. All three pass.
+Run the unit tests first: `python3 -m venv .venv && .venv/bin/pip install -e ".[dev]" && .venv/bin/python -m pytest`. The tests that skip on Windows because they need Linux (symlinks, named pipes, file modes, ownership, inodes, `/proc`, signals, the installer, virtual environments, the recorded shell's startup files) run there. The three tests of the real asciinema skip unless `PWN_BROKER_REAL_ASCIINEMA` names the pinned binary: after the install below, run them with `PWN_BROKER_REAL_ASCIINEMA=/opt/pwn-broker/app/bin/asciinema .venv/bin/python -m pytest tests/test_record_real.py`. All three should pass, as they do in CI.
 
 Then `sh install.sh --from .`, open a new terminal, and work one box end to end. Do the list once as root and once as a normal user.
 
