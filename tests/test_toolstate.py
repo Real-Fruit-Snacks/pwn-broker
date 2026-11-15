@@ -136,6 +136,17 @@ def test_installed_round_trip_with_a_runtime_and_a_tool_that_requires_it(paths):
     rows = tomllib.loads(paths.tools_state.read_text(encoding="utf-8"))["tool"]
     assert (rows[0]["kind"], rows[0]["python"]) == ("runtime", data["python-3.13"].python)
     assert rows[1]["requires"] == ["python-3.13"]
+    assert "runtime_version" not in rows[1] and "runtime_build" not in rows[1]
+
+
+def test_a_tool_row_keeps_the_runtime_build_it_was_made_on(paths):
+    tool = item("certipy")
+    tool.requires = ["python-3.13"]
+    tool.runtime_version, tool.runtime_build = "3.13.18", 1
+    save_installed(paths, {"certipy": tool})
+    assert load_installed(paths)["certipy"] == tool
+    [row] = tomllib.loads(paths.tools_state.read_text(encoding="utf-8"))["tool"]
+    assert (row["runtime_version"], row["runtime_build"]) == ("3.13.18", 1)
 
 
 def test_an_installed_list_without_runtimes_is_written_as_before(paths):
@@ -155,7 +166,7 @@ def test_rows_written_before_runtimes_load_as_tools(paths):
 @pytest.mark.parametrize(
     "key, value",
     [("kind", "library"), ("kind", 1), ("requires", "python-3.13"), ("requires", [1]),
-     ("python", 3)],
+     ("python", 3), ("runtime_version", 3), ("runtime_build", "1"), ("runtime_build", True)],
 )  # fmt: skip
 def test_bad_runtime_fields_are_refused(paths, key, value):
     save_installed(paths, {"one": item("one")})

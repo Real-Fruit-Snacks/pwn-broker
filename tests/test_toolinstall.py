@@ -1563,7 +1563,7 @@ def test_a_stale_row_that_cannot_be_saved_away_is_reported_and_kept(paths, tmp_p
 
     monkeypatch.setattr(toolinstall, "save_installed", full)
     zip_path, entry = toolkit.make_runtime(tmp_path / "again", build=2)
-    with pytest.raises(ToolError, match="the installed list could not be saved"):
+    with pytest.raises(ToolError, match="the installed list could not be restored"):
         rt_install(paths, tmp_path, zip_path, entry, installed=installed)
     # the file still lists the runtime, and so does the list in memory
     assert installed == {"python-3.13": first} and load_installed(paths) == installed

@@ -418,6 +418,8 @@ def install(
             # root's home is only asked about when it is a different folder that can be read
             root_home=_existing(found[1], manifest.home) if len(found) > 1 else {},
             requires=list(manifest.requires),
+            runtime_version=note.version if note else "",
+            runtime_build=note.build if note else 0,
         )
         _record(box, ToolRecord(name, entry.version, entry.build, entry.sha256, now, note))
         installed[name] = item
@@ -467,7 +469,11 @@ def _join(
     note: RuntimeRecord | None = None,
 ) -> Installed:
     old_users, old_tools = current.users, list(box.tools)
+    old_runtime = (current.runtime_version, current.runtime_build)
     current.users = users if box.id in users else users + [box.id]
+    if note is not None and not current.runtime_version:
+        # a row from before the runtime's build was kept: the runtime it runs on now is the one
+        current.runtime_version, current.runtime_build = note.version, note.build
     record = ToolRecord(current.name, current.version, current.build, current.sha256, now, note)
     _record(box, record)
     saved = False
@@ -477,6 +483,7 @@ def _join(
         save_box(box)
     except BaseException as exc:
         current.users, box.tools = old_users, old_tools
+        current.runtime_version, current.runtime_build = old_runtime
         if saved:
             _restore_list(paths, installed, exc)
         raise
@@ -609,15 +616,15 @@ def _drop_row(paths: AppPaths, installed: dict[str, Installed], name: str) -> No
         ) from exc
 
 
-def damaged_runtime_refusal(item: Installed, tools: list[str], why: str) -> str:
+def damaged_runtime_refusal(shown: str, tools: list[str], why: str) -> str:
     """What to say when a runtime installed tools require is damaged and cannot be put back
-    as the build their environments were made by."""
+    as the build their environments were made by. `shown` names the runtime, and its build
+    when that is known."""
     if len(tools) == 1:
         needed = f"{tools[0]} requires it: remove {tools[0]} and install it again"
     else:
         needed = f"{', '.join(tools)} require it: remove them and install them again"
-    shown = build_id(item.version, item.build)
-    return f"{item.name} {shown} is missing or damaged, and {why}; {needed}"
+    return f"{shown} is missing or damaged, and {why}; {needed}"
 
 
 def same_runtime_build(item: Installed, entry: BuildEntry) -> bool:
@@ -633,13 +640,16 @@ def install_runtime(
     *,
     installed: dict[str, Installed],
     console: Console,
+    ignoring: str | None = None,
 ) -> Installed:
     """Installs a runtime, or returns the one already there, at any build, unchanged.
 
     The row returned is the very object already in `installed` when the runtime was there, so a
     caller can tell whether this call brought it, and undo it with forget_runtime if so. A
     damaged runtime that installed tools require is only replaced by the build it was: their
-    environments point into its folder. Given another build, nothing is touched.
+    environments point into its folder. Given another build, nothing is touched. `ignoring`
+    names a tool that is about to be installed afresh, so it does not count as requiring it.
+    Its row stays until the new one is saved, so a failed attempt leaves it to the next.
     """
     name = entry.name
     if not valid_tool_name(name):
@@ -652,11 +662,13 @@ def install_runtime(
             raise ToolError(f"{name} is installed as a tool, not a runtime")
         if runtime_intact(paths, current):
             return current
-        tools = tools_requiring(installed, name)
+        tools = [t for t in tools_requiring(installed, name) if t != ignoring]
         if tools and not same_runtime_build(current, entry):
             why = f"{build_id(entry.version, entry.build)} is not that build"
-            raise ToolError(damaged_runtime_refusal(current, tools, why))
-        # its files are gone or damaged: whatever is left under its name goes with the row
+            shown = f"{name} {build_id(current.version, current.build)}"
+            raise ToolError(damaged_runtime_refusal(shown, tools, why))
+        # its files are gone or damaged: whatever is left under its name goes; the row stays
+        # until the new one replaces it, so a failure here leaves the next attempt the same path
         leftover = paths.tools / name
         _check_inside(leftover, paths.tools, "the runtime folder")
         try:
@@ -664,7 +676,6 @@ def install_runtime(
                 _delete_tree(leftover)
         except OSError as exc:
             raise ToolError(f"cannot remove {leftover}: {exc}") from exc
-        _drop_row(paths, installed, name)
 
     folder = paths.tools / name / build_id(entry.version, entry.build)
     _check_inside(folder, paths.tools, "the runtime folder")
@@ -711,7 +722,11 @@ def install_runtime(
         saved_installed = True  # set first: an interrupt inside the save must still be undone
         save_installed(paths, installed)
     except BaseException as exc:
-        installed.pop(name, None)
+        # a stale row is put back as it was
+        if current is not None:
+            installed[name] = current
+        else:
+            installed.pop(name, None)
         shutil.rmtree(folder, ignore_errors=True)
         try:
             folder.parent.rmdir()

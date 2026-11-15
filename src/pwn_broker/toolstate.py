@@ -32,6 +32,10 @@ class Installed:
     requires: list[str] = field(default_factory=list)
     # a runtime's interpreter, as an absolute path
     python: str = ""
+    # for a tool that requires a runtime: the build its environment was made by, which is the
+    # only build that serves it (the environment points into that build's folder)
+    runtime_version: str = ""
+    runtime_build: int = 0
 
 
 KINDS = ("tool", "runtime")
@@ -71,6 +75,12 @@ def _installed(row: object) -> Installed:
     python = row.get("python", "")
     if not isinstance(python, str):
         raise TypeError("python must be a string")
+    runtime_version = row.get("runtime_version", "")
+    if not isinstance(runtime_version, str):
+        raise TypeError("runtime_version must be a string")
+    runtime_build = row.get("runtime_build", 0)
+    if not _is_int(runtime_build):
+        raise TypeError("runtime_build must be an integer")
     return Installed(
         name=row["name"],
         version=row["version"],
@@ -86,6 +96,8 @@ def _installed(row: object) -> Installed:
         kind=kind,
         requires=list(requires),
         python=python,
+        runtime_version=runtime_version,
+        runtime_build=runtime_build,
     )
 
 
@@ -138,6 +150,9 @@ def _row(t: Installed) -> dict:
         row["requires"] = list(t.requires)
     if t.python:
         row["python"] = t.python
+    if t.runtime_version:
+        row["runtime_version"] = t.runtime_version
+        row["runtime_build"] = t.runtime_build
     return row
 
 

@@ -129,8 +129,9 @@ def install_tool(
     paths, console = session.paths, session.console
     # a tool the box would refuse costs no download; nor does a runtime the index lacks
     toolinstall.check_install(session.box, entry, installed=installed, unfinished=unfinished)
+    ignoring = _replaced(entry, installed, unfinished)
     missing = [
-        _runtime_build(index, installed, name)
+        _runtime_build(paths, index, installed, name, ignoring)
         for name in entry.requires
         if not toolinstall.runtime_intact(paths, installed.get(name))
     ]
@@ -140,8 +141,9 @@ def install_tool(
             before = installed.get(runtime_entry.name)
             zip_path = toolindex.fetch_zip(paths, session.settings, runtime_entry)
             item = toolinstall.install_runtime(
-                paths, runtime_entry, zip_path, installed=installed, console=console
-            )
+                paths, runtime_entry, zip_path, installed=installed, console=console,
+                ignoring=ignoring,
+            )  # fmt: skip
             if item is not before:
                 brought.append(item)
         runtime = installed.get(entry.requires[0]) if entry.requires else None
@@ -176,22 +178,70 @@ def install_tool(
     return tool
 
 
-def _runtime_build(index: Index, installed: dict[str, Installed], name: str) -> BuildEntry:
+def _replaced(
+    entry: BuildEntry, installed: dict[str, Installed], unfinished: dict[str, str]
+) -> str | None:
+    # the tool being installed, when install takes its row off and installs it afresh: no
+    # unfinished box holds it, and it is not the same build with its files in place (that one
+    # is joined as it is, environment and all)
+    item = installed.get(entry.name)
+    if item is None or any(u in unfinished for u in item.users):
+        return None
+    same = build_id(item.version, item.build) == build_id(entry.version, entry.build)
+    return None if same and Path(item.folder).is_dir() else item.name
+
+
+def _made_on(paths: AppPaths, tool: Installed, runtime: str) -> set[tuple[str, int]]:
+    # the runtime build a tool's environment was made by: its row says, or, for a row from
+    # before that was kept, the records of the boxes that use it
+    if tool.runtime_version:
+        return {(tool.runtime_version, tool.runtime_build)}
+    from pwn_broker import boxes
+
+    found, _problems = boxes.list_boxes(paths)
+    return {
+        (r.runtime.version, r.runtime.build)
+        for box in found
+        if box.id in tool.users
+        for r in current_tools(box)
+        if (r.name, r.version, r.build) == (tool.name, tool.version, tool.build)
+        and r.runtime is not None
+        and r.runtime.name == runtime
+    }
+
+
+def _runtime_build(
+    paths: AppPaths, index: Index, installed: dict[str, Installed], name: str, ignoring: str | None
+) -> BuildEntry:
     # the build to install for a runtime that is not there as it should be
     current = installed.get(name)
-    tools = toolstate.tools_requiring(installed, name)
-    if current is None or current.kind != "runtime" or not tools:
+    tools = [t for t in toolstate.tools_requiring(installed, name) if t != ignoring]
+    if (current is not None and current.kind != "runtime") or not tools:
         return toolindex.pick_build(toolindex.find_runtime(index, name), None)
     # the tools' environments point into the folder of the build they were made by
+    if current is not None:
+        wanted = {(current.version, current.build)}
+    else:
+        wanted = set().union(*(_made_on(paths, installed[t], name) for t in tools))
+        if not wanted:
+            return toolindex.pick_build(toolindex.find_runtime(index, name), None)
+        if len(wanted) > 1:
+            made = " and ".join(sorted(build_id(v, b) for v, b in wanted))
+            why = f"the tools that require it were made on {made}"
+            raise ToolError(toolinstall.damaged_runtime_refusal(name, tools, why))
+    [(version, build_no)] = wanted
     try:
         builds = toolindex.find_runtime(index, name).builds
     except ToolError:
         builds = []
     for build in builds:
-        if toolinstall.same_runtime_build(current, build):
+        if (build.version, build.build) != (version, build_no):
+            continue
+        if current is None or toolinstall.same_runtime_build(current, build):
             return build
     why = "the index no longer lists that build"
-    raise ToolError(toolinstall.damaged_runtime_refusal(current, tools, why))
+    shown = f"{name} {build_id(version, build_no)}"
+    raise ToolError(toolinstall.damaged_runtime_refusal(shown, tools, why))
 
 
 def _unreadable_names(paths: AppPaths) -> str:
