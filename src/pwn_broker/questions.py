@@ -49,9 +49,12 @@ def ask_target(
     taken: set[str],
     defaults: Target | None = None,
     ask_name: bool = True,
+    ips: list[str] | None = None,
+    hostnames: list[str] | None = None,
 ) -> TargetAnswers:
-    default_ips = " ".join(defaults.ips) if defaults else ""
-    default_hosts = " ".join(defaults.hostnames) if defaults else ""
+    # `ips` and `hostnames` prefill a target that does not exist yet
+    default_ips = " ".join(defaults.ips if defaults else ips or [])
+    default_hosts = " ".join(defaults.hostnames if defaults else hostnames or [])
 
     while True:
         while True:

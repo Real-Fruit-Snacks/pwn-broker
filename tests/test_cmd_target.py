@@ -30,6 +30,16 @@ def test_ask_target_defaults():
     assert a == TargetAnswers(["10.10.10.161"], ["forest.htb.local"], "external", "forest.htb.local")
 
 
+def test_ask_target_prefills_an_address_for_a_new_target():
+    a = ask_target(FakeConsole(["", "", "", ""]), taken=set(), ips=["10.10.10.200"])
+    assert a == TargetAnswers(["10.10.10.200"], [], "external", "10.10.10.200")
+    a = ask_target(FakeConsole(["", "", "", ""]), taken=set(), hostnames=["crm.board.htb"])
+    assert a == TargetAnswers([], ["crm.board.htb"], "external", "crm.board.htb")
+    # a prefilled address can be replaced
+    a = ask_target(FakeConsole(["10.10.10.9", "", "", ""]), taken=set(), ips=["10.10.10.200"])
+    assert a.ips == ["10.10.10.9"]
+
+
 def test_ask_target_reasks_until_ip_or_hostname():
     console = FakeConsole(["", "", "10.10.10.5", "", "", ""])
     a = ask_target(console, taken=set())

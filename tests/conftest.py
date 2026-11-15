@@ -173,6 +173,26 @@ def system(tmp_path_factory, monkeypatch):
                 setattr(self, name, getattr(fake, name))
 
     monkeypatch.setattr(Env, "__init__", safe_env_init)
+
+    from pwn_broker import record
+
+    record_defaults = {f.name: f.default for f in fields(record.Env)}
+    record_original = record.Env.__init__
+
+    def refuse_asciinema(*args, **kwargs):
+        raise AssertionError("a test reached the real asciinema; pass a run stand-in")
+
+    def safe_record_init(self, *args, **kwargs):
+        record_original(self, *args, **kwargs)
+        if self.hosts_path == record_defaults["hosts_path"]:
+            self.hosts_path = fake.hosts_path
+        for name in ("is_root", "run_privileged", "ping", "tunnel"):
+            if getattr(self, name) is record_defaults[name]:
+                setattr(self, name, getattr(fake, name))
+        if self.run is record_defaults["run"]:
+            self.run = refuse_asciinema
+
+    monkeypatch.setattr(record.Env, "__init__", safe_record_init)
     return fake
 
 
