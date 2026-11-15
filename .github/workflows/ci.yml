@@ -129,7 +129,9 @@ jobs:
     # tun0, and the note window under a virtual display; the unit suite runs there too. Not a
     # container job, because the tunnel module is loaded on the host first. --init gives the
     # container a PID 1 that reaps orphaned processes, as a real system's does, so a stopped
-    # daemon does not linger as a zombie. The evidence folder is uploaded whatever the result.
+    # daemon does not linger as a zombie. The container downloads the pinned upstream Python build
+    # for the test runtime package and checks its size and SHA-256 first; a Python test tool is
+    # installed on it. The evidence folder is uploaded whatever the result.
     # The image is not pinned on purpose: the job is there to notice when Kali changes under the
     # app, as it did when Kali moved to Python 3.14.
     runs-on: ubuntu-24.04

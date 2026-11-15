@@ -59,6 +59,14 @@ TARGET = "dc01"
 USERNAME, DOMAIN, SECRET = "svc-alfresco", "htb.local", "s3rvice"
 TOOL, TOOL_VERSION, TOOL_BUILD = "hello-tool", "1.0.0", 1
 TOOL_LINE = "hello-tool ran"
+# a Python tool on a real runtime: toolkit.make_python_tool's wheel is the distribution
+# "<name>-py" 1.0, whose entry point prints its name and version (toolkit.make_wheel)
+PY_TOOL, PY_VERSION, PY_BUILD = "hello-py", "1.0.0", 1
+PY_LINE = "hello-py-py 1.0"
+RUNTIME, RUNTIME_VERSION, RUNTIME_BUILD = "python-3.13", "3.13.18", 1  # toolkit.make_runtime
+TOOLS = OPT / "tools"
+TOOL_LOG = HOME / "pwn-broker" / "tools.log"  # paths.AppPaths.tool_log: home / "tools.log"
+INTERPRETER = "import sys; print(tuple(sys.version_info[:2])); print(sys.prefix); print(sys.base_prefix)"
 VPN_ADDRESS, VPN_PEER = "10.10.14.7", "10.10.14.8"
 COMMAND, MARKER = "echo marker-$((40+2))", "marker-42"
 
@@ -510,13 +518,64 @@ def resolves(name: str, ip: str) -> None:
     )
 
 
-def tool_runs() -> None:
+def tool_runs(command: str = TOOL, line: str = TOOL_LINE) -> None:
     """The installed command, from a plain shell outside the prompt."""
-    done = run(["sh", "-c", TOOL])
+    done = run(["sh", "-c", command])
     check(
-        done.returncode == 0 and done.stdout == TOOL_LINE + "\n",
-        f"{TOOL} run from a plain shell prints {TOOL_LINE!r}",
+        done.returncode == 0 and done.stdout == line + "\n",
+        f"{command} run from a plain shell prints {line!r}",
         shown_run(done),
+    )
+
+
+def installed_list() -> dict[str, dict]:
+    """tools/installed.toml, by name (toolstate.save_installed)."""
+    return {row["name"]: row for row in read_toml(TOOLS / "installed.toml").get("tool", [])}
+
+
+def tools_left() -> None:
+    left = sorted(p.name for p in TOOLS.iterdir())
+    check(left == ["installed.toml"], f"{TOOLS} holds nothing but installed.toml", repr(left))
+    check(installed_list() == {}, "installed.toml lists nothing", (TOOLS / "installed.toml").read_text())
+
+
+def tool_log() -> list[list[str]]:
+    """The tool log's lines, split into their fields (toollog.append: two spaces between them)."""
+    text = TOOL_LOG.read_text(encoding="utf-8") if TOOL_LOG.is_file() else ""
+    return [[field.strip() for field in line.split("  ") if field.strip()] for line in text.splitlines()]
+
+
+def logged_since(start: int, expected: list[tuple[str, str]], what: str) -> None:
+    """The log's lines after the first `start` are these (event, "<name> <version>-<build>")
+    pairs in this order; a runtime's line ends in `runtime`."""
+    lines = tool_log()
+    EVIDENCE.write("tools.log", TOOL_LOG.read_bytes() if TOOL_LOG.is_file() else b"")
+    found = [(fields[1], fields[3], fields[-1] == "runtime") for fields in lines[start:] if len(fields) >= 5]
+    wanted = [(event, package, package.startswith(RUNTIME + " ")) for event, package in expected]
+    check(found == wanted, what, f"--- expected ---\n{wanted!r}\n--- found ---\n{found!r}\n--- end ---")
+
+
+def py_runs_on_runtime() -> None:
+    """hello-py runs, on the runtime's Python 3.13 rather than on Kali's own."""
+    tool_runs(PY_TOOL, PY_LINE)
+    row = installed_list().get(PY_TOOL, {})
+    python = Path(row.get("folder", "/missing")) / "venv" / "bin" / "python"
+    done = run([str(python), "-c", INTERPRETER])
+    shown = shown_run(done)
+    out = done.stdout.splitlines()
+    check(done.returncode == 0 and len(out) == 3, f"{python} runs", shown)
+    note(f"{PY_TOOL}'s environment: Python {out[0]}, prefix {out[1]}, base {out[2]}")
+    check(out[0] == "(3, 13)", f"{PY_TOOL}'s environment runs Python 3.13", shown)
+    check(Path(out[1]).is_relative_to(TOOLS), f"its prefix is under {TOOLS}", shown)
+    runtime_folder = TOOLS / RUNTIME
+    check(Path(out[2]).is_relative_to(runtime_folder), f"its base prefix is under {runtime_folder}", shown)
+    real = Path(os.path.realpath(python))
+    check(real.is_relative_to(runtime_folder), f"{python} resolves inside {runtime_folder}", str(real))
+    runtime = installed_list().get(RUNTIME, {})
+    check(
+        runtime.get("kind") == "runtime" and real == Path(runtime.get("python", "/missing")).resolve(),
+        f"{python} resolves to the interpreter installed.toml records for {RUNTIME}",
+        repr(runtime),
     )
 
 
@@ -533,6 +592,11 @@ class State:
         self.prompt: Terminal | None = None
         self.record: Terminal | None = None
         self.finished: Path | None = None
+        # the upstream archive kali-cycle.sh downloaded and checked
+        self.runtime_archive: Path | None = None
+        self.runtime_sha256 = ""
+        # how many lines the tool log had before the step that is checking it
+        self.logged = 0
 
     @property
     def folder(self) -> Path:
@@ -590,7 +654,7 @@ def launch(name: str, argv: list[str], first: str, repairs: tuple[str, ...] = ()
 
 
 def prepare(s: State) -> None:
-    """The tool package and its folder index, tools_index in config.toml, the target address."""
+    """The tool packages and their folder index, tools_index in config.toml, the target address."""
     before = Path(EVIDENCE.folder / "hosts.before")
     s.hosts_before = HOSTS.read_bytes()
     if before.is_file():
@@ -633,8 +697,28 @@ def prepare(s: State) -> None:
         },
         {f"files/{TOOL}": f"#!/bin/sh\necho {TOOL_LINE}\n".encode()},
     )
-    toolkit.write_index(TOOL_INDEX, [entry])
+    # the runtime package around the real upstream archive, and a Python tool that requires it
+    archive = s.runtime_archive
+    check(archive is not None and archive.is_file(), f"the runtime archive is at {archive}")
+    _zip, runtime = toolkit.make_runtime(
+        TOOL_INDEX, RUNTIME, RUNTIME_VERSION, "3.13", build=RUNTIME_BUILD, archive=archive.read_bytes()
+    )
+    s.runtime_sha256 = runtime.sha256
+    note(f"{RUNTIME} {RUNTIME_VERSION}-{RUNTIME_BUILD}: {runtime.size} bytes, sha256 {runtime.sha256}")
+    _zip, python_tool = toolkit.make_python_tool(
+        TOOL_INDEX,
+        PY_TOOL,
+        PY_VERSION,
+        build=PY_BUILD,
+        description="prints one line from Python",
+        tags=[],
+        upstream=f"https://example.invalid/{PY_TOOL}",
+        examples=[PY_TOOL],
+    )
+    check(python_tool.requires == [RUNTIME], f"{PY_TOOL} requires {RUNTIME}", repr(python_tool))
+    toolkit.write_index(TOOL_INDEX, [entry, runtime, python_tool])
     check((TOOL_INDEX / "index.toml").is_file(), f"a folder index in {TOOL_INDEX}")
+    check(read_toml(TOOL_INDEX / "index.toml").get("schema") == 2, "the index is schema 2")
 
     settings = OPT / "config.toml"
     existing = settings.read_text(encoding="utf-8") if settings.exists() else ""
@@ -1006,6 +1090,7 @@ def step_tool(s: State) -> None:
     out = shell(t, "tool list", expect=TOOL)
     rows = [line.split() for line in lines_of(out)]
     check(any(row[:3] == [TOOL, f"{TOOL_VERSION}-{TOOL_BUILD}", "kali"] for row in rows), f"tool list shows {TOOL}", readable(out))
+    s.logged = len(tool_log())
     t.type(f"tool install {TOOL}\r")
     # toolinstall._show
     t.wait(f"ok    {TOOL} {TOOL_VERSION} installed", "the installed line")
@@ -1013,6 +1098,91 @@ def step_tool(s: State) -> None:
     launcher = BIN / TOOL
     check(launcher.is_file() and os.access(launcher, os.X_OK), f"{launcher} exists")
     tool_runs()
+    logged_since(s.logged, [("install", f"{TOOL} {TOOL_VERSION}-{TOOL_BUILD}")], f"{TOOL_LOG} has an install line for {TOOL}")
+
+
+# toolinstall.install_runtime: the runtime's line, with the zip's size in MiB
+RUNTIME_INSTALLED = re.compile(rf"ok    {re.escape(RUNTIME)} {re.escape(RUNTIME_VERSION)} installed \(runtime, \d+ MB\)")
+PY_PACKAGE = f"{PY_TOOL} {PY_VERSION}-{PY_BUILD}"
+RUNTIME_PACKAGE = f"{RUNTIME} {RUNTIME_VERSION}-{RUNTIME_BUILD}"
+
+
+def step_python_tool(s: State) -> None:
+    t = s.prompt
+    done = run(["python3", "-c", "import sys; print(tuple(sys.version_info[:2]))"])
+    kali = done.stdout.strip()
+    note(f"Kali's own python3 is {kali}")
+    check(done.returncode == 0 and kali not in ("", "(3, 13)"), "Kali's own python3 is not 3.13", shown_run(done))
+
+    out = shell(t, "tool list", expect=PY_TOOL)
+    rows = [line.split() for line in lines_of(out)]
+    check(any(row[:3] == [PY_TOOL, f"{PY_VERSION}-{PY_BUILD}", "kali"] for row in rows), f"tool list shows {PY_TOOL}", readable(out))
+    check(RUNTIME not in out, f"tool list does not show {RUNTIME}", readable(out))
+    # cmd_tool._requirement, after the 12-column label
+    out = shell(t, f"tool info {PY_TOOL}", expect=f"{'requires':<12}{RUNTIME} (")
+    check(
+        re.search(rf"{'requires':<12}{re.escape(RUNTIME)} \(\d+ MB, not installed\)", out) is not None,
+        f"tool info says {PY_TOOL} requires {RUNTIME}, not installed",
+        readable(out),
+    )
+
+    s.logged = len(tool_log())
+    start = t.pos
+    t.type(f"tool install {PY_TOOL}\r")
+    # toolhooks.install_tool: the runtime first, then the tool
+    found = t.wait(RUNTIME_INSTALLED, "the runtime's installed line", timeout=300)
+    note(found[0])
+    t.wait(f"ok    {PY_TOOL} {PY_VERSION} installed", "the tool's installed line", timeout=300)
+    t.wait(f"run   {PY_TOOL}   from any terminal", "the run line")
+    t.wait(PROMPT, "the prompt after tool install")
+    out = t.text()[start : t.pos]
+    check(not any(line.startswith(("warn  ", "fail  ")) for line in lines_of(out)), "tool install printed no warn or fail line", readable(out))
+    check((BIN / PY_TOOL).is_file(), f"{BIN / PY_TOOL} exists")
+    check(not (BIN / RUNTIME).exists() and not list(BIN.glob("python*")), f"the runtime put nothing in {BIN}", repr(sorted(p.name for p in BIN.iterdir())))
+    py_runs_on_runtime()
+
+    listed = installed_list()
+    check(listed.get(PY_TOOL, {}).get("requires") == [RUNTIME], f"installed.toml records that {PY_TOOL} requires {RUNTIME}", repr(listed))
+    check(listed.get(RUNTIME, {}).get("commands") == [], f"installed.toml records {RUNTIME} with no commands", repr(listed))
+    records = {r["name"]: r for r in read_toml(s.folder / "box.toml").get("tools", [])}
+    wanted = {"name": RUNTIME, "version": RUNTIME_VERSION, "build": RUNTIME_BUILD, "sha256": s.runtime_sha256}
+    check(
+        records.get(PY_TOOL, {}).get("runtime") == wanted and RUNTIME not in records,
+        f"box.toml records {PY_TOOL} with its runtime, and no row for the runtime itself",
+        repr(records),
+    )
+    logged_since(
+        s.logged,
+        [("install", RUNTIME_PACKAGE), ("install", PY_PACKAGE)],
+        f"{TOOL_LOG} has an install line for {RUNTIME}, then one for {PY_TOOL}",
+    )
+    mode = stat.S_IMODE(TOOL_LOG.stat().st_mode)
+    check(mode == 0o600, f"{TOOL_LOG} has mode 600", oct(mode))
+
+    out = shell(t, "tool list", expect=PY_TOOL)
+    check(RUNTIME not in out, f"tool list does not show {RUNTIME} once it is installed", readable(out))
+    # cmd_tool.tool_history: tool, version, installed (date and time), removed, runtime
+    out = shell(t, "tool history", expect=PY_TOOL)
+    rows = [line.split() for line in lines_of(out)]
+    check(
+        any(row[:2] == [PY_TOOL, f"{PY_VERSION}-{PY_BUILD}"] and row[4:] == ["-", RUNTIME, f"{RUNTIME_VERSION}-{RUNTIME_BUILD}"] for row in rows)
+        and any(row[:2] == [TOOL, f"{TOOL_VERSION}-{TOOL_BUILD}"] and row[4:] == ["-", "-"] for row in rows),
+        f"tool history shows {TOOL}, and {PY_TOOL} on {RUNTIME}",
+        readable(out),
+    )
+
+
+# toolhooks.summary: the box's tools in the order they were installed, then the runtimes freed
+TOOLS_SUMMARY = f"tools     {TOOL} {TOOL_VERSION}, {PY_TOOL} {PY_VERSION}   (will be removed)"
+RUNTIMES_SUMMARY = f"runtimes  {RUNTIME} {RUNTIME_VERSION}   (will be removed)"
+# toolhooks.remove_idle_runtimes
+RUNTIME_REMOVED = f"ok    {RUNTIME} {RUNTIME_VERSION} removed (runtime)"
+# toolhooks.undo: each tool in the box's order, then the runtime no tool requires any more
+FINISHED = [
+    ("finish", f"{TOOL} {TOOL_VERSION}-{TOOL_BUILD}"),
+    ("finish", PY_PACKAGE),
+    ("finish", RUNTIME_PACKAGE),
+]
 
 
 def step_finish(s: State) -> None:
@@ -1023,13 +1193,17 @@ def step_finish(s: State) -> None:
     t.wait(f"ok    vpn up, {VPN_ADDRESS} on tun0", "the vpn up line", timeout=60)
     t.wait(PROMPT, "the prompt after vpn start")
 
+    s.logged = len(tool_log())
     t.type("finish\r")
     # lifecycle.finish_box's summary, then the hooks' lines: toolhooks registers before kalihooks
     t.wait(f"box       {BOX} ({PLATFORM}), started {s.day}", "the summary's box line")
-    t.wait(f"tools     {TOOL} {TOOL_VERSION}   (will be removed)", "the summary's tools line")
+    t.wait(TOOLS_SUMMARY, "the summary's tools line")
+    t.wait(RUNTIMES_SUMMARY, "the summary's runtimes line")
     t.wait("hosts     1 line to remove from /etc/hosts", "the summary's hosts line")
     t.answer(confirm("finish this box?", False), "y", "the finish question")
     found = t.wait(re.compile(r"ok    archive (\S+\.finished\.tar\.gz)"), "the archive line")
+    # toolhooks.undo removes the runtime once no tool requires it, before kalihooks' lines
+    t.wait(RUNTIME_REMOVED, "the runtime removed line")
     t.wait("ok    removed 1 line from /etc/hosts", "the hosts lines removed")
     t.answer(confirm(f"the VPN is still up ({VPN_ADDRESS}). stop it?", False), "y", "the VPN question")
     t.wait("ok    vpn stopped", "the vpn stopped line")
@@ -1038,10 +1212,13 @@ def step_finish(s: State) -> None:
     status = t.wait_exit("the prompt to end after finish")
     check(status == 0, "pwn-broker ended with status 0", f"status {status}")
 
-    check_hosts(s, s.hosts_before, "/etc/hosts is byte for byte what it was before step 3", "hosts.step16")
+    check_hosts(s, s.hosts_before, "/etc/hosts is byte for byte what it was before step 3", "hosts.step17")
     wait_until(lambda: not openvpns(), "no openvpn process is left")
     wait_until(lambda: run(["ip", "link", "show", "tun0"]).returncode != 0, "tun0 is gone")
     check(not (BIN / TOOL).exists(), f"{BIN / TOOL} is gone")
+    check(not (BIN / PY_TOOL).exists(), f"{BIN / PY_TOOL} is gone")
+    tools_left()
+    logged_since(s.logged, FINISHED, f"{TOOL_LOG} has a finish line for {TOOL}, {PY_TOOL} and {RUNTIME}")
     check(not s.folder.exists(), f"{s.folder} is gone")
     archive = s.finished = Path(found[1])
     expected = WRAPPED / f"{s.folder.name}.finished.tar.gz"
@@ -1056,11 +1233,19 @@ def step_finish(s: State) -> None:
 
 
 def step_import(s: State) -> None:
-    t = launch("import", [str(BIN / "pwn-broker"), "import", str(s.finished)], f"tools     {TOOL} {TOOL_VERSION}")
-    # toolhooks._restore asks first; lifecycle.import_box reports after its hooks; cli.start's
+    s.logged = len(tool_log())
+    t = launch(
+        "import",
+        [str(BIN / "pwn-broker"), "import", str(s.finished)],
+        f"tools     {TOOL} {TOOL_VERSION}, {PY_TOOL} {PY_VERSION}",
+    )
+    # toolhooks._restore asks first and installs in the box's order, a runtime before the tool
+    # that requires it; lifecycle.import_box reports after its hooks; cli.start's
     # hostflow.on_open puts the line back
     t.answer(confirm("install these tools again?", True), "y", "the install again question")
     t.wait(f"ok    {TOOL} {TOOL_VERSION} installed", "the installed line")
+    t.wait(RUNTIME_INSTALLED, "the runtime's installed line", timeout=300)
+    t.wait(f"ok    {PY_TOOL} {PY_VERSION} installed", f"{PY_TOOL}'s installed line", timeout=300)
     t.wait(f"ok    unpacked to {s.folder}", "the unpacked line")
     t.wait("ok    1 targets", "the targets line")
     t.wait("ok    /etc/hosts updated", "the /etc/hosts updated line")
@@ -1071,10 +1256,22 @@ def step_import(s: State) -> None:
         s,
         s.hosts_before + hosts_line(s, [HOSTNAME, LATER]),
         "/etc/hosts has the box's line again",
-        "hosts.step17",
+        "hosts.step18",
     )
     resolves(LATER, s.ip)
     tool_runs()
+    py_runs_on_runtime()
+    records = {r["name"]: r for r in read_toml(s.folder / "box.toml").get("tools", [])}
+    check(
+        records.get(PY_TOOL, {}).get("runtime", {}).get("name") == RUNTIME,
+        f"box.toml still records {PY_TOOL} with {RUNTIME}",
+        repr(records),
+    )
+    logged_since(
+        s.logged,
+        [("install", f"{TOOL} {TOOL_VERSION}-{TOOL_BUILD}"), ("install", RUNTIME_PACKAGE), ("install", PY_PACKAGE)],
+        f"{TOOL_LOG} has an install line for {TOOL}, then {RUNTIME}, then {PY_TOOL}",
+    )
     t.type("quit\r")
     t.answer(confirm(f"export {BOX} before you go?", True), "n", "the export question")
     status = t.wait_exit("the prompt to end after quit")
@@ -1084,28 +1281,32 @@ def step_import(s: State) -> None:
 def step_last_finish(s: State) -> None:
     t = launch("resume", [str(BIN / "pwn-broker"), "resume", BOX], PROMPT)
     start = t.pos
+    s.logged = len(tool_log())
     t.type("finish\r")
-    t.wait(f"tools     {TOOL} {TOOL_VERSION}   (will be removed)", "the summary's tools line")
+    t.wait(TOOLS_SUMMARY, "the summary's tools line")
+    t.wait(RUNTIMES_SUMMARY, "the summary's runtimes line")
     t.wait("hosts     1 line to remove from /etc/hosts", "the summary's hosts line")
     t.answer(confirm("finish this box?", False), "y", "the finish question")
     t.answer(confirm("replace the existing archive?", False), "y", "the replace archive question")
     found = t.wait(re.compile(r"ok    archive (\S+\.finished\.tar\.gz)"), "the archive line")
+    t.wait(RUNTIME_REMOVED, "the runtime removed line")
     t.wait("ok    removed 1 line from /etc/hosts", "the hosts lines removed")
     t.answer(confirm("remove working folder?", False), "y", "the remove folder question")
     t.wait(f"ok    removed {s.folder}", "the folder removed line")
     status = t.wait_exit("the prompt to end after finish")
     check(status == 0, "pwn-broker ended with status 0", f"status {status}")
     out = t.text()[start:]
-    # kalihooks.vpn_question asks only while the app's VPN runs; none was started since step 16
+    # kalihooks.vpn_question asks only while the app's VPN runs; none was started since step 17
     check("stop it?" not in out, "finish asked no VPN question", readable(out))
     check(not openvpns(), "no openvpn process is running", repr(openvpns()))
     archive = Path(found[1])
     check(archive == s.finished and archive.is_file(), f"the replaced finished archive is {s.finished}", str(archive))
     verify(archive)
-    check_hosts(s, s.hosts_before, "/etc/hosts matches the original bytes once more", "hosts.step18")
-    left = sorted(p.name for p in (OPT / "tools").iterdir())
-    check(left == ["installed.toml"], f"{OPT / 'tools'} holds nothing but installed.toml", repr(left))
+    check_hosts(s, s.hosts_before, "/etc/hosts matches the original bytes once more", "hosts.step19")
+    tools_left()
     check(not (BIN / TOOL).exists(), f"{BIN / TOOL} is gone")
+    check(not (BIN / PY_TOOL).exists(), f"{BIN / PY_TOOL} is gone")
+    logged_since(s.logged, FINISHED, f"{TOOL_LOG} has a finish line for {TOOL}, {PY_TOOL} and {RUNTIME} again")
     check(not s.folder.exists(), f"{s.folder} is gone")
 
     # the app leaves each launch's note window open; recorded here, not judged
@@ -1136,19 +1337,22 @@ STEPS = [
     (13, "vpn", step_vpn),
     (14, "vpn survives the prompt's terminal", step_vpn_daemon),
     (15, "a tool", step_tool),
-    (16, "finish", step_finish),
-    (17, "import", step_import),
-    (18, "leftovers at the next launch", step_last_finish),
+    (16, "a Python tool on a real runtime", step_python_tool),
+    (17, "finish", step_finish),
+    (18, "import", step_import),
+    (19, "leftovers at the next launch", step_last_finish),
 ]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--evidence", required=True, type=Path)
+    parser.add_argument("--runtime-archive", required=True, type=Path, help="the checked upstream Python build")
     args = parser.parse_args()
     global EVIDENCE
     EVIDENCE = Evidence(args.evidence)
     state = State()
+    state.runtime_archive = args.runtime_archive
     status = 0
     try:
         for number, title, step in STEPS:

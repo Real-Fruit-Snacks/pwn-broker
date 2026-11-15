@@ -1,7 +1,8 @@
 #!/bin/sh
 # The Kali cycle, inside kalilinux/kali-rolling as root. Installs what a Kali desktop already
 # has, starts a virtual display, installs pwn-broker with the real installer, runs the unit
-# suite with the real asciinema, then drives one whole box with kali-cycle.py. Everything worth
+# suite with the real asciinema, downloads and checks the pinned Python build that the cycle's
+# runtime package carries, then drives one whole box with kali-cycle.py. Everything worth
 # reading afterwards goes into /evidence, whatever happens. The repository is mounted read-only
 # at /src.
 
@@ -14,6 +15,11 @@ OPT=/opt/pwn-broker
 PACKAGES="python3 python3-venv python3-pip vim zsh kali-defaults openvpn iproute2 iputils-ping curl ca-certificates tar procps xvfb xterm imagemagick git"
 SUITE_STATUS=not-run
 CYCLE_STATUS=not-run
+# The Python build the cycle's runtime package carries, as pwn-shop's python-3.13 recipe pins it
+RUNTIME_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.13.18+20261110-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz"
+RUNTIME_SIZE=35596130
+RUNTIME_SHA256=f2d2199eb25880e07863b391cf7124e7ffa1338b0d65600dfcec117c4223a7fb
+RUNTIME_ARCHIVE="$WORK/downloads/python.tar.gz"
 
 export HOME=/root
 export DEBIAN_FRONTEND=noninteractive
@@ -153,8 +159,19 @@ else
 fi
 echo "unit suite: $SUITE_STATUS"
 
-say "7. the cycle"
-"$OPT/app/bin/python" "$CHECKOUT/.github/scripts/kali-cycle.py" --evidence "$EVIDENCE"
+say "7. the Python build for the runtime package"
+mkdir -p "$WORK/downloads" || stop "cannot create $WORK/downloads"
+rm -f "$RUNTIME_ARCHIVE"
+echo "$RUNTIME_URL"
+curl -fsSL --retry 3 -o "$RUNTIME_ARCHIVE" "$RUNTIME_URL" || stop "the Python build could not be downloaded"
+size="$(wc -c <"$RUNTIME_ARCHIVE" | tr -d ' ')"
+[ "$size" = "$RUNTIME_SIZE" ] || stop "the Python build is $size bytes, not $RUNTIME_SIZE"
+echo "$RUNTIME_SHA256  $RUNTIME_ARCHIVE" | sha256sum -c - || stop "the Python build's SHA-256 is not $RUNTIME_SHA256"
+echo "$RUNTIME_ARCHIVE: $size bytes, SHA-256 as pinned"
+
+say "8. the cycle"
+"$OPT/app/bin/python" "$CHECKOUT/.github/scripts/kali-cycle.py" --evidence "$EVIDENCE" \
+    --runtime-archive "$RUNTIME_ARCHIVE"
 CYCLE_STATUS=$?
 
 say "result"
