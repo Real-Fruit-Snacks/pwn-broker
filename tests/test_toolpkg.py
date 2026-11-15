@@ -744,6 +744,8 @@ def test_zip_name_with_a_dot():
 
 def test_kinds_and_schemas():
     assert toolpkg.KINDS == ("kali", "upload", "both", "runtime")
+    # pwn-shop pins the same pattern, so the two repositories accept the same names
+    assert toolpkg._NAME.pattern == r"[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*"
     assert toolpkg.SCHEMAS == (1, 2)
 
 

@@ -1168,7 +1168,7 @@ series = "3.13"                      # the Python the requiring tools' wheels ar
 - The source is the `install_only_stripped` build for `x86_64-unknown-linux-gnu` from `astral-sh/python-build-standalone`, pinned in the recipe by size and SHA-256. Upstream publishes its own checksums, so the pin has a second source.
 - A runtime has no `[[command]]`, no `[[upload]]`, no `[data]` and no `[python]`. A manifest with any of them is refused.
 - A runtime puts nothing in `/opt/pwn-broker/bin`. Kali's own `python3` is never shadowed, and the reserved command names do not change.
-- Package names may now hold a dot, so `python-3.13` is a name: letters, digits, hyphens and dots, starting with a letter or digit, with no two dots together and none at the end. Both repositories apply the same rule.
+- Package names may now hold a dot, so `python-3.13` is a name: lower-case letters, digits, hyphens and dots, starting with a letter or digit, with no two dots together and none at the end. Both repositories apply the same rule.
 
 **A tool that requires one.**
 
