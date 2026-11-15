@@ -1250,6 +1250,35 @@ Making the environment runs the runtime's interpreter. That is the one new thing
 - x86_64 with glibc only, as for every other package.
 - A tool has one Python runtime. No tool depends on another tool.
 
+### 8.13 Tool history
+
+Not built yet. This section is the design.
+
+**Why.** A box records the tools it has, and that record goes into its archive. But `tool remove` deletes the tool's line, so a tool I tried and took off leaves no trace. And nothing spans boxes: to find which boxes used a tool, and at which version, I would have to open every archive.
+
+**In the box.**
+
+- A removed tool stays in `box.toml`, with the time it was removed. A box therefore shows every tool it ever used.
+- A tool installed again after a removal gets a new line; the removed one stays.
+- Everything that asks what the box has now (the lists, the count, `finish`, `import`) looks only at the lines with no removal time.
+- `finish` does not mark anything removed. A finished box keeps its tools on record as current, so reopening it can offer them again.
+- `tool history` shows the box's whole record: each tool with its version and build, when it was installed, when it was removed, and the runtime it ran on.
+
+**Across boxes.** One log, `~/pwn-broker/tools.log`, beside `active/` and `wrapped/`:
+
+```
+2026-11-15T14:32:07+00:00  install  forest (4412e505-2998-424f-855d-1fbaaabe2894)  python-3.13 3.13.18-1  sha256:9c1e...  runtime
+2026-11-15T14:32:09+00:00  install  forest (4412e505-2998-424f-855d-1fbaaabe2894)  certipy 5.1.0-3  sha256:a380...
+2026-11-15T16:05:41+00:00  remove   forest (4412e505-2998-424f-855d-1fbaaabe2894)  certipy 5.1.0-3  sha256:a380...
+```
+
+- One line for each tool installed, each one removed with `tool remove`, and each one taken off at `finish`, with the runtimes installed and removed beside them.
+- Each line holds the time, what happened, the box by name and ID, the tool with its version and build, and the package's SHA-256.
+- It lives with my boxes, not under `/opt/pwn-broker`, so reinstalling or removing the app does not lose it. It follows the `home` setting.
+- It is only ever added to. The app never reads it back, and never trims it.
+- If it cannot be written, the app warns once and carries on: a log must never stop an install.
+- It is readable only by me.
+
 ## 9. What finish puts back
 
 Whatever a box changes on Kali, `finish` undoes. Each change is recorded in `box.toml` when it is made.
