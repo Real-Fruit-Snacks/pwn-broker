@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pwn_broker import __version__, boxes, checks, config, lifecycle, note, notewindow, privilege
 from pwn_broker import hostflow, hosts, kalihooks, questions, session as sessions, setup
-from pwn_broker import targetflow, toolhooks
+from pwn_broker import targetflow, toolhooks, vpn
 from pwn_broker.boxes import BoxError
 from pwn_broker.config import ConfigError, Settings
 from pwn_broker.console import Cancelled, Console, TermConsole
@@ -42,6 +42,7 @@ class Env:
     hosts_path: Path = hosts.DEFAULT_PATH
     is_root: Callable[[], bool] = privilege.is_root
     run_privileged: Callable = privilege.run_privileged
+    tunnel: Callable[[], vpn.Tunnel | None] = vpn.tunnel
 
 
 def _load(env: Env, box: Box) -> Session:
@@ -49,6 +50,7 @@ def _load(env: Env, box: Box) -> Session:
     session.hosts_path = env.hosts_path
     session.is_root = env.is_root
     session.run_privileged = env.run_privileged
+    session.tunnel = env.tunnel
     return session
 
 
@@ -251,7 +253,7 @@ def _prepare(env: Env) -> int | None:
             return 1
 
     results = checks.launch_checks(
-        env.paths, env.settings, env.environ, env.home, include_version=False
+        env.paths, env.settings, env.environ, env.home, include_version=False, tunnel=env.tunnel
     )
     checks.report(console, results)
     if any(r.status == "fail" for r in results):

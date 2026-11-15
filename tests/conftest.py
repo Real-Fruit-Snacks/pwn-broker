@@ -74,6 +74,9 @@ class System:
         from pwn_broker.ping import Result
 
         self.answer = Result(True, 1.0, True)
+        # the tunnel the stand-in reports; None means no VPN is up
+        self.tunnel_found = None
+        self.tunnel_reads = 0
 
     @property
     def hosts_path(self):
@@ -91,6 +94,11 @@ class System:
 
         self.privileged.append(list(argv))
         return subprocess.CompletedProcess(argv, self.privileged_status)
+
+    def tunnel(self):
+        # the real reader runs `ip`; no test may
+        self.tunnel_reads += 1
+        return self.tunnel_found
 
     def ping(self, ip):
         self.pings.append(ip)
@@ -115,7 +123,7 @@ def system(tmp_path_factory, monkeypatch):
         # an equal path is the same file, so it is compared by value
         if self.hosts_path == defaults["hosts_path"]:
             self.hosts_path = fake.hosts_path
-        for name in ("is_root", "run_privileged", "ping"):
+        for name in ("is_root", "run_privileged", "ping", "tunnel"):
             if getattr(self, name) is defaults[name]:
                 setattr(self, name, getattr(fake, name))
 
@@ -130,7 +138,7 @@ def system(tmp_path_factory, monkeypatch):
         env_original(self, *args, **kwargs)
         if self.hosts_path == env_defaults["hosts_path"]:
             self.hosts_path = fake.hosts_path
-        for name in ("is_root", "run_privileged"):
+        for name in ("is_root", "run_privileged", "tunnel"):
             if getattr(self, name) is env_defaults[name]:
                 setattr(self, name, getattr(fake, name))
 
@@ -154,7 +162,7 @@ def session(paths, box, dc01, system):
     return Session(
         paths, Settings(), FakeConsole(), box, [dc01], [], dc01, lambda: later,
         hosts_path=system.hosts_path, is_root=lambda: True,
-        run_privileged=system.run_privileged, ping=system.ping,
+        run_privileged=system.run_privileged, ping=system.ping, tunnel=system.tunnel,
     )  # fmt: skip
 
 

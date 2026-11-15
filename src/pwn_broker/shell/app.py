@@ -12,7 +12,7 @@ from prompt_toolkit.styles import Style
 
 from pwn_broker import boxlock, toolindex, toolstate
 from pwn_broker.boxes import TARGET_FOLDERS
-from pwn_broker.session import Session, mark_seen, reload_if_changed, rescan
+from pwn_broker.session import Session, current_tunnel, mark_seen, reload_if_changed, rescan
 from pwn_broker.shell.commands import COMMANDS, Quit, dispatch
 from pwn_broker.store import StoreError
 from pwn_broker.theme import color_enabled, prompt_style
@@ -52,6 +52,8 @@ def toolbar_text(session: Session, now: datetime) -> str:
     tools = toolstate.present_count(session.paths, session.box)
     if tools:
         parts.append(f"{tools} tool" if tools == 1 else f"{tools} tools")
+    found = current_tunnel(session)
+    parts.append(f"vpn {found.address}" if found else "no vpn")
     minutes = max(0, int((now - session.box.started).total_seconds())) // 60
     parts.append(f"{minutes // 60:02d}:{minutes % 60:02d}")
     return " " + "   ".join(parts)
@@ -148,6 +150,7 @@ def run_shell(session: Session) -> None:
                     console.fail(f"could not reload the box: {exc}")
                     continue
                 try:
+                    current_tunnel(session, fresh=True)
                     try:
                         rescan(session)
                     except (StoreError, OSError) as exc:

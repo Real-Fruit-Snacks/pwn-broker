@@ -19,6 +19,7 @@ from pwn_broker.checks import (
 )
 from pwn_broker.config import Settings
 from pwn_broker.console import FakeConsole
+from pwn_broker.vpn import Tunnel
 
 
 def _env(paths, **extra):
@@ -50,9 +51,36 @@ def _missing(wanted):
 
 def test_all_checks_pass(paths):
     _ready(paths)
-    results = run_checks(paths, Settings(), _env(paths), which=_found, run=_venv_ok)
+    results = run_checks(
+        paths, Settings(), _env(paths), which=_found, run=_venv_ok, tunnel=lambda: Tunnel("tun0", "10.10.14.7")
+    )
     assert all(r.status == "ok" for r in results)
-    assert [r.name for r in results] == ["vim", "terminal", "tar", "venv", "display", "path", "folders"]
+    assert [r.name for r in results] == [
+        "vim", "terminal", "tar", "venv", "display", "path", "folders", "vpn"
+    ]  # fmt: skip
+
+
+def test_vpn_check_names_the_address_and_interface(paths):
+    results = run_checks(paths, Settings(), _env(paths), which=_found, tunnel=lambda: Tunnel("tun1", "10.10.14.7"))
+    found = _by_name(results)["vpn"]
+    assert (found.status, found.message) == ("ok", "10.10.14.7 on tun1")
+
+
+def test_vpn_check_warns_without_a_tunnel_and_never_fails(paths):
+    results = run_checks(paths, Settings(), _env(paths), which=_found, tunnel=lambda: None)
+    found = _by_name(results)["vpn"]
+    assert (found.status, found.message, found.hint) == (
+        "warn", "no VPN tunnel is up", "start one with: vpn start"
+    )  # fmt: skip
+    assert found.repair is None
+
+
+def test_launch_checks_pass_the_tunnel_reader_through(paths, tmp_path):
+    results = launch_checks(
+        paths, Settings(), {"PATH": ""}, tmp_path, include_version=False,
+        tunnel=lambda: Tunnel("tun0", "10.10.14.7"),
+    )  # fmt: skip
+    assert _by_name(results)["vpn"].message == "10.10.14.7 on tun0"
 
 
 def test_missing_vim_fails_with_install_hint(paths):

@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 
 from pwn_broker import tooldata, toolhooks, toolindex, toolinstall, toolstate
-from pwn_broker.session import Session
+from pwn_broker.session import Session, current_tunnel
 from pwn_broker.shell.commands import command, take_args
 from pwn_broker.toolindex import BuildEntry, Index, ToolEntry
 from pwn_broker.toolpkg import MANIFEST, ToolError, build_id, read_manifest
@@ -154,11 +154,12 @@ def _last_domain(session: Session) -> str:
 
 def fill_examples(session: Session, text: str) -> str:
     target = session.current
+    tunnel = current_tunnel(session)
     values = {
         "ip": target.ips[0] if target and target.ips else "",
         "hostname": target.hostnames[0] if target and target.hostnames else "",
         "domain": _last_domain(session),
-        "lhost": "",
+        "lhost": tunnel.address if tunnel else "",
     }
     # one pass of plain replacement: a filled value is never read as a placeholder again
     return _PLACEHOLDER.sub(lambda m: values[m[1]] or f"<{m[1]}>", text)

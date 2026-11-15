@@ -14,6 +14,7 @@ from pwn_broker.console import FakeConsole
 from pwn_broker.model import FileRecord, Flag
 from pwn_broker.shell.commands import COMMANDS, dispatch
 from pwn_broker.store import load_box, save_files
+from pwn_broker.vpn import Tunnel
 
 FLAG = "e5e4e47ae7022664cda6eb013fb0d9ed"
 
@@ -154,6 +155,7 @@ def test_status_shows_box_at_a_glance(session):
         "status    active",
         "targets   1",
         "tools     0",
+        "vpn       not up",
         "creds     1",
         "files     1",
         "user flag recorded 12:00",
@@ -165,14 +167,14 @@ def test_status_shows_box_at_a_glance(session):
 def test_check_command_reruns_checks(session, monkeypatch):
     calls = []
 
-    def fake(paths, settings, env, home, include_version=True):
-        calls.append((paths, settings, include_version))
+    def fake(paths, settings, env, home, include_version=True, tunnel=None):
+        calls.append((paths, settings, include_version, tunnel))
         return [CheckResult("vim", "ok", "/usr/bin/vim")]
 
     monkeypatch.setattr(checks, "launch_checks", fake)
     monkeypatch.setattr(checks, "version_check", lambda settings: CheckResult("version", "warn", "9.9 is available"))
     dispatch(session, "check")
-    assert calls == [(session.paths, session.settings, False)]
+    assert calls == [(session.paths, session.settings, False, session.tunnel)]
     assert session.console.lines == [("ok", "1 check passed"), ("warn", "version   9.9 is available")]
 
 
@@ -238,3 +240,17 @@ def test_note_command_recreates_a_missing_note(session, monkeypatch):
     text = note.read_text(encoding="utf-8")
     assert text.startswith("#" * 64 + "\n#  Box:         forest ") and "\nTarget: dc01   " in text
     assert ("ok", "note created") in session.console.lines
+
+
+def test_status_shows_the_tunnel(session, system):
+    system.tunnel_found = Tunnel("tun0", "10.10.14.7")
+    dispatch(session, "status")
+    assert "vpn       10.10.14.7 on tun0" in _info(session.console)
+
+
+def test_check_command_hands_the_session_tunnel_reader_to_the_checks(session, system, monkeypatch):
+    system.tunnel_found = Tunnel("tun0", "10.10.14.7")
+    monkeypatch.setattr(checks, "newer_release_within", lambda settings: None)
+    dispatch(session, "check")
+    assert ("warn", "vpn   no VPN tunnel is up") not in session.console.lines
+    assert system.tunnel_reads == 1

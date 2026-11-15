@@ -1,9 +1,9 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from pwn_broker import hosts, privilege
+from pwn_broker import hosts, privilege, vpn
 from pwn_broker.config import Settings
 from pwn_broker.console import Console
 from pwn_broker.filescan import scan
@@ -49,8 +49,23 @@ class Session:
     is_root: Callable[[], bool] = privilege.is_root
     run_privileged: Callable = privilege.run_privileged
     ping: Callable[[str], PingResult] = ping_once
+    tunnel: Callable[[], vpn.Tunnel | None] = vpn.tunnel
+    # the last tunnel read and when it was made, so a redrawn status bar does not run `ip` each time
+    tunnel_read: tuple[datetime, vpn.Tunnel | None] | None = None
     # things said once per session
     notices: set[str] = field(default_factory=set)
+
+
+TUNNEL_AGE = timedelta(seconds=10)
+
+
+def current_tunnel(session: Session, *, fresh: bool = False) -> vpn.Tunnel | None:
+    """The tunnel as last read, read again when asked to or when the answer is ten seconds old."""
+    now = session.clock()
+    last = session.tunnel_read
+    if fresh or last is None or not timedelta(0) <= now - last[0] < TUNNEL_AGE:
+        last = session.tunnel_read = (now, session.tunnel())
+    return last[1]
 
 
 def load_session(

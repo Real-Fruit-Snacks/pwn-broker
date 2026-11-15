@@ -528,7 +528,7 @@ def test_start_runs_the_checks_then_the_update_check(env, quiet, monkeypatch, bo
     )
     env.cwd = box.path
     start(env, [])
-    assert order == [("checks", {"include_version": False}), "version"]
+    assert order == [("checks", {"include_version": False, "tunnel": env.tunnel}), "version"]
 
 
 def test_main_reports_unexpected_errors(monkeypatch, tmp_path, capsys):
@@ -713,3 +713,11 @@ def test_main_registers_the_kali_hooks(tmp_path, monkeypatch):
     assert main([]) == 0
     assert hostflow.undo in lifecycle.UNDO_HOOKS
     assert hostflow.summary in lifecycle.SUMMARY_HOOKS
+
+
+def test_a_loaded_session_reads_the_tunnel_through_the_env(env, box):
+    from pwn_broker.cli import _load
+    from pwn_broker.vpn import Tunnel
+
+    env.tunnel = lambda: Tunnel("tun0", "10.10.14.7")
+    assert _load(env, box).tunnel() == Tunnel("tun0", "10.10.14.7")

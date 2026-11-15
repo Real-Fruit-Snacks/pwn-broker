@@ -5,7 +5,7 @@ from pwn_broker import boxes, checks, notewindow, store, toolstate
 from pwn_broker.model import FileRecord, Flag
 from pwn_broker.note import NOTE_NAME, NoteError
 from pwn_broker.questions import ask_value
-from pwn_broker.session import Session, write_new_note
+from pwn_broker.session import Session, current_tunnel, write_new_note
 from pwn_broker.store import StoreError
 from pwn_broker.shell.commands import COMMANDS, command, take_args
 
@@ -106,6 +106,11 @@ def _flag_line(session: Session, which: str) -> str:
     return f"recorded {flag.at.strftime('%H:%M')}" if flag else "-"
 
 
+def _vpn_line(session: Session) -> str:
+    found = current_tunnel(session)
+    return f"{found.address} on {found.name}" if found else "not up"
+
+
 @command("status", "show the box at a glance")
 def status(session: Session, args: list[str]) -> None:
     take_args(args)
@@ -116,6 +121,7 @@ def status(session: Session, args: list[str]) -> None:
         ("status", box.status),
         ("targets", str(len(session.targets))),
         ("tools", str(toolstate.present_count(session.paths, box))),
+        ("vpn", _vpn_line(session)),
         ("creds", str(len(session.creds))),
         ("files", str(len(store.load_files(box)))),
         ("user flag", _flag_line(session, "user")),
@@ -129,7 +135,12 @@ def status(session: Session, args: list[str]) -> None:
 def check(session: Session, args: list[str]) -> None:
     take_args(args)
     results = checks.launch_checks(
-        session.paths, session.settings, os.environ, Path.home(), include_version=False
+        session.paths,
+        session.settings,
+        os.environ,
+        Path.home(),
+        include_version=False,
+        tunnel=session.tunnel,
     )
     newer = checks.newer_release_within(session.settings)
     if newer is not None:

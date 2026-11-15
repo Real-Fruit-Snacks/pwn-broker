@@ -11,6 +11,7 @@ from pwn_broker.note import NoteError
 from pwn_broker.shell.app import completions, prompt_text, toolbar_text
 from pwn_broker.shell.commands import COMMANDS, Quit, command, dispatch, resolve, suggest
 from pwn_broker.store import StoreError
+from pwn_broker.vpn import Tunnel
 
 
 @pytest.fixture
@@ -185,20 +186,20 @@ def _second_target(session):
 def test_toolbar_text(session):
     _second_target(session)
     now = session.box.started + timedelta(hours=1, minutes=42, seconds=59)
-    assert toolbar_text(session, now) == " forest   dc01  10.10.10.161   2 targets   01:42"
+    assert toolbar_text(session, now) == " forest   dc01  10.10.10.161   2 targets   no vpn   01:42"
 
 
 def test_toolbar_without_target(session):
     session.current = None
     session.targets.clear()
-    assert toolbar_text(session, session.box.started) == " forest   0 targets   00:00"
+    assert toolbar_text(session, session.box.started) == " forest   0 targets   no vpn   00:00"
 
 
 def test_toolbar_singular_and_hostname_fallback(session):
     session.current.ips = []
     assert (
         toolbar_text(session, session.box.started)
-        == " forest   dc01  forest.htb.local   1 target   00:00"
+        == " forest   dc01  forest.htb.local   1 target   no vpn   00:00"
     )
 
 
@@ -427,3 +428,26 @@ def test_a_lock_file_that_cannot_be_used_does_not_end_the_session(session, loop,
     assert len(failures) == 1
     assert "lock" in failures[0] and "Permission denied" in failures[0]
     assert "record is adding" not in failures[0]
+
+
+def test_toolbar_shows_the_tunnel_address_after_the_tools(session, system):
+    system.tunnel_found = Tunnel("tun0", "10.10.14.7")
+    assert toolbar_text(session, session.box.started).endswith("1 target   vpn 10.10.14.7   00:00")
+
+
+def test_toolbar_redraw_uses_the_cached_read(session, system):
+    toolbar_text(session, session.box.started)
+    toolbar_text(session, session.box.started)
+    assert system.tunnel_reads == 1
+
+
+def test_each_command_starts_with_a_fresh_tunnel_read(session, loop, system):
+    from pwn_broker.session import current_tunnel
+
+    seen = []
+    command("vpnnow", "help")(lambda s, a: seen.append(current_tunnel(s)))
+    loop(["vpnnow", "vpnnow"], between=lambda left: setattr(
+        system, "tunnel_found", Tunnel("tun0", "10.10.14.7") if left == 1 else None
+    ))  # fmt: skip
+    assert seen == [None, Tunnel("tun0", "10.10.14.7")]
+    assert system.tunnel_reads == 2

@@ -12,6 +12,7 @@ from pwn_broker.config import Settings
 from pwn_broker.console import FakeConsole
 from pwn_broker.shell import cmd_tool
 from pwn_broker.shell.app import completions, toolbar_text
+from pwn_broker.vpn import Tunnel
 from pwn_broker.shell.commands import COMMANDS, dispatch
 from pwn_broker.store import load_box
 from pwn_broker.toolindex import BuildEntry
@@ -517,11 +518,11 @@ def test_cache_clear_with_one_file(session, shop):
 
 def test_toolbar_counts_the_boxes_tools_after_targets(session, shop):
     start = session.box.started
-    assert toolbar_text(session, start) == " forest   dc01  10.10.10.161   1 target   00:00"
+    assert toolbar_text(session, start) == " forest   dc01  10.10.10.161   1 target   no vpn   00:00"
     run(session, "tool install kerbrute")
-    assert toolbar_text(session, start).endswith("1 target   1 tool   00:00")
+    assert toolbar_text(session, start).endswith("1 target   1 tool   no vpn   00:00")
     run(session, "tool install ligolo-ng")
-    assert toolbar_text(session, start).endswith("1 target   2 tools   00:00")
+    assert toolbar_text(session, start).endswith("1 target   2 tools   no vpn   00:00")
 
 
 def test_status_shows_the_tool_count(session, shop):
@@ -689,7 +690,7 @@ def test_a_tool_the_box_records_but_the_machine_lacks_is_not_installed(session, 
     assert [r[3] for r in rows] == ["not installed", "installed"]
     _columns, rows = table(run(session, "tool search stand-in"))
     assert [r[3] for r in rows] == ["not installed", "installed"]
-    assert toolbar_text(session, start).endswith("1 target   1 tool   00:00")
+    assert toolbar_text(session, start).endswith("1 target   1 tool   no vpn   00:00")
     assert "tools     1" in lines(run(session, "status"), "info")
 
 
@@ -697,7 +698,7 @@ def test_the_toolbar_counts_nothing_while_the_installed_list_cannot_be_read(sess
     start = session.box.started
     run(session, "tool install kerbrute")
     session.paths.tools_state.write_text("not toml [", encoding="utf-8")
-    assert toolbar_text(session, start).endswith("1 target   00:00")
+    assert toolbar_text(session, start).endswith("1 target   no vpn   00:00")
 
 
 def test_the_index_is_still_listed_while_the_installed_list_cannot_be_read(session, shop):
@@ -725,3 +726,11 @@ def test_installing_a_root_tool_names_the_copy_sudo_would_run(session, shop, mon
         f"sudo ligolo-proxy runs /usr/bin/ligolo-proxy; use sudo {full}"
     )
     assert seen and all(path == "/usr/bin" for path in seen)
+
+
+def test_info_fills_lhost_from_the_tunnel(session, shop, system):
+    system.tunnel_found = Tunnel("tun0", "10.10.14.7")
+    run(session, "tool install kerbrute")
+    joined = "\n".join(lines(run(session, "tool info kerbrute"), "info"))
+    assert "--dc 10.10.10.161 forest.htb.local 10.10.14.7 {nope} {0}" in joined
+    assert "<lhost>" not in joined
