@@ -33,11 +33,11 @@ These wait on `pwn-shop`, which does not exist yet. The tool commands read a fol
 
 - [ ] `python3 -m venv` works on a fresh Kali, and its Python is 3.12 or 3.13, the versions the bundled wheels cover.
 - [ ] With `tools_index` set to the folder, `tool list` shows the six packages (kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng, peass-ng) and a `kali` column. `tool refresh` prints `ok` and a count of six tools. With `tools_index` pointing at an empty folder, every `tool` command prints one `fail` line that names the folder and `tools_index`.
-- [ ] `tool install` each of the six in a box. Each prints `ok`, then how to run it. For a tool Kali already packages (`pspy`, `certipy`, `ligolo-ng`, `peass`), a `warn` line gives Kali's path and says the installed one wins.
+- [ ] `tool install` each of the six in a box. Each prints `ok`, then how to run it. Where Kali already has a command of the same name, a `warn` line gives Kali's path and says the installed one wins. Kali is believed to package `pspy`, `certipy-ad`, `ligolo-ng` and `peass` (its names for them); confirm that, and which command names each installs, and note which installs produced a `warn` line.
 - [ ] Run each command once from a new terminal: `kerbrute`, `certipy`, `targetedKerberoast`, `ligolo-proxy`. Each starts. The upload files are in `/opt/pwn-broker/upload/<tool>/`.
 - [ ] `sudo /opt/pwn-broker/bin/ligolo-proxy`, the path `tool install` and `tool info` printed, starts. Bare `sudo ligolo-proxy` is not expected to work, and `/etc/sudoers` is unchanged.
-- [ ] Kali's own copy still runs as before when called by its full path, and `tool remove` on the installed one makes the bare name run Kali's again.
-- [ ] Note what `ligolo-proxy` writes, and where, on its first run, and whether Kali's own `ligolo-ng` package installs a command of the same name. The package's data paths depend on it.
+- [ ] For any command the check above found Kali already has, Kali's copy still runs as before when called by its full path, and `tool remove` on the installed one makes the bare name run Kali's again.
+- [ ] Note what `ligolo-proxy` writes, and where, on its first run, and whether Kali's own `ligolo-ng` package installs `ligolo-proxy`, so which one runs once mine is installed. The package's data paths depend on it.
 - [ ] Open a second box and `tool install` the same tool: the same build shares it. A different build stops and names the first box.
 - [ ] While `ligolo-proxy` is running, `finish` and `tool remove ligolo-ng` both stop and name it.
 - [ ] `finish` lists the box's tools and every path under the home folder it will delete. Afterwards no command, no upload folder, no `tools/` folder and no tool data from that box is left, and a path that existed before the install is still there with a `warn` line about it.

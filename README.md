@@ -118,7 +118,7 @@ Edits made by hand to these files are overwritten at the next rebuild.
 
 ## Tools
 
-`tool install <name>` puts a tool on the machine for this box, and `finish` takes it off again. A package is one zip for one build of one tool: a manifest, the upstream licence, the tool's own files exactly as upstream published them, and, for a Python tool, every dependency as a wheel with its SHA-256 recorded. A package holds no install script. A Python tool gets its own virtual environment, built from the bundled wheels with no network access, wheels only and hash checking on. Nothing else from a package runs during install. Every download and every cached zip is checked against the size and SHA-256 in the index before it is used, and the app refuses to delete anything outside `/opt/pwn-broker`, whatever a manifest says. x86_64 only.
+`tool install <name>` puts a tool on the machine for this box, and `finish` takes it off again. A package is one zip for one build of one tool: a manifest, the upstream licence, the tool's own files exactly as upstream published them, and, for a Python tool, every dependency as a wheel with its SHA-256 recorded. A package holds no install script. A Python tool gets its own virtual environment, built from the bundled wheels with no network access, wheels only and hash checking on. Nothing else from a package runs during install. Every download and every cached zip is checked against the size and SHA-256 in the index before it is used, and a tool's folder, its launchers and its upload files are created and removed only inside `/opt/pwn-broker`, whatever a manifest or index names. A tool's data in the home folder is the one thing removed outside it, at `finish` only: a path is deleted only if it did not exist before the install, sits strictly inside the home folder, has no link anywhere on the way to it, and no other unfinished box uses the tool. It is copied into the box first. The first set of packages is x86_64 only, and a package built for another architecture is refused at install.
 
 The packages come from a second repository, `Real-Fruit-Snacks/pwn-shop`, where the published index lives. The first set planned for it is kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng and peass-ng. None of them has been installed on Kali yet.
 
@@ -130,7 +130,7 @@ run   ligolo-proxy   from any terminal
 files /opt/pwn-broker/upload/ligolo-ng   agent  agent.exe
 ```
 
-That is the shape of the output, not a recorded run. `tool list`, `tool search` and `tool info` work from the cached index without a network.
+That is the shape of the output, not a recorded run. `tool list`, `tool search` and `tool info` read the index. With a URL index they use the cached copy when the source does not answer in time, and fail with one line naming the location when there is neither. A folder index is read directly.
 
 - **Kali's own copies are never touched.** An install writes a launcher for each command into `/opt/pwn-broker/bin`, and that folder decides which copy a bare command name runs. If Kali already has a command of the same name, install prints a `warn` line with its path and says the installed one wins. `tool list` has a `kali` column that says whether Kali already has a command of that name.
 - **`sudo` is never reconfigured.** `sudo` does not search your PATH, so a tool that needs root is run as `sudo <full path>`. The app prints that path after install and in `tool info`.
@@ -151,7 +151,7 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 ## Tested on
 
 - The unit tests, on Windows 11 with Python 3.13: 1264 passed, 33 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer, virtual environments and launchers).
-- The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13. On Linux they include real tool installs into a virtual environment and the launchers. No Linux count is given here, because none has been recorded for this version.
+- The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13, and again as root on 3.13 (the `test-root` job). On Linux they include real tool installs into a virtual environment and the launchers. No Linux count is given here, because none has been recorded for this version.
 - `install.sh`, run twice from a checkout on Ubuntu 24.04 in CI: the first run builds the environment, installs the package and writes the launcher and the PATH line; the second reuses the environment and adds no second PATH line.
 - The vimrc, run by Vim 9.2 in headless mode on a note the app wrote: folds, fold text, `F8`, colours, settings, and the reload after the app changes the note. Timers and focus events do not fire in that mode, so the tests run the check by hand.
 - *Not* tested: Kali Linux. The app has not been run there, and the checks in `docs/kali-checks.md`, the tool checks included, have not been run yet.

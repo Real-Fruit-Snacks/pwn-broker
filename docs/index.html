@@ -143,7 +143,7 @@ sh install.sh --from .">Copy</button></div>
             </div>
             <div class="block">
                 <h3>Tools, installed and taken off again</h3>
-                <p><code>tool install &lt;name&gt;</code> installs a package from the index: size and SHA-256 checked, no install script, and a Python tool gets its own virtual environment from bundled wheels with no network. Kali's own copies are never touched. A tool that needs root is run as <code>sudo &lt;full path&gt;</code>, which the app prints. <code>finish</code> removes the box's tools unless another unfinished box still uses them. x86_64 only.</p>
+                <p><code>tool install &lt;name&gt;</code> installs a package from the index: size and SHA-256 checked, no install script, and a Python tool gets its own virtual environment from bundled wheels with no network. Kali's own copies are never touched. A tool that needs root is run as <code>sudo &lt;full path&gt;</code>, which the app prints. <code>finish</code> removes the box's tools unless another unfinished box still uses them. The first set of packages is x86_64 only. A tool's data in the home folder is the one thing removed outside <code>/opt/pwn-broker</code>, at <code>finish</code> only, and only if it did not exist before the install.</p>
             </div>
         </div>
     </div>
