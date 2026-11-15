@@ -27,7 +27,7 @@ from pwn_broker.toolpkg import ToolError
 LOCK_WAIT = 5
 USAGE = "usage: record [target]"
 NO_TARGETS = "this box has no targets; add one in the prompt with: target add"
-BUSY = "the prompt is in the middle of a command; finish it, then run record again"
+BUSY = "the prompt is in the middle of a command; wait for it to end, then run record again"
 
 
 @dataclass

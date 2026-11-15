@@ -347,7 +347,7 @@ def test_a_held_lock_adds_nothing_and_records_nothing(make_env, opened, dc01, as
     with real(env.paths, wait=0):
         assert record.run(env, ["10.10.10.200"]) == 1
     assert waits == [5]
-    assert fails(env) == ["the prompt is in the middle of a command; finish it, then run record again"]
+    assert fails(env) == ["the prompt is in the middle of a command; wait for it to end, then run record again"]
     assert [t.name for t in load_targets(opened)] == ["dc01"]
     assert not (opened.path / "targets" / "10.10.10.200").exists()
     assert asciinema.calls == []
