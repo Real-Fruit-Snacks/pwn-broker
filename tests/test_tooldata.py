@@ -1,3 +1,4 @@
+import errno
 import os
 import sys
 from pathlib import Path
@@ -57,7 +58,7 @@ def write(path: Path, text: str = "x") -> Path:
 
 @pytest.fixture
 def on_linux(monkeypatch):
-    monkeypatch.setattr(tooldata.sys, "platform", "linux")
+    monkeypatch.setattr(tooldata, "_posix", lambda: True)
 
 
 def test_homes_adds_a_different_readable_root_home(home, root_home, on_linux):
@@ -78,7 +79,7 @@ def test_homes_skips_an_unreadable_root_home(home, root_home, monkeypatch, on_li
 
 
 def test_homes_on_windows_is_just_home(home, root_home, monkeypatch):
-    monkeypatch.setattr(tooldata.sys, "platform", "win32")
+    monkeypatch.setattr(tooldata, "_posix", lambda: False)
     assert tooldata.homes(home, root_home=root_home) == [home]
 
 
@@ -303,3 +304,181 @@ def test_delete_refuses_symlinks_and_paths_below_them(tmp_path, home):
         with pytest.raises(ToolError):
             tooldata.delete([bad], [home])
     assert inner.exists()
+
+
+# hardening
+
+BAD_ENTRIES = ["", ".", "..", "a/../../b", "a/./b", "/abs", "a//b", "a\b", "C:/x", "../x"]
+
+
+@pytest.mark.parametrize("entry", BAD_ENTRIES)
+def test_bad_entries_touch_nothing(tmp_path, home, entry):
+    box = make_box(tmp_path)
+    write(home / "a" / "f", "1")
+    sentinel = write(box.path / "tooldata" / "burp" / "home-root" / "s", "s")
+    sentinel2 = write(box.path / "root.txt", "r")
+    outside = write(tmp_path / "b", "b")
+    item = make_item(home={entry: False})
+    assert tooldata.collect(box, item, [home]) == []
+    assert tooldata.to_delete(item, [home], False) == []
+    assert tooldata.kept(make_item(home={entry: True}), [home]) == []
+    assert sentinel.exists() and sentinel2.exists() and outside.exists()
+    assert (home / "a" / "f").exists()
+
+
+@pytest.mark.parametrize("name", ["", "..", "../x", "a/b", "/abs", "A B"])
+def test_bad_tool_name(tmp_path, home, name):
+    box = make_box(tmp_path)
+    write(home / "f")
+    item = make_item(name=name, home={"f": False})
+    with pytest.raises(ToolError):
+        tooldata.collect(box, item, [home])
+    assert tooldata.to_delete(item, [home], False) == []
+    assert tooldata.kept(make_item(name=name, home={"f": True}), [home]) == []
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["box", "home"]
+
+
+@posix_only
+@pytest.mark.parametrize("link", ["tooldata", "tooldata/burp", "tooldata/burp/home", "dest"])
+def test_collect_refuses_a_linked_destination(tmp_path, home, link):
+    box = make_box(tmp_path)
+    write(home / "d" / "f", "new")
+    target = tmp_path / "target"
+    victim = write(target / "d" / "keep.txt", "keep")
+    victim2 = write(target / "burp" / "home" / "d" / "keep.txt", "keep")
+    parts = link.split("/")
+    if link == "dest":
+        (box.path / "tooldata" / "burp" / "home").mkdir(parents=True)
+        (box.path / "tooldata" / "burp" / "home" / "d").symlink_to(target / "d")
+    else:
+        if len(parts) > 1:
+            (box.path / Path(*parts[:-1])).mkdir(parents=True)
+        (box.path / Path(*parts)).symlink_to(target, target_is_directory=True)
+    with pytest.raises(ToolError):
+        tooldata.collect(box, make_item(home={"d": False}), [home])
+    assert victim.read_text() == "keep" and victim2.read_text() == "keep"
+    assert not (target / "d" / "f").exists()
+
+
+def test_enospc_stops_collect_and_leaves_no_partial_file(tmp_path, home, monkeypatch):
+    box = make_box(tmp_path)
+    write(home / "a", "a")
+    write(home / "b", "b")
+
+    def full(src, dst, **kw):
+        Path(dst).write_text("par")
+        raise OSError(errno.ENOSPC, "no space")
+
+    monkeypatch.setattr(tooldata.shutil, "copy2", full)
+    with pytest.raises(ToolError):
+        tooldata.collect(box, make_item(home={"a": False, "b": False}), [home])
+    base = box.path / "tooldata" / "burp" / "home"
+    assert not (base / "a").exists() and not (base / "b").exists()
+
+
+def test_other_oserror_removes_partial_file_and_does_not_report_it(tmp_path, home, monkeypatch):
+    box = make_box(tmp_path)
+    write(home / "a", "a")
+    write(home / "b", "b")
+    real = tooldata.shutil.copy2
+
+    def flaky(src, dst, **kw):
+        if Path(src).name == "a":
+            Path(dst).write_text("par")
+            raise OSError(errno.EIO, "io")
+        return real(src, dst, **kw)
+
+    monkeypatch.setattr(tooldata.shutil, "copy2", flaky)
+    copied = tooldata.collect(box, make_item(home={"a": False, "b": False}), [home])
+    assert copied == ["tooldata/burp/home/b"]
+    assert not (box.path / "tooldata" / "burp" / "home" / "a").exists()
+
+
+def test_unlistable_folder_is_not_created_or_reported(tmp_path, home, monkeypatch):
+    box = make_box(tmp_path)
+    write(home / "d" / "f", "x")
+    real = os.scandir
+
+    def deny(path):
+        if Path(path).name == "d":
+            raise PermissionError("denied")
+        return real(path)
+
+    monkeypatch.setattr(tooldata.os, "scandir", deny)
+    assert tooldata.collect(box, make_item(home={"d": False}), [home]) == []
+    assert not (box.path / "tooldata" / "burp" / "home" / "d").exists()
+
+
+def test_unlistable_subfolder_is_not_created(tmp_path, home, monkeypatch):
+    box = make_box(tmp_path)
+    write(home / "d" / "sub" / "f", "x")
+    write(home / "d" / "ok", "y")
+    real = os.scandir
+
+    def deny(path):
+        if Path(path).name == "sub":
+            raise PermissionError("denied")
+        return real(path)
+
+    monkeypatch.setattr(tooldata.os, "scandir", deny)
+    assert tooldata.collect(box, make_item(home={"d": False}), [home]) == ["tooldata/burp/home/d"]
+    base = box.path / "tooldata" / "burp" / "home" / "d"
+    assert (base / "ok").exists() and not (base / "sub").exists()
+
+
+def test_depth_limit(tmp_path, home, monkeypatch):
+    box = make_box(tmp_path)
+    write(home / "d" / "a" / "b" / "c" / "f", "x")
+    monkeypatch.setattr(tooldata, "_MAX_DEPTH", 2)
+    with pytest.raises(ToolError):
+        tooldata.collect(box, make_item(home={"d": False}), [home])
+    monkeypatch.setattr(tooldata, "_MAX_DEPTH", 3)
+    assert tooldata.collect(box, make_item(home={"d": False}), [home])
+
+
+def test_nested_homes_are_dropped(tmp_path, home, on_linux):
+    inner = home / "inner"
+    inner.mkdir()
+    assert tooldata.homes(home, root_home=inner) == [home]
+    assert tooldata.homes(inner, root_home=home) == [inner]
+
+
+def test_delete_rechecks_before_each_removal(tmp_path, home, monkeypatch):
+    first = write(home / "one")
+    second = write(home / "two")
+    real = tooldata._inside
+    calls = []
+
+    def flaky(path, folder):
+        calls.append(path)
+        if len(calls) > 3:  # passes both first-loop checks and the first recheck
+            return False
+        return real(path, folder)
+
+    monkeypatch.setattr(tooldata, "_inside", flaky)
+    with pytest.raises(ToolError):
+        tooldata.delete([first, second], [home])
+    assert not first.exists()
+    assert second.exists()
+
+
+def test_delete_oserror_becomes_toolerror(home, monkeypatch):
+    f = write(home / "f")
+
+    def boom(self, *a, **k):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "unlink", boom)
+    with pytest.raises(ToolError, match="f"):
+        tooldata.delete([f], [home])
+
+
+@posix_only
+def test_rmtree_removes_a_link_inside_a_folder_not_its_target(tmp_path, home):
+    outside = write(tmp_path / "outside" / "keep.txt", "keep")
+    d = home / "d"
+    d.mkdir()
+    (d / "link").symlink_to(outside.parent, target_is_directory=True)
+    tooldata.delete([d], [home])
+    assert not d.exists()
+    assert outside.read_text() == "keep"
