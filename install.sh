@@ -46,6 +46,8 @@ add_path_line() {
             printf '\n' >>"$rc"
         fi
     fi
+    # $PATH is written as it stands, for the shell that reads the file to expand
+    # shellcheck disable=SC2016
     printf 'export PATH="%s/bin:$PATH"  # pwn-broker\n' "$OPT" >>"$rc"
     ok "PATH line added to $rc"
 }
