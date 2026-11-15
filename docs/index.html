@@ -75,7 +75,7 @@ sh install.sh --from .">Copy</button></div>
             <div class="term">
                 <div class="bar" aria-hidden="true"><i></i><i></i><i></i><span>zsh</span></div>
 <pre class="screen" id="screen" data-type="view" tabindex="0" aria-label="A pwn-broker session"><code><span class="ln"><span class="p">$</span> <span class="t">pwn-broker new</span></span>
-<span class="ln s">ok    6 checks passed</span>
+<span class="ln s">ok    9 checks passed</span>
 <span class="ln"><span class="q">box name     &gt; </span>forest</span>
 <span class="ln"><span class="q">platform     [htb] &gt; </span></span>
 <span class="ln"><span class="q">date         [2026-11-14] &gt; </span></span>
@@ -88,6 +88,10 @@ sh install.sh --from .">Copy</button></div>
 <span class="ln"><span class="q">name         [forest.htb.local] &gt; </span>dc01</span>
 <span class="ln s">ok    target dc01 created</span>
 <span class="ln"><span class="q">add another? [y/N] &gt; </span></span>
+<span class="ln"><span class="q">add dc01's hostnames to /etc/hosts? [Y/n] &gt; </span></span>
+<span class="ln s">ok    /etc/hosts updated</span>
+<span class="ln o">    10.10.10.161 forest.htb.local</span>
+<span class="ln s">ok    10.10.10.161 answered in 43 ms</span>
 <span class="ln s">ok    box forest created</span>
 <span class="ln"><span class="p">forest/dc01 &gt;</span> <span class="t">cred add</span></span>
 <span class="ln"><span class="q">username     &gt; </span>svc-alfresco</span>
@@ -103,14 +107,16 @@ sh install.sh --from .">Copy</button></div>
 <span class="ln o">targets   1</span>
 <span class="ln o">files     14</span>
 <span class="ln o">archive   /home/kali/pwn-broker/wrapped/2026-11-14_htb_forest.finished.tar.gz</span>
+<span class="ln o">hosts     1 line to remove from /etc/hosts</span>
 <span class="ln"><span class="q">finish this box? [y/N] &gt; </span>y</span>
 <span class="ln s">ok    archive /home/kali/pwn-broker/wrapped/2026-11-14_htb_forest.finished.tar.gz</span>
+<span class="ln s">ok    removed 1 line from /etc/hosts</span>
 <span class="ln"><span class="q">remove working folder? [y/N] &gt; </span>y</span>
 <span class="ln s">ok    removed /home/kali/pwn-broker/active/2026-11-14_htb_forest</span>
 <span class="ln end"><span class="p">$</span> <span class="cursor"></span></span></code></pre>
             </div>
             <figcaption id="session-cap">
-                <span class="cap-note">One box from start to finish. The lines are the app's own output from a scripted run of its code, with the paths a user called kali would see. The note window opens beside it.</span>
+                <span class="cap-note">One box from start to finish. The lines are the app's own output from a scripted run of its code, as root with a VPN up, with the paths a user called kali would see; the launch checks' look-ups, the tunnel and the ping's answer were stand-ins, and so was the terminal that opens the note. The note window opens beside it.</span>
                 <button class="replay" type="button" data-replay="screen" hidden>Replay</button>
             </figcaption>
         </figure>
@@ -147,11 +153,11 @@ sh install.sh --from .">Copy</button></div>
             </div>
             <div class="block">
                 <h3>Recording a window</h3>
-                <p><code>record [target]</code>, typed in any terminal while a box is open, records that window under a pinned asciinema 3.2.1 into the target's <code>recordings/</code> folder, with <code>[rec dc01]</code> in front of the zsh or bash prompt. Beside each <code>.cast</code> the app writes a <code>.txt</code> with the time on every line, for grep. <code>replay</code> lists and plays them. Keystrokes are not recorded, but a password typed on a command line is.</p>
+                <p><code>record [target]</code>, typed in any terminal while a box is open, records that window under a pinned asciinema 3.2.1 into the target's <code>recordings/</code> folder, with <code>[rec dc01]</code> in front of the zsh or bash prompt. Beside each <code>.cast</code> the app writes a <code>.txt</code> with the time on every line of text, for grep. <code>replay</code> lists and plays them. Keystrokes are not recorded, but a password typed on a command line is.</p>
             </div>
             <div class="block">
                 <h3>/etc/hosts and the VPN</h3>
-                <p>A target with an IP and a hostname can have one line in <code>/etc/hosts</code>, marked with the box ID; <code>host add</code> adds names to it and <code>finish</code> takes it out. Lines that are not the app's are never changed. <code>vpn start</code> copies a <code>.ovpn</code> file into the box and starts OpenVPN in the background; the file is never archived, and <code>vpn stop</code> stops only the process the app started. Each new target is pinged once.</p>
+                <p>A target with an IP and a hostname can have one line in <code>/etc/hosts</code>, marked with the box ID; <code>host add</code> adds names to it and <code>finish</code> takes it out. Lines that are not the app's are never changed. <code>vpn start</code> copies a <code>.ovpn</code> file into the box and starts OpenVPN in the background; the file is never archived, and <code>vpn stop</code> stops only the process the app started. Each new target with an IP is pinged once.</p>
             </div>
         </div>
     </div>
@@ -213,13 +219,14 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
                 <li><b>Not tested: the installer's download.</b> No release exists, so fetching the wheel and checking its SHA-256 has not run.</li>
                 <li><b>Not tested: the note window and the prompt on a real terminal.</b></li>
                 <li><b>Not tested: <code>record</code>, <code>replay</code> and the <code>[rec]</code> prefix on Kali,</b> under Kali's own zsh settings.</li>
+                <li><b>Not tested: <code>replay</code> playing a recording with the real asciinema, anywhere.</b> CI only records.</li>
                 <li><b>Not tested: <code>vpn start</code> and <code>vpn stop</code> against a real OpenVPN.</b> No test starts a VPN.</li>
                 <li><b>Not tested: writing a real <code>/etc/hosts</code>, and the ping.</b> The tests use a file in a temporary folder and a stand-in for <code>ping</code>.</li>
             </ul>
             <ul aria-label="Tested">
-                <li><b>The unit tests, on Windows 11 with Python 3.13:</b> 2077 passed, 54 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, inodes, <code>/proc</code>, signals, the installer, virtual environments and launchers, the recorded shell's startup files) and the two real recordings, which run only in CI.</li>
-                <li><b>The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13:</b> on Linux they include real tool installs into a virtual environment and the launchers. No Linux count is given here, because none has been recorded for this version.</li>
-                <li><b>The pinned asciinema, in CI on Ubuntu 24.04:</b> the app's own download code fetches it and checks it against its pin, and it reports version 3.2.1. <code>record</code> then records a real bash session and a real zsh session through a pseudo-terminal. A run of the bash session showed that asciinema writes the recording to disk as it happens. The zsh session is checked in the same job.</li>
+                <li><b>The unit tests, on Windows 11 with Python 3.13:</b> 2077 passed, 54 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, inodes, <code>/proc</code>, signals, the installer, virtual environments and launchers, the recorded shell's startup files) and the three tests of the real asciinema (the zsh session, the bash session and its version), which run only in CI's <code>recording</code> job.</li>
+                <li><b>The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13:</b> on Linux they include real tool installs into a virtual environment and the launchers. On Python 3.13, and again as root: 2123 passed, 8 skipped, with warnings treated as errors; 3.11 and 3.12 also pass.</li>
+                <li><b>The pinned asciinema, in CI on Ubuntu 24.04:</b> the app's own download code fetches it and checks it against its pin, and it reports version 3.2.1. <code>record</code> then records a real bash session and a real zsh session through a pseudo-terminal. All three tests pass: both sessions are recorded, and both show that asciinema writes the recording to disk as it happens.</li>
                 <li><b>The six packages, in <code>pwn-shop</code>'s CI:</b> it built each on Ubuntu 24.04 and installed it through this app's own code under Python 3.12 and 3.13, then started each command once.</li>
                 <li><b><code>install.sh</code>, run twice from a checkout on Ubuntu 24.04 in CI:</b> the first run builds the environment, installs the package and writes the launcher and the PATH line; the second reuses the environment and adds no second PATH line.</li>
                 <li><b>The vimrc, run by Vim 9.2 in headless mode on a note the app wrote:</b> folds, fold text, <kbd>F8</kbd>, colours, settings, and the reload after the app changes the note. Timers and focus events do not fire in that mode, so the tests run the check by hand.</li>
@@ -235,7 +242,7 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
             <li>Nothing in the recording, <code>/etc/hosts</code>, VPN and ping part has been run on Kali yet. The checks are in <code>docs/kali-checks.md</code>.</li>
             <li>A window still recording has no text copy until it closes or the box is exported. A full-screen program appears only in the <code>.cast</code>.</li>
             <li>A password typed on a command line in a recorded window is recorded, and goes into the archive. The <code>[rec]</code> prefix is for zsh and bash only.</li>
-            <li><code>finish</code> refuses while a window is recording for the box.</li>
+            <li><code>finish</code> refuses while a window is recording for the box. <code>quit</code> leaves the box's <code>/etc/hosts</code> lines in place; only <code>finish</code> removes them.</li>
             <li>Only <code>tun</code> interfaces count as a VPN. Only OpenVPN files can be started, one VPN at a time, and an archive holds no copy of the VPN file. A tunnel the app did not start is never stopped by it.</li>
             <li>Lines in <code>/etc/hosts</code> that are not the app's are never changed, so one that names the same host with another address has to be removed by hand.</li>
             <li>The published tool index is private for now, because <code>pwn-shop</code> is. Until it is public, <code>tools_index</code> must point at a folder that holds <code>index.toml</code> and the zips it names, and a folder filled by <code>sh fetch.sh &lt;folder&gt;</code> in a clone of <code>pwn-shop</code> is the way to get one.</li>

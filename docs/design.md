@@ -540,7 +540,7 @@ ok  recording saved, 14 min
 - While recording, the shell's prompt starts with `[rec <target>]`. This is done for zsh and bash, by starting the shell with a small startup file of the app's that loads my own and then adds the prefix. Any other shell records without the prefix.
 - A marker in `/opt/pwn-broker/run/recordings/` says which windows are recording: one file per window, holding the process start time, the target and the file. A marker whose process is gone is ignored and cleared, as for tools.
 - `record` runs only as the user who installed the app, the same rule as the prompt (section 6.2). Run through `sudo` by a normal user, it refuses and says to run `record` first and `sudo` inside it. Otherwise root would own the note and the new target's folder, and the prompt could no longer write them.
-- Read from asciinema's source, each event is written to the file as it happens. CI proves that before anything is built on it. If it turned out to hold output back, a killed window would lose what was held and an export would hold slightly less. Nothing else here would change.
+- Read from asciinema's source, each event is written to the file as it happens. CI has shown it: the `recording` job records a real zsh session and a real bash session through a pseudo-terminal, and in both the output is in the file while the window is still recording. Had it held output back, a killed window would lose what was held and an export would hold slightly less. Nothing else here would change.
 - If `asciinema` is missing or does not match its pinned checksum, `record` says to run `check` in the prompt, which offers to download it, and starts nothing.
 - If `asciinema` ends with an error, `record` says so with its status, and still writes the text copy from whatever is on disk.
 - A window that is closed or killed leaves its `.cast` as far as it was written. Its text copy is written later (section 7.4).
@@ -1050,7 +1050,7 @@ Not undone: the PATH line and the download cache. Those belong to the app, not t
 
 ## 10. To verify on Kali
 
-These could not be checked while designing. Each was meant to be confirmed before the part that depends on it was built. The recording and Kali parts were built first, against CI on Ubuntu, so every phase 2 line below is still open; the steps are in `docs/kali-checks.md`.
+These could not be checked while designing. Each was meant to be confirmed before the part that depends on it was built. None of them has been confirmed on Kali yet, phase 1's included; the parts were built and tested on Windows and on Ubuntu in CI. Of the pinned asciinema, CI on Ubuntu has shown that it writes to disk as it records; whether it runs on Kali is still open. The steps for every line are in `docs/kali-checks.md`.
 
 - The terminal reports focus changes to vim, so the note can save on leaving and reload on return. Fallback: a short reload timer.
 - `x-terminal-emulator` exists and accepts a command to run.

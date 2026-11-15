@@ -82,6 +82,19 @@ jobs:
         run: |
           test -f "$PWN_BROKER_REAL_ASCIINEMA"
           python -m pytest -q -W error tests/test_record_real.py
+      - name: The installer's asciinema download
+        # the installer job passes --no-asciinema; this is the one run of the installer's own download
+        run: |
+          work="$RUNNER_TEMP/installer"
+          export PWN_BROKER_OPT="$work/opt"
+          export HOME="$work/home"
+          mkdir -p "$HOME"
+          sh install.sh --from .
+          test -x "$PWN_BROKER_OPT/app/bin/asciinema"
+          "$PWN_BROKER_OPT/app/bin/asciinema" --version | tee "$work/asciinema-version.txt"
+          grep -qF "3.2.1" "$work/asciinema-version.txt"
+          "$PWN_BROKER_OPT/bin/record" --help | tee "$work/record-help.txt"
+          grep -qxF "usage: record [target]" "$work/record-help.txt"
 
   installer:
     # install.sh: syntax under sh and dash, shellcheck, then a real install from this checkout

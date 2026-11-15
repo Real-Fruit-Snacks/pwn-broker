@@ -7,7 +7,7 @@ Keeps a box's targets, notes, creds and tools in order
   <img alt="A pwn-broker session beside the box's folder. pwn-broker new creates target dc01 and box forest, and the folder 2026-11-14_htb_forest appears with box.toml, notes.md, creds.toml, lists/ and targets/dc01/; cred add at the forest/dc01 prompt saves a credential and svc-alfresco and s3rvice appear in the lists; finish writes 2026-11-14_htb_forest.finished.tar.gz to wrapped/" src="docs/assets/panel-light.svg" width="100%">
 </picture>
 
-<sub>A real session, without the questions each command asks. On the right, the box's folder as each step leaves it, with only the lists the credential fills; finish keeps the folder unless told to remove it.</sub>
+<sub>Some of the lines of a real session: each command and the `ok` lines that go with the folder beside it. The launch checks, the questions, and the `/etc/hosts` and ping lines are left out. On the right, the box's folder as each step leaves it, with only the lists the credential fills; finish keeps the folder unless told to remove it.</sub>
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Real-Fruit-Snacks/pwn-broker/main/install.sh | sh
@@ -31,7 +31,7 @@ Run the installer as the user who will use pwn-broker, not with `sudo`; it asks 
 
 Set `PWN_BROKER_OPT` to install somewhere other than `/opt/pwn-broker`. Without `--from`, the installer downloads the wheel from the latest GitHub release and checks its SHA-256 against `SHA256SUMS.txt` before installing anything. That catches a corrupted download; it does not prove who published the release.
 
-The installer also downloads asciinema 3.2.1, the static x86_64 Linux build from asciinema's own GitHub release, for `record` and `replay`. It checks the size and the SHA-256 pinned in the app, and puts it in `/opt/pwn-broker/app/bin/`, which is not on PATH, so Kali's own `asciinema`, if there is one, is untouched. A copy already there with the right checksum is not downloaded again. If the download fails or does not match, nothing is kept, the installer prints a `warn` line and carries on, and everything but `record` and `replay` works; `check` in the prompt offers to download it again. asciinema is GPL-3.0-or-later and is not shipped in this repository.
+The installer also downloads asciinema 3.2.1, the static x86_64 Linux build from asciinema's own GitHub release, for `record` and `replay`. It checks the size and the SHA-256 pinned in the app, and puts it in `/opt/pwn-broker/app/bin/`, which is not on PATH, so Kali's own `asciinema`, if there is one, is untouched. A copy already there with the right checksum is not downloaded again. If the download fails or does not match, nothing is kept, the installer prints a `warn` line and carries on, and everything but `record` and `replay` works; `check` in the prompt offers to download it again. Without asciinema, `--no-asciinema` included, every launch prints the `asciinema` `warn` line and asks `fix it now? [Y/n]`, and Enter downloads it. Answer `n` to keep it off the machine. asciinema is GPL-3.0-or-later and is not shipped in this repository.
 
 ## Context
 
@@ -169,7 +169,7 @@ cast     2026-11-14_1432.cast
 00:01:10  $ evil-winrm -i 10.10.10.161 -u svc-alfresco
 ```
 
-Every line starts with the time its last character was drawn. The app replays the `.cast` through a terminal model (`pyte`) at the recorded size: colours and control sequences are dropped, a line redrawn in place appears once as it last stood, a wrapped line is joined back into one, and a full-screen program (vim, less, a menu) is one line saying when it ran. The text is written when the window closes. `export`, `finish` and `replay` write it for any recording whose text is missing or older than its `.cast`, so a window that was killed still gets one. A `.cast` that cannot be read gets a `warn` line naming it and no text.
+Every line of text starts with the time its last character was drawn; an empty line and a `---- <date> ----` line have no time. The app replays the `.cast` through a terminal model (`pyte`) at the recorded size: colours and control sequences are dropped, a line redrawn in place appears once as it last stood, a wrapped line is joined back into one, and a full-screen program (vim, less, a menu) is one line saying when it ran. The text is written when the window closes. `export`, `finish` and `replay` write it for any recording whose text is missing or older than its `.cast`, so a window that was killed still gets one. A `.cast` that cannot be read gets a `warn` line naming it and no text.
 
 `replay` lists the current target's recordings, or a named target's, oldest first, with when each started, its length and size, or `recording now`. `replay <n>` (or `replay <target> <n>`) plays one in the prompt window with the pinned asciinema, idle gaps cut to two seconds; Ctrl-C stops it and returns to the prompt. A recording still being recorded cannot be played until its window exits.
 
@@ -199,7 +199,7 @@ ok    /etc/hosts updated
 
 ### VPN
 
-The `vpn` launch check prints a `warn` line when no interface named `tun<n>` has an IPv4 address, and never stops the launch. With several, the lowest-numbered one is used. The status bar shows `vpn 10.10.14.7` or `no vpn`, `status` shows the same, and `{lhost}` in `tool info` examples is filled from it.
+The `vpn` launch check prints a `warn` line when no interface named `tun<n>` has an IPv4 address, and never stops the launch. With several, the lowest-numbered one is used. The status bar shows `vpn 10.10.14.7` or `no vpn`; `status` has a `vpn` line that reads `10.10.14.7 on tun0` or `not up`; and `{lhost}` in `tool info` examples is filled from it.
 
 ```
 forest > vpn start
@@ -252,9 +252,9 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 
 ## Tested on
 
-- The unit tests, on Windows 11 with Python 3.13: 2077 passed, 54 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, inodes, `/proc`, signals, the installer, virtual environments and launchers, the recorded shell's startup files) and the two real recordings, which run only in CI.
-- The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13, and again as root on 3.13 (the `test-root` job). On Linux they include real tool installs into a virtual environment and the launchers. The `/etc/hosts` code is tested there against a file in a temporary folder, as root and as a normal user, including that the lines that are not the app's survive. No Linux count is given here, because none has been recorded for this version.
-- The pinned asciinema, in CI's `recording` job on Ubuntu 24.04: the app's own download code fetches it and checks it against its pin, and it reports version 3.2.1. `record` then records a real bash session and a real zsh session through a pseudo-terminal, and the test checks the `[rec dc01]` prefix, the recording marker, the `.cast` header and the text copy. A run of the bash session showed that asciinema writes the recording to disk as it happens, not at the end. The zsh session is checked in the same job.
+- The unit tests, on Windows 11 with Python 3.13: 2077 passed, 54 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, inodes, `/proc`, signals, the installer, virtual environments and launchers, the recorded shell's startup files) and the three tests of the real asciinema (the zsh session, the bash session and its version), which run only in CI's `recording` job.
+- The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13, and again as root on 3.13 (the `test-root` job). On Linux they include real tool installs into a virtual environment and the launchers. The `/etc/hosts` code is tested there against a file in a temporary folder, as root and as a normal user, including that the lines that are not the app's survive. On Python 3.13, and again as root: 2123 passed, 8 skipped, with warnings treated as errors; 3.11 and 3.12 also pass.
+- The pinned asciinema, in CI's `recording` job on Ubuntu 24.04: the app's own download code fetches it and checks it against its pin, and it reports version 3.2.1. `record` then records a real bash session and a real zsh session through a pseudo-terminal, and the test checks the `[rec dc01]` prefix, the recording marker, the `.cast` header and the text copy. All three tests pass: both sessions are recorded, and both show that asciinema writes the recording to disk as it happens, not at the end.
 - The six packages, in `pwn-shop`'s CI: it built each on Ubuntu 24.04 and installed it through this app's own code under Python 3.12 and 3.13, then started each command once.
 - `install.sh`, run twice from a checkout on Ubuntu 24.04 in CI: the first run builds the environment, installs the package and writes the launcher and the PATH line; the second reuses the environment and adds no second PATH line.
 - The vimrc, run by Vim 9.2 in headless mode on a note the app wrote: folds, fold text, `F8`, colours, settings, and the reload after the app changes the note. Timers and focus events do not fire in that mode, so the tests run the check by hand.
@@ -263,6 +263,7 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 - *Not* tested: the installer's download. No release exists, so fetching the wheel and checking its SHA-256 has not run.
 - *Not* tested: the note window and the prompt on a real terminal.
 - *Not* tested: `record`, `replay` and the `[rec]` prefix on Kali, under Kali's own zsh settings.
+- *Not* tested: `replay` playing a recording with the real asciinema, anywhere. CI only records.
 - *Not* tested: `vpn start` and `vpn stop` against a real OpenVPN. No test starts a VPN.
 - *Not* tested: writing a real `/etc/hosts`, as root or through `sudo`, and the ping. The tests use a file in a temporary folder and a stand-in for `ping`.
 
@@ -278,6 +279,7 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 - Only OpenVPN files can be started, and the app keeps track of one VPN at a time: `vpn stop` before starting another file.
 - An archive holds no copy of the VPN file, only its name and SHA-256. Keep the `.ovpn` file yourself.
 - A tunnel the app did not start is never stopped by it, at `vpn stop` or at `finish`.
+- `quit` leaves the box's `/etc/hosts` lines in place. Only `finish` removes them; until then the hostnames go on resolving to the box's targets.
 - Lines in `/etc/hosts` that are not the app's are never changed. One that names the same host with another address has to be removed by hand; the `warn` line gives its number and the command to run after.
 - The published tool index is private for now, because `pwn-shop` is. Until it is public, `tools_index` must point at a folder that holds `index.toml` and the zips it names, and a folder filled by `sh fetch.sh <folder>` in a clone of `pwn-shop` is the way to get one.
 - Nothing has been run on Kali yet. The checks to run there are in `docs/kali-checks.md`.
