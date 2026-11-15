@@ -53,7 +53,8 @@ jobs:
   recording:
     # record under the real pinned asciinema: a zsh and a bash session recorded through a
     # pseudo-terminal, their casts written as they record, and their text copies checked.
-    # Only this job fetches asciinema; tests/test_record_real.py skips everywhere else.
+    # This job fetches asciinema itself; tests/test_record_real.py runs here and in the kali job,
+    # and skips in the others.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
