@@ -246,12 +246,22 @@ def _prepare(env: Env) -> int | None:
     if any(r.status == "fail" for r in results):
         return 1
 
-    toolhooks.leftovers(env.paths, console)
+    # another prompt may be half way through an install: its files are not leftovers
+    if not _another_prompt(env):
+        toolhooks.leftovers(env.paths, console)
 
     newer = checks.newer_release_within(env.settings)
     if newer is not None:
         console.warn(f"{newer.name}   {newer.message}")
     return None
+
+
+def _another_prompt(env: Env) -> bool:
+    try:
+        return boxes.open_box_folder(env.paths, alive=boxes.pid_alive) is not None
+    except (BoxError, StoreError, OSError):
+        # start reports the problem; nothing is swept on a guess
+        return True
 
 
 def start(env: Env, argv: list[str]) -> int:

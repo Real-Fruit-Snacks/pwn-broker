@@ -700,6 +700,16 @@ def test_the_toolbar_counts_nothing_while_the_installed_list_cannot_be_read(sess
     assert toolbar_text(session, start).endswith("1 target   00:00")
 
 
+def test_the_index_is_still_listed_while_the_installed_list_cannot_be_read(session, shop):
+    run(session, "tool install kerbrute")
+    session.paths.tools_state.write_text("not toml [", encoding="utf-8")
+    console = run(session, "tool list")
+    _columns, rows = table(console)
+    assert "kerbrute" in [r[0] for r in rows]
+    assert [r[3] for r in rows if r[0] == "kerbrute"] == ["unknown"]
+    assert len(lines(console, "warn")) == 1 and not lines(console, "fail")
+
+
 def test_installing_a_root_tool_names_the_copy_sudo_would_run(session, shop, monkeypatch):
     seen = []
 

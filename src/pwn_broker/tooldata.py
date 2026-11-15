@@ -45,6 +45,9 @@ def _root_state(home: Path, root_home: Path | None) -> str:
     if not _posix():
         return "same"
     other = _root_home() if root_home is None else root_home
+    if not other.is_absolute():
+        # no root account to expand: a relative path must never stand in for root's home
+        return "missing"
     try:
         if _nested(other.resolve(), home.resolve()):
             return "same"

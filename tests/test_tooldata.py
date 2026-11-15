@@ -78,6 +78,13 @@ def test_homes_skips_a_missing_root_home(home, tmp_path, on_linux):
     assert tooldata.homes(home, root_home=tmp_path / "nope") == [home]
 
 
+def test_homes_skips_a_root_home_that_is_not_absolute(home, tmp_path, monkeypatch, on_linux):
+    # with no root account, "~root" comes back unexpanded and would resolve against the cwd
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "~root").mkdir()
+    assert tooldata.homes(home, root_home=Path("~root")) == [home]
+
+
 def test_homes_skips_an_unreadable_root_home(home, root_home, monkeypatch, on_linux):
     monkeypatch.setattr(tooldata.os, "access", lambda path, mode: False)
     assert tooldata.homes(home, root_home=root_home) == [home]
@@ -519,14 +526,14 @@ def test_bad_tool_name(tmp_path, home, name):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["box", "home"]
 
 
-@posix_only
-@pytest.mark.parametrize("link", ["tooldata", "tooldata/burp", "tooldata/burp/home", "dest"])
-def test_collect_refuses_a_linked_destination(tmp_path, home, link):
+def linked_box(tmp_path, home, link):
     box = make_box(tmp_path)
     write(home / "d" / "f", "new")
     target = tmp_path / "target"
-    victim = write(target / "d" / "keep.txt", "keep")
-    victim2 = write(target / "burp" / "home" / "d" / "keep.txt", "keep")
+    victims = [
+        write(target / "d" / "keep.txt", "keep"),
+        write(target / "burp" / "home" / "d" / "keep.txt", "keep"),
+    ]
     parts = link.split("/")
     if link == "dest":
         (box.path / "tooldata" / "burp" / "home").mkdir(parents=True)
@@ -535,9 +542,42 @@ def test_collect_refuses_a_linked_destination(tmp_path, home, link):
         if len(parts) > 1:
             (box.path / Path(*parts[:-1])).mkdir(parents=True)
         (box.path / Path(*parts)).symlink_to(target, target_is_directory=True)
+    return box, target, victims
+
+
+@posix_only
+@pytest.mark.parametrize("link", ["tooldata", "tooldata/burp"])
+def test_collect_refuses_a_linked_destination(tmp_path, home, link):
+    box, target, victims = linked_box(tmp_path, home, link)
     with pytest.raises(ToolError):
         collect(box, make_item(home={"d": False}), [home])
-    assert victim.read_text() == "keep" and victim2.read_text() == "keep"
+    assert [v.read_text() for v in victims] == ["keep", "keep"]
+    assert not (target / "d" / "f").exists()
+
+
+@posix_only
+@pytest.mark.parametrize("link", ["tooldata/burp/home", "dest"])
+def test_collect_refuses_a_link_in_this_installs_copy(tmp_path, home, link):
+    box, target, victims = linked_box(tmp_path, home, link)
+    # the stamp says the copy in the box is this install's, so it would be written into
+    write(box.path / "tooldata" / "burp" / tooldata.STAMP, NOW.isoformat())
+    with pytest.raises(ToolError):
+        collect(box, make_item(home={"d": False}), [home])
+    assert [v.read_text() for v in victims] == ["keep", "keep"]
+    assert not (target / "d" / "f").exists()
+
+
+@posix_only
+@pytest.mark.parametrize("link", ["tooldata/burp/home", "dest"])
+def test_collect_moves_a_linked_earlier_copy_aside_without_following_it(tmp_path, home, link):
+    box, target, victims = linked_box(tmp_path, home, link)
+    # no stamp: what is in the box is an earlier install's, kept under a new name
+    assert collect(box, make_item(home={"d": False}), [home]) == ["tooldata/burp/home/d"]
+    tool_root = box.path / "tooldata" / "burp"
+    assert os.path.lexists(tool_root / "home-1")
+    assert not (tool_root / "home").is_symlink() and not (tool_root / "home" / "d").is_symlink()
+    assert (tool_root / "home" / "d" / "f").read_text() == "new"
+    assert [v.read_text() for v in victims] == ["keep", "keep"]
     assert not (target / "d" / "f").exists()
 
 

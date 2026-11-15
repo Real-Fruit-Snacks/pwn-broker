@@ -560,6 +560,19 @@ def test_start_offers_to_remove_tools_left_by_finished_boxes(env, quiet, box, ra
     assert seen == [(env.paths, env.console)]
 
 
+def test_start_looks_for_no_leftovers_while_another_prompt_is_open(
+    env, quiet, box, ran, monkeypatch
+):
+    from pwn_broker import toolhooks
+
+    seen = []
+    monkeypatch.setattr(toolhooks, "leftovers", lambda paths, console: seen.append(paths))
+    monkeypatch.setattr(boxes, "pid_alive", lambda pid: pid == 999)
+    boxes.acquire_open(env.paths, box, pid=999, alive=lambda pid: False)
+    assert start(env, ["new"]) == 1
+    assert seen == [] and ran == []
+
+
 def test_main_registers_the_tool_hooks(tmp_path, monkeypatch):
     from pwn_broker import toolhooks
 

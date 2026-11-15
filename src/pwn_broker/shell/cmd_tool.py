@@ -53,7 +53,12 @@ def _have(session: Session) -> set[str]:
 
 def _status(session: Session) -> dict[str, str]:
     # installed only when the machine has it for this box, not merely because the box records it
-    here = toolstate.present(session.paths, session.box)
+    try:
+        here = toolstate.present(session.paths, session.box)
+    except ToolError as exc:
+        # the index can still be shown when the installed list cannot be read
+        session.console.warn(str(exc))
+        return {t.name: "unknown" for t in session.box.tools}
     return {t.name: "installed" if t.name in here else "not installed" for t in session.box.tools}
 
 
