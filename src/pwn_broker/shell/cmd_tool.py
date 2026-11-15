@@ -160,18 +160,22 @@ def _line(session: Session, label: str, text: str) -> None:
 @command("tool info", "show a tool's details, how to run it and its examples")
 def tool_info(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, required=("tool name",))
-    tool = toolindex.find_tool(_index(session), name)
-    build = _latest(tool)
-    _line(session, "name", f"{tool.name} {tool.latest}")
-    _line(session, "description", tool.description)
-    _line(session, "kind", build.kind if build else "")
-    _line(session, "licence", tool.licence)
-    _line(session, "upstream", tool.upstream)
-    _line(session, "versions", ", ".join(build_id(b.version, b.build) for b in tool.builds))
-
-    if tool.name not in _have(session):
-        return
-    item = toolstate.load_installed(session.paths).get(tool.name)
+    index = _index(session)
+    item = toolstate.load_installed(session.paths).get(name) if name in _have(session) else None
+    try:
+        tool = toolindex.find_tool(index, name)
+    except ToolError:
+        if item is None:
+            raise
+        session.console.warn(f"{name} is not in the index")
+    else:
+        build = _latest(tool)
+        _line(session, "name", f"{tool.name} {tool.latest}")
+        _line(session, "description", tool.description)
+        _line(session, "kind", build.kind if build else "")
+        _line(session, "licence", tool.licence)
+        _line(session, "upstream", tool.upstream)
+        _line(session, "versions", ", ".join(build_id(b.version, b.build) for b in tool.builds))
     if item is None:
         return
     paths = session.paths
@@ -185,6 +189,8 @@ def tool_info(session: Session, args: list[str]) -> None:
         _line(session, "upload", f"{(paths.upload / item.name).as_posix()}   {'  '.join(item.uploads)}")
     if item.home:
         _line(session, "home", "  ".join(item.home))
+    if not item.folder:
+        return
     try:
         manifest = read_manifest(Path(item.folder) / MANIFEST)
     except ToolError as exc:
@@ -204,6 +210,7 @@ def tool_install(session: Session, args: list[str]) -> None:
     tool = toolindex.find_tool(_index(session), name)
     build = toolindex.pick_build(tool, version if at else None)
     installed = toolstate.load_installed(session.paths)
+    toolinstall.check_recorded(box, build)
 
     wanted = build_id(build.version, build.build)
     current = installed.get(name)
@@ -217,7 +224,7 @@ def tool_install(session: Session, args: list[str]) -> None:
             console.info(f"{name} {build.version} is already installed for {box.name}")
             return
 
-    unfinished = toolstate.unfinished_boxes(session.paths)
+    unfinished = toolstate.holding_boxes(session.paths, installed)
     unfinished[box.id] = box.name
     sharing = []
     if current is not None and current.home:
@@ -231,7 +238,7 @@ def tool_install(session: Session, args: list[str]) -> None:
         zip_path,
         installed=installed,
         unfinished=unfinished,
-        home=toolhooks._user_home(),
+        home=toolhooks.user_home(),
         console=console,
         now=session.clock(),
         on_path=lambda cmd: _lookup(cmd),

@@ -32,7 +32,7 @@ def registered(monkeypatch):
 def user(tmp_path, monkeypatch):
     home = tmp_path / "user"
     home.mkdir()
-    monkeypatch.setattr(toolhooks, "_user_home", lambda: home)
+    monkeypatch.setattr(toolhooks, "user_home", lambda: home)
     monkeypatch.setattr(toolhooks.tooldata, "homes", lambda h, **k: [h])
     return home
 
@@ -666,3 +666,15 @@ def test_finish_with_an_unreadable_installed_list_stops_before_any_question(tool
 def test_summary_is_empty_when_the_installed_list_is_unreadable(tooled):
     corrupt_installed(tooled)
     assert toolhooks.summary(tooled) == []
+
+
+def test_restore_keeps_a_user_the_listing_could_not_load(tooled, other):
+    item = load_installed(tooled.paths)["kerbrute"]
+    item.users = [other.id, "lost-box"]
+    toolstate.save_installed(tooled.paths, {"kerbrute": item})
+    (tooled.paths.active / "broken").mkdir()
+    (tooled.paths.active / "broken" / "box.toml").write_text("nope [", encoding="utf-8")
+    say(tooled, "y")
+    toolhooks.restore(tooled)
+    users = load_installed(tooled.paths)["kerbrute"].users
+    assert "lost-box" in users and tooled.box.id in users

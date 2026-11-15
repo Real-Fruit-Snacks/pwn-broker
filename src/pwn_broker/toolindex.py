@@ -331,17 +331,44 @@ def load_index(
     return fresh
 
 
+# path -> ((mtime_ns, size), names); completions ask on every key press
+_NAMES: dict[str, tuple[tuple[int, int], list[str]]] = {}
+
+
+def _read_capped(file: Path) -> bytes:
+    with open(file, "rb") as fh:
+        raw = fh.read(MAX_INDEX_BYTES + 1)
+    if len(raw) > MAX_INDEX_BYTES:
+        raise ToolError(f"{file} is larger than {MAX_INDEX_BYTES} bytes")
+    return raw
+
+
 def known_names(paths: AppPaths, settings: Settings) -> list[str]:
     # for completions: only what is already on disk, never a fetch
     where = location(settings)
     try:
         if is_url(where):
-            index = _read_cached(paths, where)
+            _, source = _stamp(paths)
+            if source is not None and source != where:
+                return []
+            file = paths.cache / INDEX_FILE
         else:
-            index = _parse_bytes((Path(where) / INDEX_FILE).read_bytes())
+            file = Path(where) / INDEX_FILE
+        info = file.stat()
+        if info.st_size > MAX_INDEX_BYTES:
+            return []
+        signature = (info.st_mtime_ns, info.st_size)
+        hit = _NAMES.get(str(file))
+        if hit is not None and hit[0] == signature:
+            return list(hit[1])
+        try:
+            names = sorted(t.name for t in _parse_bytes(_read_capped(file)).tools)
+        except (OSError, ToolError):
+            names = []
+        _NAMES[str(file)] = (signature, names)
+        return list(names)
     except Exception:
         return []
-    return sorted(t.name for t in index.tools) if index is not None else []
 
 
 # ---- lookups

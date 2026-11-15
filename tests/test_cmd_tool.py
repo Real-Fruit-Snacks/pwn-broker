@@ -1,4 +1,5 @@
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -24,7 +25,7 @@ def shop(tmp_path, session, monkeypatch):
     folder = tmp_path / "index"
     home = tmp_path / "user"
     home.mkdir()
-    monkeypatch.setattr(toolhooks, "_user_home", lambda: home)
+    monkeypatch.setattr(toolhooks, "user_home", lambda: home)
     monkeypatch.setattr(cmd_tool, "_lookup", lambda command, path=None: None)
     entries = []
     for version in ("1.0.2", "1.0.3"):
@@ -505,3 +506,94 @@ def test_completions_survive_a_failing_lookup(session, monkeypatch):
 
     monkeypatch.setattr("pwn_broker.shell.app.toolindex.known_names", boom)
     assert completions(session, "tool install ") == []
+
+
+# ---- review fixes
+
+
+def break_a_box(session):
+    (session.paths.active / "broken").mkdir()
+    (session.paths.active / "broken" / "box.toml").write_text("nope [", encoding="utf-8")
+
+
+def test_install_keeps_a_user_the_listing_could_not_load(session, shop, other):
+    install_for(other, shop, shop.entries[1], session.paths)
+    installed = toolstate.load_installed(session.paths)
+    installed["kerbrute"].users.append("lost-box")
+    toolstate.save_installed(session.paths, installed)
+    break_a_box(session)
+    run(session, "tool install kerbrute")
+    users = toolstate.load_installed(session.paths)["kerbrute"].users
+    assert "lost-box" in users and session.box.id in users and other.id in users
+
+
+def test_install_of_another_build_stops_before_anything_is_fetched(session, shop, monkeypatch):
+    run(session, "tool install kerbrute@1.0.2")
+
+    def boom(*a, **k):
+        raise AssertionError("fetched")
+
+    monkeypatch.setattr(cmd_tool.toolindex, "fetch_zip", boom)
+    failed = lines(run(session, "tool install kerbrute@1.0.3"), "fail")
+    assert len(failed) == 1 and "tool remove kerbrute" in failed[0]
+
+
+def test_typed_values_are_shown_literally(session, shop):
+    assert "[red]x[/red]" in lines(run(session, "tool install [red]x[/red]"), "fail")[0]
+    assert "[red]" in lines(run(session, "tool install kerbrute@[red]"), "fail")[0]
+    assert lines(run(session, "tool search [red]"), "info") == ["no tools match [red]"]
+    assert "[red]x[/red]" in lines(run(session, "tool info [red]x[/red]"), "fail")[0]
+
+
+def test_info_without_the_installed_manifest_warns_after_the_lines_before_it(session, shop):
+    run(session, "tool install kerbrute")
+    item = toolstate.load_installed(session.paths)["kerbrute"]
+    (Path(item.folder) / "manifest.toml").unlink()
+    console = run(session, "tool info kerbrute")
+    assert len(lines(console, "warn")) == 1
+    assert any(t.startswith("folder") for t in lines(console, "info"))
+    assert not any("userenum" in t for t in lines(console, "info"))
+
+
+def test_info_with_an_empty_installed_folder_skips_the_examples(session, shop):
+    run(session, "tool install kerbrute")
+    installed = toolstate.load_installed(session.paths)
+    installed["kerbrute"].folder = ""
+    toolstate.save_installed(session.paths, installed)
+    console = run(session, "tool info kerbrute")
+    assert lines(console, "warn") == [] and lines(console, "fail") == []
+    assert not any("userenum" in t for t in lines(console, "info"))
+
+
+def test_info_for_an_installed_tool_missing_from_the_index(session, shop):
+    run(session, "tool install kerbrute")
+    toolkit.write_index(shop.folder, shop.entries[2:])
+    console = run(session, "tool info kerbrute")
+    assert lines(console, "warn") == ["kerbrute is not in the index"]
+    shown = "\n".join(lines(console, "info"))
+    assert "run         kerbrute" in shown and "folder" in shown and "userenum" in shown
+    assert lines(console, "fail") == []
+
+
+def test_info_for_a_tool_neither_installed_nor_indexed_is_one_fail_line(session, shop):
+    toolkit.write_index(shop.folder, shop.entries[2:])
+    console = run(session, "tool info kerbrute")
+    assert len(lines(console, "fail")) == 1 and lines(console, "warn") == []
+
+
+def test_cache_clear_leaves_the_index_and_other_files(session, shop):
+    cache = session.paths.cache
+    cache.mkdir(parents=True)
+    for name in ("index.toml", "index.fetched", "notes.txt"):
+        (cache / name).write_text("x")
+    (cache / "a-1.0-1.zip").write_bytes(b"x")
+    (cache / "b-1.0-1.zip.part").write_bytes(b"x")
+    run(session, "tool cache clear", "y")
+    assert sorted(p.name for p in cache.iterdir()) == ["index.fetched", "index.toml", "notes.txt"]
+
+
+def test_refresh_with_the_index_unreachable_is_one_fail_line(session, tmp_path):
+    session.settings = replace(session.settings, tools_index=str(tmp_path / "nowhere"))
+    console = run(session, "tool refresh")
+    assert len(console.lines) == 1 and console.lines[0][0] == "fail"
+    assert str(tmp_path / "nowhere") in console.lines[0][1]

@@ -184,6 +184,16 @@ def _record(box: Box, record: ToolRecord) -> None:
 # ---- install
 
 
+def check_recorded(box: Box, entry: BuildEntry) -> None:
+    wanted = build_id(entry.version, entry.build)
+    for record in box.tools:
+        if record.name == entry.name and build_id(record.version, record.build) != wanted:
+            raise ToolError(
+                f"{box.name} already has {entry.name} {build_id(record.version, record.build)}; "
+                f"run tool remove {entry.name} first"
+            )
+
+
 def install(
     paths: AppPaths,
     box: Box,
@@ -203,13 +213,7 @@ def install(
     if not valid_tool_name(name):
         raise ToolError(f"{name!r} is not a valid tool name")
     wanted = build_id(entry.version, entry.build)
-
-    for record in box.tools:
-        if record.name == name and build_id(record.version, record.build) != wanted:
-            raise ToolError(
-                f"{box.name} already has {name} {build_id(record.version, record.build)}; "
-                f"run tool remove {name} first"
-            )
+    check_recorded(box, entry)
 
     current = installed.get(name)
     if current is not None:

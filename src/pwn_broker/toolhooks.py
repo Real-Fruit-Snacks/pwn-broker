@@ -11,7 +11,7 @@ from pwn_broker.toolpkg import ToolError, build_id
 from pwn_broker.toolstate import Installed, load_installed, unfinished_boxes
 
 
-def _user_home() -> Path:
+def user_home() -> Path:
     return Path.home()
 
 
@@ -28,7 +28,7 @@ def register() -> None:
 
 
 def _homes() -> list[Path]:
-    return tooldata.homes(_user_home())
+    return tooldata.homes(user_home())
 
 
 def _others(item: Installed, box_id: str, unfinished: dict[str, str]) -> bool:
@@ -187,7 +187,7 @@ def _restore(session: Session) -> None:
     except ToolError as exc:
         console.warn(f"the tool index could not be loaded: {exc}")
         return
-    unfinished = unfinished_boxes(session.paths)
+    unfinished = toolstate.holding_boxes(session.paths, installed)
     unfinished[box.id] = box.name
     for record in wanted:
         label = f"{record.name} {record.version}"
@@ -210,7 +210,7 @@ def _restore(session: Session) -> None:
                 zip_path,
                 installed=installed,
                 unfinished=unfinished,
-                home=_user_home(),
+                home=user_home(),
                 console=console,
                 now=session.clock(),
             )

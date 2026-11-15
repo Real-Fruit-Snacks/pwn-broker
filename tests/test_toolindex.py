@@ -757,3 +757,38 @@ def test_known_names_reads_a_folder_index_and_survives_a_bad_one(paths, tmp_path
     assert toolindex.known_names(paths, settings) == ["kerbrute"]
     (folder / "index.toml").write_text("broken = [", encoding="utf-8")
     assert toolindex.known_names(paths, settings) == []
+
+
+def folder_index(tmp_path, *tools):
+    folder = tmp_path / "shop2"
+    folder.mkdir()
+    (folder / "index.toml").write_text(index_text(*tools), encoding="utf-8")
+    return folder, Settings(tools_index=str(folder))
+
+
+def test_known_names_refuses_a_file_over_the_size_cap_without_parsing(paths, tmp_path, monkeypatch):
+    folder, settings = folder_index(tmp_path)
+    monkeypatch.setattr(toolindex, "MAX_INDEX_BYTES", 10)
+    parsed = []
+    monkeypatch.setattr(toolindex, "_parse_bytes", lambda raw: parsed.append(raw))
+    assert toolindex.known_names(paths, settings) == []
+    assert parsed == []
+
+
+def test_known_names_reads_an_unchanged_file_once(paths, tmp_path, monkeypatch):
+    folder, settings = folder_index(tmp_path)
+    reads = []
+    real = toolindex._read_capped
+    monkeypatch.setattr(toolindex, "_read_capped", lambda p: reads.append(p) or real(p))
+    assert toolindex.known_names(paths, settings) == ["kerbrute"]
+    assert toolindex.known_names(paths, settings) == ["kerbrute"]
+    assert len(reads) == 1
+
+
+def test_known_names_reads_a_changed_file_again(paths, tmp_path):
+    folder, settings = folder_index(tmp_path)
+    assert toolindex.known_names(paths, settings) == ["kerbrute"]
+    (folder / "index.toml").write_text(
+        index_text(tool_row(name="kerbrute"), tool_row(name="another-one")), encoding="utf-8"
+    )
+    assert toolindex.known_names(paths, settings) == ["another-one", "kerbrute"]
