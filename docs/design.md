@@ -689,7 +689,7 @@ sha256 = "..."
 - The app keeps a copy in `/opt/pwn-broker/cache/`. It refreshes the copy when it is more than a day old and the source answers within two seconds; otherwise it uses what it has. `tool refresh` fetches it now.
 - With no index and no cached copy, every `tool` command prints one `fail` line that says where it looked and how to set `tools_index`. It never shows an empty list as if there were no tools.
 
-**While `pwn-shop` is private**, its release files cannot be downloaded without signing in, so the folder form is the only route. A folder is filled in one of two ways: `python build.py` in a clone, which builds `dist/`; or `sh fetch.sh <folder>`, which uses a signed-in `gh` to download the published index and zips.
+**While `pwn-shop` is private**, its release files cannot be downloaded without signing in, so the folder form is the only route. A folder is filled in one of two ways: `python build.py build` in a clone, which builds `dist/` (with no subcommand, `build.py` prints its help); or `sh fetch.sh <folder>`, which uses a signed-in `gh` to download the published index and zips.
 
 ### 8.4 Commands
 
@@ -731,7 +731,7 @@ files /opt/pwn-broker/upload/ligolo-ng/   agent  agent.exe
 
 If any step fails, everything that step and the ones before it created is removed and nothing is recorded.
 
-`sudo` is never reconfigured. `sudo` searches its own list of folders, not PATH, so `sudo <tool>` would not find an installed tool; the full path always works, and the app prints it.
+`sudo` is never reconfigured. `sudo` searches its own list of folders, not PATH, so `sudo <tool>` never finds an installed tool: it finds nothing, or Kali's own command of that name. The full path always runs the installed one, and the app prints it. When another copy of one of a root tool's commands is on PATH, install also prints a `warn` line naming the copy a bare `sudo <command>` would run.
 
 No package in the first batch needs a system package, so the manifest has no field for one yet.
 
@@ -739,7 +739,7 @@ No package in the first batch needs a system package, so the manifest has no fie
 
 **One build of a tool is installed on the machine at a time.** Several unfinished boxes may use it. Only one box is open at a time, so "two boxes use a tool" means one of them was left unfinished and the other was opened later. The tool stays installed, and on PATH, until the last of those boxes finishes or removes it.
 
-- `tool remove` takes this box off the tool's users. When no box is left, it deletes the tool's launchers, its upload folder and its folder under `tools/`. It refuses to delete anything outside `/opt/pwn-broker`, whatever a manifest says.
+- `tool remove` takes this box off the tool's users. When no box is left, it deletes the tool's launchers, its upload folder and its folder under `tools/`. It refuses to delete anything outside `/opt/pwn-broker`, whatever a manifest says. When no box is left and the tool writes to the home folder, `tool remove` also does what `finish` does with that data: it lists the paths before asking, copies them into the box, and deletes those copied in full (section 8.7).
 - A launcher notes that its tool is running, in `/opt/pwn-broker/run`. `finish` and `tool remove` stop, as `finish` does for an unsaved note, while one of this box's tools is still running, and name it.
 - `finish` lists on its confirmation screen the box's tools and every path under the home folder it will delete (section 8.7). Before archiving, it copies each tool's data into the box. After the archive is written and verified, it removes the tools, then the home data.
 - If removal fails after the archive is verified, the box stays finished: the archive is good. Each failure is one `fail` line, and the working folder is kept. At the next launch, the app finds tools whose only users are finished or missing boxes and offers to remove them.
@@ -752,10 +752,12 @@ No package in the first batch needs a system package, so the manifest has no fie
 
 - A tool whose data location can be chosen is pointed at the box's `tooldata/<tool>/` folder by its launcher. Its data is in the box from the first run, and belongs to whichever box was open when the tool ran.
 - A launcher finds the open box through a short file the app keeps in `/opt/pwn-broker/run`: the box's folder and the prompt's process ID. If that process is no longer running, or no box is open, the tool runs with its own defaults.
-- For a tool that cannot be redirected, the manifest lists the paths under the home folder it writes to. At install, the app records which of them already existed. At `finish` and `export`, it copies those that did not exist before into `tooldata/<tool>/home/`. At `finish`, after the archive is verified, it deletes them.
+- For a tool that cannot be redirected, the manifest lists the paths under the home folder it writes to. At install, the app records which of them already existed. At `finish` and `export`, it copies those that did not exist before into `tooldata/<tool>/home/`. At `finish`, after the archive is verified, it deletes them. A `tool remove` by the last box that uses the tool copies and deletes them the same way.
+- A path is deleted only if this run copied it into the box in full. A file or folder that could not be read or copied (one left by a `sudo` run, say) leaves the path in place, with a `warn` line naming it. A partial copy never replaces a full one already in the box.
 - A path that existed before the tool was installed is never deleted. `finish` prints a `warn` line naming it.
+- Each tool's copy in the box carries a stamp, `tooldata/<tool>/.install`, holding when the box's record of the tool was installed. A copy made by an earlier install (before an `export` and `import`, or before a box was reopened) is kept as `home-<n>` beside the new `home/`; collecting never deletes tool data already in the box.
 - When another unfinished box also uses the tool, its home data may hold both boxes' results. Installing the tool for the second box says so. `finish` on either box copies the data and leaves it in place for the other.
-- Run as a normal user, the app checks both that user's home and root's, since a tool run with `sudo` may write to either.
+- Run as a normal user, the app checks both that user's home and root's, since a tool run with `sudo` may write to either. At install it records, for each home separately, which paths already existed; root's home is only checked when it is a different folder from the user's and can be read, and a path with no answer for a home counts as having existed there (copied, never deleted). Copies from root's home go to `tooldata/<tool>/home-root/`. At `finish`, and at a `tool remove` by the last box, when root's home is a different folder that cannot be read (as for a normal user on Kali, where `/root` is 0700), a `warn` line says that root's home could not be checked for that tool's data.
 
 ### 8.8 First packages
 
@@ -771,6 +773,7 @@ No package in the first batch needs a system package, so the manifest has no fie
 - Kali already packages `pspy`, `certipy-ad`, `ligolo-ng` and `peass`. Installing mine never changes Kali's; mine wins on PATH while it is installed.
 - `kerbrute` publishes no checksums. Its recipe pins the SHA-256 of the file as first downloaded.
 - Upstream's proxy binary is called `proxy`. On PATH it is `ligolo-proxy`.
+- Kali's own `ligolo-ng` package installs a command also named `ligolo-proxy`. While mine is installed, a bare `ligolo-proxy` runs mine, because the app's `bin` is first on PATH. A bare `sudo ligolo-proxy` runs Kali's, because `sudo` searches its own folders. Mine runs as root only as `sudo /opt/pwn-broker/bin/ligolo-proxy`.
 - `targetedKerberoast` lists its dependencies without versions. The package pins them.
 - PEASS-ng publishes several releases a day. The recipe pins one; taking a later one from the same day is a new build.
 - PEASS-ng's licence has clauses of its author's own. Read it before this repository is made public.
@@ -816,7 +819,7 @@ These could not be checked while designing. Each must be confirmed before the pa
 - `python3 -m venv` works on a fresh Kali, and its Python is 3.12 or 3.13, the versions the bundled wheels cover.
 - Which `asciinema` version to pin, that it writes to disk as it records, and whether it can produce the plain-text copy itself.
 - Where the recording indicator can be shown reliably: window title or shell prompt.
-- Whether Kali's own `ligolo-ng` package installs a command named `ligolo-proxy`, and so which one runs once mine is installed.
+- Kali's own `ligolo-ng` package installs a command named `ligolo-proxy`. Confirm it, and that with mine installed a bare `ligolo-proxy` runs mine and a bare `sudo ligolo-proxy` runs Kali's.
 - What `ligolo-proxy` writes, and where, on its first run, so its package lists the right data paths.
 - PEASS-ng's licence, read in full, before `pwn-shop` is made public.
 
@@ -864,7 +867,7 @@ For the tools phase:
 - A removal that fails after the archive is verified leaves the box finished, and the next launch offers to remove what is left.
 - Home-folder data is copied into the box and not put back on import.
 - A tool with no version numbers of its own takes its upstream date as its version: `targetedkerberoast` 2024.12.16, `peass-ng` 2026.11.14.
-- ligolo-ng's proxy is installed as the command `ligolo-proxy`.
+- ligolo-ng's proxy is installed as the command `ligolo-proxy`, the name Kali's own `ligolo-ng` also uses; mine wins for a bare name, Kali's for a bare `sudo`.
 - `pspy` carries all four upstream binaries. `peass-ng` carries `linpeas.sh`, `winPEASx64.exe`, `winPEASany.exe` and `winPEAS.bat`.
 - While both repositories are private, `pwn-shop`'s CI reads `pwn-broker` through a read-only deploy key.
 - The manifest has no field for system packages until a tool needs one.

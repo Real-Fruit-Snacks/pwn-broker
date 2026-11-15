@@ -118,9 +118,9 @@ Edits made by hand to these files are overwritten at the next rebuild.
 
 ## Tools
 
-`tool install <name>` puts a tool on the machine for this box, and `finish` takes it off again. A package is one zip for one build of one tool: a manifest, the upstream licence, the tool's own files exactly as upstream published them, and, for a Python tool, every dependency as a wheel with its SHA-256 recorded. A package holds no install script. A Python tool gets its own virtual environment, built from the bundled wheels with no network access, wheels only and hash checking on. Nothing else from a package runs during install. Every download and every cached zip is checked against the size and SHA-256 in the index before it is used, and a tool's folder, its launchers and its upload files are created and removed only inside `/opt/pwn-broker`, whatever a manifest or index names. A tool's data in the home folder is the one thing removed outside it, at `finish` only: a path is deleted only if it did not exist before the install, sits strictly inside the home folder, has no link anywhere on the way to it, and no other unfinished box uses the tool. It is copied into the box first. The first set of packages is x86_64 only, and a package built for another architecture is refused at install.
+`tool install <name>` puts a tool on the machine for this box, and `finish` takes it off again. A package is one zip for one build of one tool: a manifest, the upstream licence, the tool's own files exactly as upstream published them, and, for a Python tool, every dependency as a wheel with its SHA-256 recorded. A package holds no install script. A Python tool gets its own virtual environment, built from the bundled wheels with no network access, wheels only and hash checking on, and its `wheels.lock` is checked line by line before pip reads it. Nothing else from a package runs during install. Every download and every cached zip is checked against the size and SHA-256 in the index before it is used, and a tool's folder, its launchers and its upload files are created and removed only inside `/opt/pwn-broker`, whatever a manifest or index names. A tool's data in the home folder is the one thing removed outside it, at `finish` or when the last box that uses the tool removes it: a path is deleted only if it did not exist before the install, sits strictly inside the home folder, has no link anywhere on the way to it, and no other unfinished box uses the tool. It is copied into the box first, and a path that could not be copied in full is kept, with a warning. The first set of packages is x86_64 only, and a package built for another architecture is refused at install.
 
-The packages come from a second repository, `Real-Fruit-Snacks/pwn-shop`, where the published index lives. The first set planned for it is kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng and peass-ng. None of them has been installed on Kali yet.
+The packages are published in a second repository, `Real-Fruit-Snacks/pwn-shop`, which is private for now: kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng and peass-ng. Until it is public, the way to get them is a folder filled by `sh fetch.sh <folder>` in a clone of it, with a signed-in `gh`. None of them has been installed on Kali yet.
 
 ```
 forest/dc01 > tool install ligolo-ng
@@ -133,9 +133,9 @@ files /opt/pwn-broker/upload/ligolo-ng   agent  agent.exe
 That is the shape of the output, not a recorded run. `tool list`, `tool search` and `tool info` read the index. With a URL index they use the cached copy when the source does not answer in time, and fail with one line naming the location when there is neither. A folder index is read directly.
 
 - **Kali's own copies are never touched.** An install writes a launcher for each command into `/opt/pwn-broker/bin`, and that folder decides which copy a bare command name runs. If Kali already has a command of the same name, install prints a `warn` line with its path and says the installed one wins. `tool list` has a `kali` column that says whether Kali already has a command of that name.
-- **`sudo` is never reconfigured.** `sudo` does not search your PATH, so a tool that needs root is run as `sudo <full path>`. The app prints that path after install and in `tool info`.
+- **`sudo` is never reconfigured.** `sudo` does not search your PATH, so a tool that needs root is run as `sudo <full path>`. The app prints that path after install and in `tool info`. A bare `sudo <command>` finds nothing, or Kali's own command of that name: Kali's `ligolo-ng` package installs its own `ligolo-proxy`, so with both installed a bare `ligolo-proxy` runs the installed one and a bare `sudo ligolo-proxy` runs Kali's. Install prints a `warn` line when that happens.
 - **One build of a tool per machine**, shared by every unfinished box that uses it. A box that already has another build has to `tool remove` first.
-- **At `finish`**, the tools this box installed are removed unless another unfinished box still uses them. For a tool that writes to your home folder, the manifest lists the paths. Before the archive is made, `finish` copies that data into the box, and it deletes it afterwards only if it did not exist before the install. `finish` refuses while one of the box's tools is running, and names it.
+- **At `finish`**, the tools this box installed are removed unless another unfinished box still uses them. For a tool that writes to your home folder, the manifest lists the paths. Before the archive is made, `finish` copies that data into the box, and it deletes it afterwards only if it did not exist before the install and was copied in full; a path that could not be copied in full is kept, with a warning. A copy already in the box from an earlier install is kept beside the new one. `tool remove` by the last box that uses a tool does the same with its data. `finish` refuses while one of the box's tools is running, and names it.
 - **`export`** copies tool data into the box and removes nothing. **`import`**, and reopening a finished box, offer to install the box's tools again, at the same builds and checked against the SHA-256 the box recorded.
 
 ### The tools index
@@ -150,19 +150,20 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 
 ## Tested on
 
-- The unit tests, on Windows 11 with Python 3.13: 1264 passed, 33 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer, virtual environments and launchers).
+- The unit tests, on Windows 11 with Python 3.13: 1425 passed, 37 skipped, with warnings treated as errors. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer, virtual environments and launchers).
 - The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12 and 3.13, and again as root on 3.13 (the `test-root` job). On Linux they include real tool installs into a virtual environment and the launchers. No Linux count is given here, because none has been recorded for this version.
+- The six packages, in `pwn-shop`'s CI: it built each on Ubuntu 24.04 and installed it through this app's own code under Python 3.12 and 3.13, then started each command once.
 - `install.sh`, run twice from a checkout on Ubuntu 24.04 in CI: the first run builds the environment, installs the package and writes the launcher and the PATH line; the second reuses the environment and adds no second PATH line.
 - The vimrc, run by Vim 9.2 in headless mode on a note the app wrote: folds, fold text, `F8`, colours, settings, and the reload after the app changes the note. Timers and focus events do not fire in that mode, so the tests run the check by hand.
 - *Not* tested: Kali Linux. The app has not been run there, and the checks in `docs/kali-checks.md`, the tool checks included, have not been run yet.
-- *Not* tested: any real tool package. None of the six planned for `pwn-shop` has been installed on Kali.
+- *Not* tested: any real tool package on Kali. None of the six in `pwn-shop` has been installed there.
 - *Not* tested: the installer's download. No release exists, so fetching the wheel and checking its SHA-256 has not run.
 - *Not* tested: the note window and the prompt on a real terminal.
 
 ## Known issues
 
 - Recording is not in this release. It is a later phase in `docs/design.md`.
-- The published tool index is private for now, because `pwn-shop` is. Until it is public, `tools_index` must point at a folder that holds `index.toml` and the zips it names. The first one to try needs `pwn-shop` to exist, and it does not yet.
+- The published tool index is private for now, because `pwn-shop` is. Until it is public, `tools_index` must point at a folder that holds `index.toml` and the zips it names, and a folder filled by `sh fetch.sh <folder>` in a clone of `pwn-shop` is the way to get one.
 - No release has been published, so the `curl` install line does not work yet. Install from a clone.
 - `cred list` marks a secret it cannot show exactly (a tab, another control character, or a space at either end) with `*` after the number. `cred show` prints it unchanged.
 - Links and special files (named pipes, sockets, devices) in a box are not archived. `export` and `finish` list them, and `finish` says how many will go when the folder is removed.
