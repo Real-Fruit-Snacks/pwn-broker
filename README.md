@@ -101,7 +101,7 @@ Edits made by hand to these files are overwritten at the next rebuild.
 
 ## Tested on
 
-- The unit tests, on Windows 11 with Python 3.13: 560 passed, 13 skipped. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer).
+- The unit tests, on Windows 11 with Python 3.13: 567 passed, 13 skipped. The skips are the tests that need Linux (symlinks, named pipes, file modes, ownership, backslash file names, the installer).
 - *Not* tested: Kali Linux. The app has not been run there.
 - *Not* tested: `install.sh`. It passes `sh -n` and its help and option handling are tested, but it has not been run end to end.
 - *Not* tested: the note window and the prompt on a real terminal.
