@@ -1,3 +1,5 @@
+import errno
+
 import pytest
 
 from pwn_broker import boxlock
@@ -133,7 +135,12 @@ def _msvcrt_stub(error):
 
 
 @pytest.mark.parametrize(
-    "error", [PermissionError(13, "denied"), OSError(13, "denied"), OSError(36, "deadlock")]
+    "error",
+    [
+        PermissionError(errno.EACCES, "denied"),
+        OSError(errno.EACCES, "denied"),
+        OSError(errno.EDEADLK, "deadlock"),
+    ],
 )
 def test_msvcrt_branch_maps_contention_to_not_taken(monkeypatch, error):
     monkeypatch.setattr(boxlock, "fcntl", None)
