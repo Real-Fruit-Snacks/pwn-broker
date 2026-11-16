@@ -1,15 +1,18 @@
 name: release
 
-# A vX.Y.Z tag: check it matches pyproject.toml, build the release file with release/build.py,
-# install it into a temporary install folder, run the unit suite on the Python it carries,
-# and publish the release with notes from CHANGELOG.md and exactly three files:
+# A vX.Y.Z tag push: check the tag matches pyproject.toml, build the release file with
+# release/build.py, install it into a temporary install folder, run the unit suite on the Python
+# it carries, and publish the release with notes from CHANGELOG.md and exactly three files:
 #   pwn-broker-<version>-linux-x86_64.tar.gz   the release file
 #   SHA256SUMS.txt                             its checksum
 #   install.sh                                 the installer, from the checkout at the tag
 # install.sh downloads the other two from releases/latest/download/.
 #
-# Run by hand (workflow_dispatch) it is a dry run: every step but the tag check and the
-# publishing runs, with the version taken from pyproject.toml, and nothing is published.
+# The build job has read access only and runs all of the repository's code. The publish job has
+# write access, runs none of it, and runs only on a tag push.
+#
+# Run by hand (workflow_dispatch), whatever ref it is started from, it is a dry run: the build
+# job runs with the version taken from pyproject.toml, and nothing is published.
 on:
   push:
     tags: ['v*.*.*']
@@ -19,17 +22,19 @@ permissions:
   contents: read
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
       - name: Tag matches pyproject.toml
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         run: |
           want="${GITHUB_REF_NAME#v}"
           have="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
@@ -38,7 +43,7 @@ jobs:
             exit 1
           fi
       - name: Version
-        # pyproject.toml's version; on a tag it has just been checked against the tag
+        # pyproject.toml's version; on a tag push it has just been checked against the tag
         run: |
           version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
           test -n "$version"
@@ -78,26 +83,29 @@ jobs:
           export HOME="$work/home"
           mkdir -p "$HOME"
           sh install.sh --from "$RUNNER_TEMP/release-out/pwn-broker-$VERSION-linux-x86_64.tar.gz"
-          echo "PWN_BROKER_OPT=$PWN_BROKER_OPT" >>"$GITHUB_ENV"
-          echo "INSTALLED_HOME=$HOME" >>"$GITHUB_ENV"
       - name: The installed launcher
         run: |
-          export HOME="$INSTALLED_HOME"
+          work="$RUNNER_TEMP/installed"
+          export PWN_BROKER_OPT="$work/opt"
+          export HOME="$work/home"
           "$PWN_BROKER_OPT/bin/pwn-broker" --version | tee "$RUNNER_TEMP/version.txt"
-          grep -qF "$VERSION" "$RUNNER_TEMP/version.txt"
-          echo "ok    pwn-broker --version holds $VERSION"
+          grep -qxF "pwn-broker $VERSION" "$RUNNER_TEMP/version.txt"
+          echo "ok    pwn-broker --version is pwn-broker $VERSION"
       - name: zsh and vim
         # the real recording tests need zsh, and some tests drive a real vim and skip without it
         run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh vim
       - name: Unit suite on the installed Python
+        # PWN_BROKER_OPT is not in this step's environment: only the path to asciinema is
         run: |
-          python_bin="$PWN_BROKER_OPT/python/bin/python3"
+          unset PWN_BROKER_OPT
+          opt="$RUNNER_TEMP/installed/opt"
+          python_bin="$opt/python/bin/python3"
           "$python_bin" --version
-          test -f "$PWN_BROKER_OPT/app/bin/asciinema"
+          test -f "$opt/app/bin/asciinema"
           "$python_bin" -m venv "$RUNNER_TEMP/suite-venv"
           "$RUNNER_TEMP/suite-venv/bin/python" --version
           "$RUNNER_TEMP/suite-venv/bin/python" -m pip install -e ".[dev]"
-          export PWN_BROKER_REAL_ASCIINEMA="$PWN_BROKER_OPT/app/bin/asciinema"
+          export PWN_BROKER_REAL_ASCIINEMA="$opt/app/bin/asciinema"
           "$RUNNER_TEMP/suite-venv/bin/python" -m pytest -q -W error
       - name: Notes from CHANGELOG.md
         run: |
@@ -112,15 +120,44 @@ jobs:
             exit 1
           fi
           cat notes.md
+      - name: Gather what a release needs
+        run: |
+          upload="$RUNNER_TEMP/release-upload"
+          mkdir -p "$upload"
+          cp "$RUNNER_TEMP/release-out/pwn-broker-$VERSION-linux-x86_64.tar.gz" "$RUNNER_TEMP/release-out/SHA256SUMS.txt" install.sh notes.md "$upload/"
+          ls -l "$upload"
+      - name: Release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: ${{ runner.temp }}/release-upload/
+      - name: Dry run
+        if: github.event_name != 'push' || github.ref_type != 'tag'
+        run: echo "ok    dry run: nothing was published"
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: ${{ runner.temp }}/release-files
       - name: Publish
-        if: github.ref_type == 'tag'
+        # The release is created as a draft with all three files, then made public and latest, so
+        # releases/latest/download/ never serves a release with a file missing. If the second
+        # command fails, run it by hand: the draft holds all three files.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          out="$RUNNER_TEMP/release-out"
-          gh release create "$GITHUB_REF_NAME" \
-            "$out/pwn-broker-$VERSION-linux-x86_64.tar.gz" "$out/SHA256SUMS.txt" install.sh \
-            --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag --latest
-      - name: Dry run
-        if: github.ref_type != 'tag'
-        run: echo "ok    dry run: nothing was published"
+          cd "$RUNNER_TEMP/release-files"
+          file="pwn-broker-${GITHUB_REF_NAME#v}-linux-x86_64.tar.gz"
+          test -f "$file"
+          test "$(wc -l <SHA256SUMS.txt)" = 1
+          sha256sum -c SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" "$file" SHA256SUMS.txt install.sh \
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag --draft
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
