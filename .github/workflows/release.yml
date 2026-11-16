@@ -13,8 +13,10 @@ name: release
 # installs before the release file's SHA-256 is recorded is pinned by hash in this repository,
 # since code that ran there could replace the release file and SHA256SUMS.txt together and
 # sha256sum -c would still accept them. The SHA-256 is recorded right after the build, as a job
-# output, and the publish job refuses a release file that does not have it. The publish job has
-# write access and runs none of the repository's code.
+# output. install.sh and the notes are set aside with the release file before anything unpinned
+# runs (apt, pytest), with their SHA-256 recorded too, and the publish job refuses any of the
+# three that does not have its recorded SHA-256. The publish job has write access and runs none
+# of the repository's code.
 #
 # Run by hand (workflow_dispatch), whatever ref it is started from, it is a dry run: the version
 # is taken from pyproject.toml, both jobs run every step, and only the step that publishes is
@@ -35,6 +37,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       sha256: ${{ steps.sha256.outputs.sha256 }}
+      install_sh_sha256: ${{ steps.aside.outputs.install_sh }}
+      notes_sha256: ${{ steps.aside.outputs.notes }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -114,6 +118,39 @@ jobs:
           fi
           sha256sum -c SHA256SUMS.txt
           echo "ok    $file matches SHA256SUMS.txt"
+      - name: Notes from CHANGELOG.md
+        # made here, with everything else that is published, before anything unpinned runs
+        run: |
+          upload="$RUNNER_TEMP/release-upload"
+          mkdir -p "$upload"
+          # The section headed "## vX.Y.Z", with or without a "(unreleased)" suffix.
+          awk -v h="## v$VERSION" '
+            on && /^## / { exit }
+            $0 == h || index($0, h " ") == 1 { on = 1; next }
+            on { print }
+          ' CHANGELOG.md > "$upload/notes.md"
+          if ! grep -q '[^[:space:]]' "$upload/notes.md"; then
+            echo "::error::CHANGELOG.md has no notes under '## v$VERSION'"
+            exit 1
+          fi
+          cat "$upload/notes.md"
+      - name: Set aside what a release publishes
+        # The release file, SHA256SUMS.txt, install.sh (the file strangers pipe into sh) and the
+        # notes go into the folder that becomes the artifact now, while only pinned code has run,
+        # and the SHA-256 of install.sh and of the notes is recorded beside the release file's.
+        # apt and the suite's pip install pytest run later; no later step writes into this folder,
+        # and the publish job compares all three files with these values.
+        id: aside
+        run: |
+          upload="$RUNNER_TEMP/release-upload"
+          cp "$RUNNER_TEMP/release-out/pwn-broker-$VERSION-linux-x86_64.tar.gz" "$RUNNER_TEMP/release-out/SHA256SUMS.txt" install.sh "$upload/"
+          ls -l "$upload"
+          install_sh="$(sha256sum "$upload/install.sh" | cut -d ' ' -f 1)"
+          notes="$(sha256sum "$upload/notes.md" | cut -d ' ' -f 1)"
+          echo "install_sh=$install_sh" >>"$GITHUB_OUTPUT"
+          echo "notes=$notes" >>"$GITHUB_OUTPUT"
+          echo "ok    install.sh has SHA-256 $install_sh"
+          echo "ok    notes.md has SHA-256 $notes"
       - name: Install the release file
         run: |
           work="$RUNNER_TEMP/installed"
@@ -137,8 +174,9 @@ jobs:
         # taken from the release file and installed as install.sh installs them, into an
         # environment made by the Python the release carries. The tests run from the checkout
         # but import the installed wheel, not src/. pytest is the one unpinned thing, installed
-        # after the SHA-256 was recorded. PWN_BROKER_OPT is not in this step's environment: only
-        # the path to asciinema is.
+        # after what is published was set aside and its SHA-256 recorded, and checked not to have
+        # replaced a locked wheel. PWN_BROKER_OPT is not in this step's environment: only the
+        # path to asciinema is.
         run: |
           unset PWN_BROKER_OPT
           opt="$RUNNER_TEMP/installed/opt"
@@ -152,6 +190,25 @@ jobs:
           suite="$RUNNER_TEMP/suite-venv/bin/python"
           PIP_CONFIG_FILE=/dev/null "$suite" -m pip --isolated install --no-index --find-links "$top/wheels" --only-binary :all: --require-hashes -r "$top/wheels.lock"
           "$suite" -m pip install pytest
+          # pytest must not have replaced a locked wheel: every name in wheels.lock still at its
+          # locked version
+          "$suite" -I -c '
+          import sys
+          from importlib import metadata
+          changed = []
+          for line in open(sys.argv[1], encoding="utf-8"):
+              name, version = line.split(" ", 1)[0].split("==")
+              try:
+                  found = metadata.version(name)
+              except metadata.PackageNotFoundError:
+                  found = "missing"
+              if found != version:
+                  changed.append(f"{name} {version} is now {found}")
+          if changed:
+              print("fail  installing pytest changed what wheels.lock pins: " + "; ".join(changed))
+              sys.exit(1)
+          print("ok    every wheel wheels.lock pins is installed at its locked version")
+          ' "$top/wheels.lock"
           imported="$("$suite" -c 'import pwn_broker; print(pwn_broker.__file__)')"
           echo "pwn_broker is imported from $imported"
           case "$imported" in
@@ -160,26 +217,8 @@ jobs:
           esac
           export PWN_BROKER_REAL_ASCIINEMA="$opt/app/bin/asciinema"
           "$suite" -m pytest -q -W error
-      - name: Notes from CHANGELOG.md
-        run: |
-          # The section headed "## vX.Y.Z", with or without a "(unreleased)" suffix.
-          awk -v h="## v$VERSION" '
-            on && /^## / { exit }
-            $0 == h || index($0, h " ") == 1 { on = 1; next }
-            on { print }
-          ' CHANGELOG.md > notes.md
-          if ! grep -q '[^[:space:]]' notes.md; then
-            echo "::error::CHANGELOG.md has no notes under '## v$VERSION'"
-            exit 1
-          fi
-          cat notes.md
-      - name: Gather what a release needs
-        run: |
-          upload="$RUNNER_TEMP/release-upload"
-          mkdir -p "$upload"
-          cp "$RUNNER_TEMP/release-out/pwn-broker-$VERSION-linux-x86_64.tar.gz" "$RUNNER_TEMP/release-out/SHA256SUMS.txt" install.sh notes.md "$upload/"
-          ls -l "$upload"
       - name: Release files
+        # the folder set aside before anything unpinned ran
         uses: actions/upload-artifact@v4
         with:
           name: release-files
@@ -197,19 +236,25 @@ jobs:
           name: release-files
           path: ${{ runner.temp }}/release-files
       - name: Check the files against the build
-        # the release file must have the SHA-256 the build job recorded right after building it,
-        # as well as match SHA256SUMS.txt, which travelled with it
+        # the release file, install.sh and the notes must each have the SHA-256 the build job
+        # recorded before anything unpinned ran there; the release file must also match
+        # SHA256SUMS.txt, which travelled with it
         env:
           VERSION: ${{ needs.build.outputs.version }}
           RECORDED: ${{ needs.build.outputs.sha256 }}
+          RECORDED_INSTALL_SH: ${{ needs.build.outputs.install_sh_sha256 }}
+          RECORDED_NOTES: ${{ needs.build.outputs.notes_sha256 }}
         run: |
           cd "$RUNNER_TEMP/release-files"
           ls -l
           test -n "$VERSION"
           file="pwn-broker-$VERSION-linux-x86_64.tar.gz"
-          test -f "$file"
-          test -f install.sh
-          test -f notes.md
+          for name in "$file" SHA256SUMS.txt install.sh notes.md; do
+            if [ ! -f "$name" ]; then
+              echo "fail  the artifact has no $name"
+              exit 1
+            fi
+          done
           test "$(wc -l <SHA256SUMS.txt)" = 1
           named="$(awk '{ sub(/^\*/, "", $2); print $2 }' SHA256SUMS.txt)"
           if [ "$named" != "$file" ]; then
@@ -217,13 +262,17 @@ jobs:
             exit 1
           fi
           sha256sum -c SHA256SUMS.txt
-          echo "the build job recorded SHA-256 $RECORDED"
-          found="$(sha256sum "$file" | cut -d ' ' -f 1)"
-          if [ "$found" != "$RECORDED" ]; then
-            echo "fail  $file has SHA-256 $found, not the $RECORDED the build job recorded after building it"
-            exit 1
-          fi
-          echo "ok    $file has the SHA-256 the build job recorded, $found"
+          same() {
+            found="$(sha256sum "$1" | cut -d ' ' -f 1)"
+            if [ "$found" != "$2" ]; then
+              echo "fail  $1 has SHA-256 $found, not the $2 the build job recorded"
+              exit 1
+            fi
+            echo "ok    $1 has the SHA-256 the build job recorded, $found"
+          }
+          same "$file" "$RECORDED"
+          same install.sh "$RECORDED_INSTALL_SH"
+          same notes.md "$RECORDED_NOTES"
       - name: Publish
         # The release is created as a draft with all three files, then made public and latest, so
         # releases/latest/download/ never serves a release with a file missing. If the second
@@ -244,4 +293,10 @@ jobs:
         if: github.event_name != 'push' || github.ref_type != 'tag'
         env:
           RECORDED: ${{ needs.build.outputs.sha256 }}
-        run: echo "ok    dry run: the release file has SHA-256 $RECORDED, and nothing was published"
+          RECORDED_INSTALL_SH: ${{ needs.build.outputs.install_sh_sha256 }}
+          RECORDED_NOTES: ${{ needs.build.outputs.notes_sha256 }}
+        run: |
+          echo "ok    dry run: nothing was published"
+          echo "ok    release file SHA-256 $RECORDED"
+          echo "ok    install.sh SHA-256 $RECORDED_INSTALL_SH"
+          echo "ok    notes.md SHA-256 $RECORDED_NOTES"
