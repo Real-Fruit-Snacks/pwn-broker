@@ -622,7 +622,9 @@ Nothing else. With `--from` and a folder index, the install and the tool command
 - The wheels' licence texts are taken from the wheels themselves at build time. Python's is the file pwn-shop's runtime carries. `licences/README.txt` is written by the build from `release/licences/sources.toml`.
 - CI's `installer` job proves the install in a Debian container with no Python and no network. The Kali job installs with the network off and connects it again for the cycle.
 
-**Not tested.** The release workflow, and the installer's download against a real release. An upgrade over an install made by the old installer, on a real machine.
+**Not tested.** The release workflow, and the installer's download against a real release.
+
+**Run by hand.** On 2026-11-16, at commit cf585e7, in Kali 2026.2 under WSL 2, as root, with Kali's own Python 3.14.7: an install made by the installer from before the release file (`sh install.sh --from .` at commit b1f66bd, an environment on Kali's Python) was upgraded with `sh install.sh --from` the release file. Every `ok` line printed, the app was then on Python 3.13.18 at `/opt/pwn-broker/python/bin/python3.13`, `config.toml` and a box folder under `~/pwn-broker/active` were untouched, and `python/.pwn-broker` was there. A second run over that install succeeded. With `python/.pwn-broker` removed, the installer refused `/opt/pwn-broker/python` as not a pwn-broker Python, and the install still worked.
 
 ### 6.14 Layout, and the fixes from the first hands-on test
 

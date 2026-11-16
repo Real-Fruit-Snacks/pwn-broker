@@ -603,7 +603,8 @@ def test_an_install_folder_that_is_not_absolute_is_refused(rig, value):
     assert rig.calls() == []
 
 
-ROOT_SPELLINGS = ["/", "/.", "/./", "/./."] + ([] if sys.platform == "win32" else ["//", "///."])
+# Git Bash keeps // as //, so on Windows only / itself is the root
+ROOT_SPELLINGS = ["/"] + ([] if sys.platform == "win32" else ["//", "///"])
 
 
 @pytest.mark.parametrize("value", ROOT_SPELLINGS)
@@ -615,16 +616,50 @@ def test_an_install_folder_that_is_the_root_is_refused(rig, value):
     assert rig.calls() == []
 
 
-def test_an_install_folder_made_by_the_installer_that_resolves_to_the_root_is_refused(rig):
-    # mkdir -p makes new/, and the .. after it climb to /
-    new = sh_path(rig.tmp / "new")
-    value = new + "/.." * len(new.strip("/").split("/"))
-    result = rig.install("--no-path", PWN_BROKER_OPT=value)
+@needs_links
+def test_an_install_folder_that_is_a_link_to_the_root_is_refused(rig):
+    link = rig.tmp / "to-root"
+    link.symlink_to("/", target_is_directory=True)
+    result = rig.install("--no-path", PWN_BROKER_OPT=sh_path(link))
     assert result.returncode == 1
     assert result.stderr.splitlines() == ["fail  the install folder must not be empty or /"]
     assert result.stdout == ""
-    assert (rig.tmp / "new").is_dir() and list((rig.tmp / "new").iterdir()) == []
     assert rig.calls() == []
+
+
+def dot_part_values(tmp):
+    new = sh_path(tmp / "new")
+    return [
+        "/.",
+        "/./",
+        "/./.",
+        "/opt/./pwn-broker",
+        f"{new}/../opt",
+        # climbs from new/ to /
+        new + "/.." * len(new.strip("/").split("/")),
+        f"{new}/..",
+        f"{new}/.",
+    ]
+
+
+def test_an_install_folder_with_a_dot_part_is_refused_before_anything_is_made(rig):
+    for value in dot_part_values(rig.tmp):
+        result = rig.install("--no-path", PWN_BROKER_OPT=value)
+        assert result.returncode == 1, value
+        assert result.stderr.splitlines() == [
+            f"fail  PWN_BROKER_OPT must be an absolute path with no . or .. in it, not {value}"
+        ], value
+        assert result.stdout == "", value
+        assert not (rig.tmp / "new").exists(), value
+        assert not (rig.tmp / "opt").exists(), value
+    assert rig.calls() == []
+
+
+def test_a_name_that_only_starts_with_dots_is_not_a_dot_part(rig):
+    opt = rig.tmp / "..opt" / ".pwn-broker"
+    result = rig.install("--no-path", PWN_BROKER_OPT=sh_path(opt))
+    assert result.returncode == 0, result.stderr
+    assert (opt / "python/.pwn-broker").exists()
 
 
 def an_upgrade_whose_path_line_cannot_be_written(rig, result):

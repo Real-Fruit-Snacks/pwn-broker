@@ -155,6 +155,10 @@ main() {
         /*) ;;
         *) fail "PWN_BROKER_OPT must be an absolute path, not $OPT" ;;
     esac
+    # refused before anything is made: /x/.. would leave /x behind before it was seen to be /
+    case "$OPT/" in
+        */./* | */../*) fail "PWN_BROKER_OPT must be an absolute path with no . or .. in it, not $OPT" ;;
+    esac
     if [ "$OPT" = "/" ]; then
         fail "the install folder must not be empty or /"
     fi
@@ -195,7 +199,7 @@ main() {
         fail "pwn-broker is built for x86_64 Linux. this machine is $arch"
     fi
 
-    # a path such as //, /. or /x/.. is / itself: each branch looks at where the folder really
+    # a path such as // or a link to / is / itself: each branch looks at where the folder really
     # is before it uses it, and before sudo chown could be given /
     if [ -d "$OPT" ]; then
         refuse_root
