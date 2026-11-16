@@ -83,7 +83,7 @@ def _play(session: Session, n: int, casts: list[Path]) -> None:
         raise ValueError(f"recording {n} is still being recorded; exit its window first")
     if not recorder.present(session.paths):
         raise ValueError(
-            "asciinema is missing or does not match its checksum; run check to download it again"
+            "asciinema is missing or does not match its checksum; run the installer again"
         )
     try:
         for folder in recorder.settings_env(session.paths).values():

@@ -150,7 +150,7 @@ def test_a_missing_asciinema_starts_nothing(make_env, opened, dc01, asciinema):
     env = make_env(present=lambda paths: False)
     assert record.run(env, []) == 1
     assert env.console.lines == [
-        ("fail", "asciinema is missing or does not match its checksum; run check in the prompt")
+        ("fail", "asciinema is missing or does not match its checksum; run the installer again")
     ]
     assert asciinema.calls == []
 

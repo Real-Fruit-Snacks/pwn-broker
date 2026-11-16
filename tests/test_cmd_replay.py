@@ -285,7 +285,7 @@ def test_refuses_without_asciinema(session, monkeypatch):
     monkeypatch.setattr(cmd_replay.recorder, "present", lambda paths: False)
     _cast(session, "dc01", "2026-11-14_1432")
     assert _run(session, "replay 1").lines == [
-        ("fail", "asciinema is missing or does not match its checksum; run check to download it again")
+        ("fail", "asciinema is missing or does not match its checksum; run the installer again")
     ]
     assert calls == []
 

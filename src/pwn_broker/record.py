@@ -182,7 +182,7 @@ def _run(env: Env, argv: list[str]) -> int:
         console.fail("no box is open; nothing is recorded")
         return 1
     if not env.present(env.paths):
-        console.fail("asciinema is missing or does not match its checksum; run check in the prompt")
+        console.fail("asciinema is missing or does not match its checksum; run the installer again")
         return 1
     try:
         box = load_box(folder)
