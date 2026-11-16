@@ -72,11 +72,11 @@ These would make it a failure even if it works.
 | Where the index lives | A file committed to the repo · a file published by CI · a location set in settings | Published by CI, with the location settable | CI builds the packages, so only CI knows their checksums, and nothing but me commits to the repo. A settable location lets a folder on disk stand in for the published index, with no network |
 | How packages are made | Zips built by hand · recipes built by CI | Recipes | No binary is committed, every file traces to its upstream release, and an update is a change to a recipe |
 | Tool isolation | Own folder per tool with links in a shared `bin` · containers · install into the system | Own folder | Containers complicate the VPN, raw sockets and file access. Installing into the system is what this exists to avoid |
-| Python tools | `uv` or `pipx` · Python's own `venv` and `pip` with the dependencies bundled | `venv` and `pip`, dependencies bundled | `uv tool install` does not check dependency hashes; `pip` does. `venv` and `pip` are already required by the installer, and bundled wheels install with no network |
+| Python tools | `uv` or `pipx` · Python's own `venv` and `pip` with the dependencies bundled | `venv` and `pip`, dependencies bundled | `uv tool install` does not check dependency hashes; `pip` does. `venv` and `pip` come with the Python a tool runs on, and bundled wheels install with no network |
 | `sudo <tool>` | A `sudo` settings file adding the app's folder to its search path · print the full path | Print the full path | Such a file replaces the whole search path, and a wrong value could break `sudo`. The full path always works |
 | Tool data in my home folder | Clean up at `finish` · redirect into the box from the first run | Redirect, with cleanup as the fallback | Nothing to delete afterwards, and two boxes cannot mix results |
 | Boxes open at once | One · several | One | `record` and tools run from any terminal and must know their box. Two boxes can share an IP |
-| Recorder | `script` · `asciinema` | `asciinema` | Better playback. The cost is one more thing to install on a fresh VM, which the installer covers |
+| Recorder | `script` · `asciinema` | `asciinema` | Better playback. The cost is one more thing to install on a fresh VM, which the release file covers |
 | Install location | `/opt/pwn-broker` · under my home folder | `/opt/pwn-broker` | The customary place for add-on software on Kali, and the same path for root and a normal user |
 | Build order | Organiser, recording, tools · tools earlier · all at once | Organiser, tools, recording | Usable on a real box after phase 1. Tools moved ahead of recording once the organiser was built, so tool installs could be tested while both repos are private |
 
@@ -96,7 +96,8 @@ Phases 1 and 3 are built. Phase 2 is built last, is specified in full in section
 
 ```
 /opt/pwn-broker/                 owned by the installing user
-  app/                           the application, in its own virtual environment, and the pinned asciinema
+  python/                        the app's own Python, from the release file
+  app/                           the application, in a virtual environment made with that Python, and the pinned asciinema
   bin/                           on PATH: pwn-broker, record, tool links and launchers
   templates/notes.md             note template, editable
   vim/vimrc                      loaded with vim -u
@@ -116,7 +117,7 @@ Phases 1 and 3 are built. Phase 2 is built last, is specified in full in section
     2026-11-15_htb_sauna.exported.tar.gz
 ```
 
-Everything the app owns is under `/opt/pwn-broker`. Uninstalling it is deleting that folder and one PATH line. Upgrading replaces only `app/`. My boxes are never inside `/opt`, so removing the app can never remove my work.
+Everything the app owns is under `/opt/pwn-broker`. Uninstalling it is deleting that folder and one PATH line. Upgrading replaces only `python/` and `app/`. My boxes are never inside `/opt`, so removing the app can never remove my work.
 
 ### A box
 
@@ -149,16 +150,16 @@ The folder name is `<date>_<platform>_<name>`. If that name is taken, a number i
 ### 6.1 Install
 
 ```
-curl -fsSL https://raw.githubusercontent.com/Real-Fruit-Snacks/pwn-broker/main/install.sh | sh
+curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/download/install.sh | sh
 ```
 
 - Creates `/opt/pwn-broker`, using `sudo` once if it is not root, and gives it to the user who ran the install.
-- Creates a virtual environment in `app/` and installs the released package into it, after checking its SHA-256. Nothing goes into Kali's system Python.
+- Unpacks the release's own Python into `python/`, creates a virtual environment in `app/` with it and installs the app and its dependencies from the release file, which it has checked against `SHA256SUMS.txt`. Nothing goes into Kali's system Python.
 - Writes the `pwn-broker` launcher into `bin/`.
 - Adds `/opt/pwn-broker/bin` to the front of PATH in the user's shell config, and prints that it did.
 - Asks no questions. Defaults are good enough to start a box immediately.
 
-Section 6.13 replaces the second step: a release becomes one file that carries its own Python, its dependencies and asciinema.
+Section 6.13 is how the second step is built: a release is one file that carries its own Python, its dependencies and asciinema. The first design of this section made the environment on Kali's `python3` and let `pip` fetch the dependencies.
 
 ### 6.2 Root and normal user
 
@@ -193,7 +194,7 @@ ok    5 checks passed
 warn  display   no desktop session; open the note with: vim -u /opt/pwn-broker/vim/vimrc notes.md
 ```
 
-- Dependencies present: vim, a terminal emulator, tar. The tools phase adds a working `python3 -m venv`; the recording phase adds the pinned `asciinema` (section 7.10).
+- Dependencies present: vim, a terminal emulator, tar. The recording phase adds the pinned `asciinema` (section 7.10). The tools phase once added a working `python3 -m venv`; section 6.13 removed that check.
 - A VPN tunnel is up (section 7.8).
 - A desktop session exists.
 - The PATH line is present.
@@ -502,11 +503,11 @@ On a fresh VM the file does not exist. The installer takes `--config <path>` to 
 
 ### 6.13 A self-contained release
 
-Not built yet. This section is the design. It replaces how section 6.1 installs the app and how section 7.10 gets asciinema.
+Built. This section is the design, with what was built where it differs; the differences are listed at its end. It is how section 6.1 installs the app and how section 7.10 gets asciinema. CI has built the release file twice to the same bytes, installed it with the network off in Kali and with no Python and no network in Debian, and run the whole cycle on its bundled Python; the release workflow has never run and the installer's download has never run against a real release.
 
 **The rule.** The Kali machine only ever downloads files I built and pinned, and nothing inside them fetches anything else. Section 8.12 does this for the tools. This section does it for the app.
 
-**Why.** Today the installer downloads a small wheel and lets `pip` fetch the app's four dependencies from PyPI, at whatever version is newest and with no checksum. It then fetches asciinema from asciinema's own release. The app also runs on Kali's `python3`, so a new Kali Python can break it: the Kali image moved to 3.14 and one of the app's own tests failed there.
+**Why.** The first installer downloaded a small wheel and let `pip` fetch the app's four dependencies from PyPI, at whatever version is newest and with no checksum. It then fetches asciinema from asciinema's own release. The app also runs on Kali's `python3`, so a new Kali Python can break it: the Kali image moved to 3.14 and one of the app's own tests failed there.
 
 **Approaches.**
 
@@ -516,7 +517,7 @@ Not built yet. This section is the design. It replaces how section 6.1 installs 
 | The app's Python | Kali's own · its own, inside the release | Its own | A Kali upgrade cannot break the app, and the app needs only `sh`, `tar` and `curl` from Kali. The cost is a larger file and that Python fixes are mine to ship |
 | The app's Python and the tools' runtime | One shared copy · separate copies | Separate | Sharing would make the app need pwn-shop to be reachable, and the two repositories were split so neither shares the other's fate. The cost is a second 100 MB once a Python tool is installed |
 
-**The release file.** One file per release, `pwn-broker-<version>-linux-x86_64.tar.gz`, about 50 MB:
+**The release file.** One file per release, `pwn-broker-<version>-linux-x86_64.tar.gz`, about 47 MB:
 
 ```
 pwn-broker-<version>/
@@ -546,10 +547,10 @@ The installer comes from the release it installs, not from `main`, so the two al
 1. Without `--from`, the installer downloads `SHA256SUMS.txt` and the release file from the latest release and checks the file against it. With `--from`, it uses the file on disk and contacts nothing.
 2. It unpacks the Python into `/opt/pwn-broker/python/`.
 3. That Python makes the virtual environment in `/opt/pwn-broker/app/`, and `pip` installs from `wheels/` with no index, binaries only and every hash required.
-4. It copies asciinema into `app/bin/` and checks it against its pin.
-5. It runs the app's setup, which writes the launchers and the data files as now.
+4. It copies asciinema into `app/bin/`.
+5. It runs the app's setup, which checks asciinema against its pin, writes the launchers and the data files as now, and fails if asciinema is missing or wrong.
 
-- The installer needs `sh`, `tar`, `gzip`, `curl` and `sha256sum`. It no longer needs `python3` or `python3-venv`.
+- The installer needs `sh`, `tar`, `gzip` and `sha256sum`, and `curl` only without `--from`. It no longer needs `python3` or `python3-venv`.
 - An upgrade replaces `python/` and `app/` and nothing else.
 - The release file is what is trusted. Downloaded, it is checked against `SHA256SUMS.txt`. Given with `--from`, it is mine to vouch for: the installer prints its SHA-256 so I can compare it with the release page. The installer holds no pins of its own and does not check the Python inside the file again. The wheels are checked by `pip` against `wheels.lock`, and asciinema by the app's setup against the app's pin.
 - `--from` no longer takes a source folder or a wheel. To install from a checkout, build a release file from it first; a script in the repository does that, and CI uses it.
@@ -557,7 +558,7 @@ The installer comes from the release it installs, not from `main`, so the two al
 
 **What changes in the app.**
 
-- Setup no longer downloads asciinema, and the launch check for it no longer offers to. A missing or wrong asciinema is a `warn` that says to run the installer again.
+- Setup no longer downloads asciinema, and the launch check for it no longer offers to. Setup fails on a missing or wrong asciinema; the launch check only warns, and says to run the installer again.
 - The launch check that Kali's `python3` can make virtual environments goes away. Tools get their Python from a runtime (section 8.12); a schema 1 Python tool that still needs Kali's Python says so when it is installed.
 - The check for a newer release stays. It asks GitHub about this repository's own releases, never updates anything, and `check_updates = false` turns it off.
 
@@ -575,16 +576,28 @@ Nothing else. With `--from` and a folder index, nothing at all.
 
 - A script in the repository builds the release file from a checkout: it fetches the pinned Python, the pinned wheels and the pinned asciinema, checks each against its pin, builds the app's own wheel, and writes the file. The same inputs give the same file, byte for byte.
 - The tools that build the app's wheel are pinned too. CI builds the release file twice and fails if the two differ.
-- CI builds the release file on every push. The Kali job prepares its container, switches the container's network off, installs from that file, switches the network back on, and runs the whole cycle as now. That proves on every push that an install reaches nothing.
+- CI builds the release file on every push. The Kali job prepares its container, switches the container's network off, installs from that file, switches the network back on, and runs the whole cycle as now. A separate `installer` job installs the file in a Debian container that has no Python and no network. That proves on every push that an install reaches nothing.
 - The Kali job still runs the unit tests on Kali's own Python as well, as an early warning of the next one. The cycle runs the app on its bundled Python.
-- The release workflow builds the file itself with the same script, installs it and runs the tests against it, then publishes it with `SHA256SUMS.txt` and `install.sh`.
+- The release workflow builds the file itself with the same script, installs it and runs the tests against it, then publishes it with `SHA256SUMS.txt` and `install.sh`, from a second job that runs none of the repository's code. The release is made as a draft first and then made public. Started by hand, the workflow is a dry run that publishes nothing.
 
 **Accepted trades.**
 
-- A release is about 50 MB, not a wheel of a few hundred kilobytes, and the app takes about 100 MB more on disk.
+- A release is about 47 MB, not a wheel of a few hundred kilobytes, and the app takes about 100 MB more on disk.
 - The app's Python and its OpenSSL are fixed when I ship a new release, not when Kali updates.
-- Installing from a checkout takes one more step.
+- Installing from a checkout takes one more step, and the build runs on x86_64 Linux only.
 - x86_64 with glibc only.
+
+**What differs from the first design.**
+
+- The release file is gzip with stored blocks, written by the build script itself, so its bytes depend on no compression library. Its contents are already compressed.
+- `setup` fails on a missing or wrong asciinema, so the installer fails; the launch check only warns.
+- The installer's work folder is inside the install folder (`.install.<random>`), and a failed or interrupted install puts the previous `python/` and `app/` back. After a kill or a power cut the folder can be left behind. The installer refuses an install folder that belongs to another user.
+- `setup` and the launchers run Python with `-I`.
+- The release workflow has a manual dry run that publishes nothing, and publishes from a second job that runs none of the repository's code, as a draft first.
+- The wheels' licence texts are taken from the wheels themselves at build time. Python's is the file pwn-shop's runtime carries. `licences/README.txt` is written by the build from `release/licences/sources.toml`.
+- CI's `installer` job proves the install in a Debian container with no Python and no network. The Kali job installs with the network off and connects it again for the cycle.
+
+**Not tested.** The release workflow, and the installer's download against a real release. An upgrade over an install made by the old installer, on a real machine.
 
 ## 7. Phase 2: recording and Kali changes
 
@@ -629,7 +642,7 @@ ok  recording saved, 14 min
 - A marker in `/opt/pwn-broker/run/recordings/` says which windows are recording: one file per window, holding the process start time, the target and the file. A marker whose process is gone is ignored and cleared, as for tools.
 - `record` runs only as the user who installed the app, the same rule as the prompt (section 6.2). Run through `sudo` by a normal user, it refuses and says to run `record` first and `sudo` inside it. Otherwise root would own the note and the new target's folder, and the prompt could no longer write them.
 - Read from asciinema's source, each event is written to the file as it happens. CI has shown it: the `recording` job records a real zsh session and a real bash session through a pseudo-terminal, and in both the output is in the file while the window is still recording. Had it held output back, a killed window would lose what was held and an export would hold slightly less. Nothing else here would change.
-- If `asciinema` is missing or does not match its pinned checksum, `record` says to run `check` in the prompt, which offers to download it, and starts nothing.
+- If `asciinema` is missing or does not match its pinned checksum, `record` says to run `check` in the prompt, which says to run the installer again, and starts nothing.
 - If `asciinema` ends with an error, `record` says so with its status, and still writes the text copy from whatever is on disk.
 - A window that is closed or killed leaves its `.cast` as far as it was written. Its text copy is written later (section 7.4).
 
@@ -818,15 +831,14 @@ ok  vpn up, 10.10.14.7 on tun0
 
 ### 7.10 Install and launch checks
 
-- The installer's setup step downloads `asciinema` 3.2.1, the static x86_64 Linux build from asciinema's own GitHub release, checks it against a SHA-256 pinned in the app, and puts it in `/opt/pwn-broker/app/bin/`. That folder is not on PATH, so Kali's own `asciinema`, if there is one, is untouched.
-- `install.sh --no-asciinema` skips the download.
-- A copy already there with the right checksum is not downloaded again.
-- If the download fails or the checksum does not match, nothing is kept, the installer says so and carries on. Everything but `record` and `replay` works.
+- Section 6.13 supersedes the first design of this section, in which the installer downloaded `asciinema` 3.2.1 from asciinema's own GitHub release and `install.sh --no-asciinema` skipped it. Now the release file carries the static x86_64 Linux build, the installer copies it to `/opt/pwn-broker/app/bin/`, and the app's `setup` checks it against a SHA-256 pinned in the app. That folder is not on PATH, so Kali's own `asciinema`, if there is one, is untouched.
+- There is no `--no-asciinema`: asciinema is always in the file.
+- If asciinema is missing or does not match, `setup` fails and so does the installer. Later, the launch check only warns, and everything but `record` and `replay` works.
 - `record` is a launcher in `/opt/pwn-broker/bin`, written by setup and put back by the launch check if it is missing.
 - `pyte` 0.8.2 becomes a dependency of the app, pinned exactly because the text copy leans on how it works inside.
-- New launch checks: `asciinema` (present and matching its pin; a `warn` offers to download it again) and `vpn`.
+- New launch checks: `asciinema` (present and matching its pin; a `warn` says to run the installer again) and `vpn`.
 - `record`, `asciinema`, `openvpn`, `ping` and `ip` join the command names a tool package may not use, in both repositories. The app runs each of them by name, and a tool's command would be found first.
-- asciinema is GPL-3.0-or-later and is fetched from upstream at install, never shipped in this repository. `pyte` is LGPL-3.0 and is installed by `pip` as a dependency.
+- asciinema is GPL-3.0-or-later and is never shipped in this repository; the release file carries it, with its licence text and the address of its source. `pyte` is LGPL-3.0 and is installed by `pip` as a dependency.
 
 ### 7.11 What changes in pwn-broker
 
@@ -835,7 +847,7 @@ ok  vpn up, 10.10.14.7 on tun0
 - `finish`, `export` and `import` gain recording and hosts steps through the same hook lists the tools use.
 - The status bar and `status` gain the VPN address and the recording count.
 - The file scan and the archive leave the box's `vpn/` folder out.
-- CI installs the pinned `asciinema`, zsh and bash on Ubuntu and runs real recordings there.
+- CI installs the pinned `asciinema` from the release file, with zsh and bash, on Ubuntu and runs real recordings there.
 
 ### 7.12 Testing
 
@@ -1113,7 +1125,7 @@ No package in the first batch needs a system package, so the manifest has no fie
 - `box.toml` records each tool: name, version, build, SHA-256 and when it was installed.
 - The status bar and `status` show how many tools the box has.
 - `finish` and `export` gain a step before archiving, and `finish` a step after, for tool data and removal. `finish` checks for running tools before it asks.
-- The launch checks warn when `python3-venv` is missing (Python tools need it; nothing else does), and offer to remove tools left behind by finished boxes and files left by an interrupted install.
+- The launch checks warned when `python3-venv` was missing, which section 6.13 removed; they offer to remove tools left behind by finished boxes and files left by an interrupted install.
 
 ### 8.10 Testing
 
@@ -1186,7 +1198,7 @@ wheels = "wheels"
 - `[python].versions` is gone from schema 2: the bundled wheels cover the runtime's series and nothing else.
 - A package has schema 2 only if it is a runtime or requires one. Every other package stays schema 1, so the builds already published still rebuild byte for byte.
 - The index gains the same two things: an entry's kind may be `runtime`, and a build may carry `requires`. Its schema becomes 2.
-- The app reads both schemas. A schema 1 Python tool (builds 1 and 2 of `certipy` and `targetedkerberoast`) installs as before, on Kali's own Python, where that Python is one it lists.
+- The app reads both schemas. A schema 1 Python tool installs as before, on Kali's own Python, where that Python is one it lists. Builds 1 and 2 of `certipy` and `targetedkerberoast` were such tools; they were withdrawn on 2026-11-15, before any box had used them, so none is published.
 
 **Installing.** `tool install certipy`:
 
@@ -1308,8 +1320,8 @@ These could not be checked while designing. Each was meant to be confirmed befor
 - The terminal reports focus changes to vim, so the note can save on leaving and reload on return. Fallback: a short reload timer. Still open: the Kali run has no real desktop.
 - `x-terminal-emulator` exists and accepts a command to run. Confirmed in the Kali image, where it is `lxterm`, Debian's wrapper around xterm, and takes `-e`. Still open for the terminal a Kali desktop opens by default.
 - How vim signals unsaved changes in a way the app can detect before `finish`. Still open: the Kali run never leaves the note unsaved.
-- `python3 -m venv` works on a fresh Kali, and its Python is 3.12 or 3.13, the versions the bundled wheels cover. The first half is confirmed in the Kali image. The second is not: Kali's Python is now 3.14 (3.14.8 in the Kali 2026.3 image), which build 1 of the two Python tools, `certipy` and `targetedkerberoast`, does not cover, so `tool install` refuses it there. Build 2 of each covers Python 3.12, 3.13 and 3.14. Build 3 of each, published on 2026-11-15, requires the `python-3.13` runtime and does not use Kali's Python at all (8.12); this repository's `kali` job installs a small Python test tool on a runtime package it builds around the same upstream archive.
-- The pinned `asciinema` runs on Kali, and writes to disk as it records rather than at the end. Confirmed in the Kali image: the real-asciinema tests pass there as root, and the run records a window and plays it back.
+- `python3 -m venv` works on a fresh Kali, and its Python is 3.12 or 3.13, the versions the bundled wheels cover. Overtaken by section 6.13: the app no longer runs on Kali's Python, so neither half matters to the install. In the Kali 2026.3 image Kali's Python was 3.14.10 and the app's own was 3.13.18, and the release file installed with the network off. Build 3 of each Python tool, published on 2026-11-15, requires the `python-3.13` runtime and does not use Kali's Python at all (8.12); builds 1 and 2 were withdrawn that day. This repository's `kali` job installs a small Python test tool on a runtime package it builds around the same upstream archive.
+- The pinned `asciinema` runs on Kali, and writes to disk as it records rather than at the end. Confirmed in the Kali image: the real-asciinema tests pass there as root against the asciinema installed from the release file, and the run records a window and plays it back.
 - The `[rec <target>]` prefix shows with Kali's own zsh settings, survives its prompt toggle, and leaves the rest of my shell setup as it was. That it shows, in front of Kali's own two-line prompt, is confirmed in the Kali image. The prompt toggle and the rest of the shell setup are still open.
 - The text copy of a real session on Kali reads cleanly: command lines as typed, with zsh's suggestions and highlighting gone. Still open: the Kali run records two short commands, and its text copy has the timed output line, but not a session with suggestions and highlighting.
 - Writing `/etc/hosts` in place works on Kali, as root and through `sudo`. As root, confirmed in the Kali image: the line is written and removed, and every other byte stays as it was. Through `sudo`, still open.
@@ -1378,8 +1390,11 @@ For recording and Kali changes:
 - A tunnel the app did not start is never stopped.
 - The app keeps track of one VPN at a time; while its own is up, `vpn start` starts nothing.
 - A new target is pinged wherever it is added, including from `record`.
-- A failed asciinema download does not stop the install.
-- The asciinema pin lives in the app, not in `install.sh`, so the installer and the launch check share it.
+- A missing or wrong asciinema stops the install, because `setup` fails; later, the launch check only warns.
+- The asciinema pin lives in the app, not in `install.sh`, so `setup` and the launch check share it.
+- The release file is the one thing the installer trusts, and it holds no pins of its own beyond the file's checksum.
+- The release file is built on x86_64 Linux only, and installing from a checkout means building one first.
+- The app's Python is its own, separate from the tools' runtime, even though both are the same upstream build.
 - The prompt and `record` share a lock, and the prompt reloads the box from disk when it has changed.
 
 For the tools phase:
