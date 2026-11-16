@@ -43,8 +43,6 @@ class Env:
     is_root: Callable[[], bool] = privilege.is_root
     run_privileged: Callable = privilege.run_privileged
     tunnel: Callable[[], vpn.Tunnel | None] = vpn.tunnel
-    # how setup and the launch check download the pinned asciinema
-    fetch: Callable[[AppPaths], None] = recorder.fetch
 
 
 def _load(env: Env, box: Box) -> Session:
@@ -53,7 +51,6 @@ def _load(env: Env, box: Box) -> Session:
     session.is_root = env.is_root
     session.run_privileged = env.run_privileged
     session.tunnel = env.tunnel
-    session.fetch = env.fetch
     return session
 
 
@@ -212,20 +209,16 @@ def _pick_session(env: Env, argv: list[str]) -> Session | None:
     return choose(env)
 
 
-def _asciinema(env: Env) -> None:
-    """Fetch the pinned asciinema for setup; a failure is a warning, never a failed setup."""
-    if env.environ.get("PWN_BROKER_SKIP_ASCIINEMA"):
-        return
-    try:
-        if not recorder.present(env.paths):
-            env.fetch(env.paths)
-    except recorder.RecorderError as exc:
-        env.console.warn(
-            f"asciinema was not installed: {exc}. "
-            "record and replay will not work until it is: run check in the prompt"
-        )
-        return
-    env.console.ok(f"asciinema {recorder.VERSION} in {env.paths.asciinema}")
+def _asciinema(env: Env) -> int:
+    """Check the copy of asciinema the release carries; nothing is downloaded."""
+    if recorder.present(env.paths):
+        env.console.ok(f"asciinema {recorder.VERSION} in {env.paths.asciinema}")
+        return 0
+    env.console.fail(
+        f"asciinema is missing from {env.paths.asciinema} or does not match its checksum. "
+        "run the installer again"
+    )
+    return 1
 
 
 def _usage(env: Env, argv: list[str]) -> int | None:
@@ -246,8 +239,7 @@ def _usage(env: Env, argv: list[str]) -> int | None:
         except OSError as exc:
             console.fail(str(exc))
             return 1
-        _asciinema(env)
-        return 0
+        return _asciinema(env)
     if argv and argv[0] not in SUBCOMMANDS:
         console.fail(f"unknown option {argv[0]}, see pwn-broker --help")
         return 2
@@ -285,7 +277,6 @@ def _prepare(env: Env) -> int | None:
         env.home,
         include_version=False,
         tunnel=env.tunnel,
-        fetch=env.fetch,
     )
     checks.report(console, results)
     if any(r.status == "fail" for r in results):

@@ -148,7 +148,6 @@ def check(session: Session, args: list[str]) -> None:
         Path.home(),
         include_version=False,
         tunnel=session.tunnel,
-        fetch=session.fetch,
     )
     newer = checks.newer_release_within(session.settings)
     if newer is not None:

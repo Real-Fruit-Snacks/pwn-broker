@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from pwn_broker import hosts, privilege, recorder, recstate, vpn, vpnctl
+from pwn_broker import hosts, privilege, recstate, vpn, vpnctl
 from pwn_broker.config import Settings
 from pwn_broker.console import Console
 from pwn_broker.filescan import scan
@@ -53,8 +53,6 @@ class Session:
     run_privileged: Callable = privilege.run_privileged
     ping: Callable[[str], PingResult] = ping_once
     tunnel: Callable[[], vpn.Tunnel | None] = vpn.tunnel
-    # how the check command downloads the pinned asciinema again
-    fetch: Callable[[AppPaths], None] = recorder.fetch
     which: Callable[[str], str | None] = shutil.which
     sleep: Callable[[float], None] = time.sleep
     # how a marker's process is told from one that reuses its ID: the app's OpenVPN, a recording window

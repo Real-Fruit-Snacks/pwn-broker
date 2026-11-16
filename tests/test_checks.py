@@ -2,7 +2,6 @@ import json
 import os
 import threading
 import time
-from types import SimpleNamespace
 
 import pytest
 
@@ -19,16 +18,11 @@ from pwn_broker.checks import (
 )
 from pwn_broker.config import Settings
 from pwn_broker.console import FakeConsole
-from pwn_broker.recorder import RecorderError
 from pwn_broker.vpn import Tunnel
 
 
 def _no_tunnel():
     return None
-
-
-def _no_fetch(paths):
-    raise AssertionError("a test reached the download")
 
 
 def _env(paths, **extra):
@@ -39,10 +33,6 @@ def _env(paths, **extra):
 
 def _found(name):
     return "/usr/bin/" + name
-
-
-def _venv_ok(argv, **kwargs):
-    return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
 
 def _ready(paths):
@@ -62,22 +52,22 @@ def test_all_checks_pass(paths, monkeypatch):
     _ready(paths)
     monkeypatch.setattr(checks.recorder, "present", lambda p: True)
     results = run_checks(
-        paths, Settings(), _env(paths), which=_found, run=_venv_ok, tunnel=lambda: Tunnel("tun0", "10.10.14.7"), fetch=_no_fetch
+        paths, Settings(), _env(paths), which=_found, tunnel=lambda: Tunnel("tun0", "10.10.14.7")
     )
     assert all(r.status == "ok" for r in results)
     assert [r.name for r in results] == [
-        "vim", "terminal", "tar", "venv", "display", "path", "folders", "asciinema", "vpn"
+        "vim", "terminal", "tar", "display", "path", "folders", "asciinema", "vpn"
     ]  # fmt: skip
 
 
 def test_vpn_check_names_the_address_and_interface(paths):
-    results = run_checks(paths, Settings(), _env(paths), which=_found, tunnel=lambda: Tunnel("tun1", "10.10.14.7"), fetch=_no_fetch)
+    results = run_checks(paths, Settings(), _env(paths), which=_found, tunnel=lambda: Tunnel("tun1", "10.10.14.7"))
     found = _by_name(results)["vpn"]
     assert (found.status, found.message) == ("ok", "10.10.14.7 on tun1")
 
 
 def test_vpn_check_warns_without_a_tunnel_and_never_fails(paths):
-    results = run_checks(paths, Settings(), _env(paths), which=_found, tunnel=lambda: None, fetch=_no_fetch)
+    results = run_checks(paths, Settings(), _env(paths), which=_found, tunnel=lambda: None)
     found = _by_name(results)["vpn"]
     assert (found.status, found.message, found.hint) == (
         "warn", "no VPN tunnel is up", "start one with: vpn start"
@@ -88,14 +78,14 @@ def test_vpn_check_warns_without_a_tunnel_and_never_fails(paths):
 def test_launch_checks_pass_the_tunnel_reader_through(paths, tmp_path):
     results = launch_checks(
         paths, Settings(), {"PATH": ""}, tmp_path, include_version=False,
-        tunnel=lambda: Tunnel("tun0", "10.10.14.7"), fetch=_no_fetch,
+        tunnel=lambda: Tunnel("tun0", "10.10.14.7"),
     )  # fmt: skip
     assert _by_name(results)["vpn"].message == "10.10.14.7 on tun0"
 
 
 def test_missing_vim_fails_with_install_hint(paths):
     _ready(paths)
-    results = run_checks(paths, Settings(), _env(paths), which=_missing("vim"), tunnel=_no_tunnel, fetch=_no_fetch)
+    results = run_checks(paths, Settings(), _env(paths), which=_missing("vim"), tunnel=_no_tunnel)
     vim = _by_name(results)["vim"]
     assert vim.status == "fail"
     assert "apt install vim" in vim.hint
@@ -103,7 +93,7 @@ def test_missing_vim_fails_with_install_hint(paths):
 
 def test_missing_tar_fails_with_install_hint(paths):
     _ready(paths)
-    results = run_checks(paths, Settings(), _env(paths), which=_missing("tar"), tunnel=_no_tunnel, fetch=_no_fetch)
+    results = run_checks(paths, Settings(), _env(paths), which=_missing("tar"), tunnel=_no_tunnel)
     tar = _by_name(results)["tar"]
     assert tar.status == "fail"
     assert "apt install tar" in tar.hint
@@ -112,7 +102,7 @@ def test_missing_tar_fails_with_install_hint(paths):
 def test_missing_terminal_names_setting_and_config_file(paths):
     _ready(paths)
     results = run_checks(
-        paths, Settings(terminal="kitty"), _env(paths), which=_missing("kitty"), tunnel=_no_tunnel, fetch=_no_fetch
+        paths, Settings(terminal="kitty"), _env(paths), which=_missing("kitty"), tunnel=_no_tunnel
     )
     term = _by_name(results)["terminal"]
     assert term.status == "fail"
@@ -123,7 +113,7 @@ def test_missing_terminal_names_setting_and_config_file(paths):
 def test_no_display_warns_with_manual_command(paths):
     _ready(paths)
     env = {"PATH": str(paths.bin), "DISPLAY": ""}
-    display = _by_name(run_checks(paths, Settings(), env, which=_found, tunnel=_no_tunnel, fetch=_no_fetch))["display"]
+    display = _by_name(run_checks(paths, Settings(), env, which=_found, tunnel=_no_tunnel))["display"]
     assert display.status == "warn"
     assert f"vim -u {paths.vim_dir / 'vimrc'} notes.md" in display.hint
 
@@ -131,7 +121,7 @@ def test_no_display_warns_with_manual_command(paths):
 def test_wayland_counts_as_display(paths):
     _ready(paths)
     env = {"PATH": str(paths.bin), "WAYLAND_DISPLAY": "wayland-0"}
-    assert _by_name(run_checks(paths, Settings(), env, which=_found, tunnel=_no_tunnel, fetch=_no_fetch))["display"].status == "ok"
+    assert _by_name(run_checks(paths, Settings(), env, which=_found, tunnel=_no_tunnel))["display"].status == "ok"
 
 
 def test_path_missing_warns_and_can_repair(paths):
@@ -139,7 +129,7 @@ def test_path_missing_warns_and_can_repair(paths):
     called = []
     results = run_checks(
         paths, Settings(), {"DISPLAY": ":0", "PATH": "/usr/bin"}, which=_found,
-        repair_path=lambda: called.append(1), tunnel=_no_tunnel, fetch=_no_fetch,
+        repair_path=lambda: called.append(1), tunnel=_no_tunnel,
     )  # fmt: skip
     path = _by_name(results)["path"]
     assert path.status == "warn"
@@ -151,11 +141,11 @@ def test_path_missing_warns_and_can_repair(paths):
 def test_path_must_match_an_entry_exactly(paths):
     _ready(paths)
     env = {"DISPLAY": ":0", "PATH": f"{paths.bin}-old{os.pathsep}/usr/bin"}
-    assert _by_name(run_checks(paths, Settings(), env, which=_found, tunnel=_no_tunnel, fetch=_no_fetch))["path"].status == "warn"
+    assert _by_name(run_checks(paths, Settings(), env, which=_found, tunnel=_no_tunnel))["path"].status == "warn"
 
 
 def test_folders_missing_are_repairable(paths):
-    results = run_checks(paths, Settings(), _env(paths), which=_found, run=_venv_ok, tunnel=_no_tunnel, fetch=_no_fetch)
+    results = run_checks(paths, Settings(), _env(paths), which=_found, tunnel=_no_tunnel)
     folders = _by_name(results)["folders"]
     assert folders.status == "warn"
     folders.repair()
@@ -264,7 +254,7 @@ def test_path_repair_also_writes_bashrc_when_it_exists(paths, tmp_path):
     home = tmp_path / "user"
     home.mkdir()
     (home / ".bashrc").write_text("# mine\n", encoding="utf-8")
-    [path] = [r for r in launch_checks(paths, Settings(), {"PATH": ""}, home, include_version=False, tunnel=_no_tunnel, fetch=_no_fetch) if r.name == "path"]
+    [path] = [r for r in launch_checks(paths, Settings(), {"PATH": ""}, home, include_version=False, tunnel=_no_tunnel) if r.name == "path"]
     path.repair()
     for rc in (".zshrc", ".bashrc"):
         assert paths.bin.as_posix() in (home / rc).read_text(encoding="utf-8")
@@ -274,7 +264,7 @@ def test_path_repair_also_writes_bashrc_when_it_exists(paths, tmp_path):
 def test_path_repair_leaves_a_missing_bashrc_alone(paths, tmp_path):
     home = tmp_path / "user"
     home.mkdir()
-    [path] = [r for r in launch_checks(paths, Settings(), {"PATH": ""}, home, include_version=False, tunnel=_no_tunnel, fetch=_no_fetch) if r.name == "path"]
+    [path] = [r for r in launch_checks(paths, Settings(), {"PATH": ""}, home, include_version=False, tunnel=_no_tunnel) if r.name == "path"]
     path.repair()
     assert (home / ".zshrc").exists() and not (home / ".bashrc").exists()
 
@@ -357,45 +347,18 @@ def test_version_check_quiet_when_fetch_fails():
     assert version_check(Settings(), "0.1.0", fetch=fetch) is None
 
 
-def test_venv_check_passes_when_python_can_make_environments(paths):
-    seen = []
-
-    def run(argv, **kwargs):
-        seen.append(argv)
-        return SimpleNamespace(returncode=0)
-
-    _ready(paths)
-    venv = _by_name(run_checks(paths, Settings(), _env(paths), which=_found, run=run, tunnel=_no_tunnel, fetch=_no_fetch))["venv"]
-    # venv --help works without python3-venv; ensurepip is the part that package adds
-    assert venv.status == "ok" and seen == [["python3", "-c", "import ensurepip"]]
-
-
-@pytest.mark.parametrize("failure", ["exit", "missing", "hang"])
-def test_venv_check_warns_with_the_package_hint(paths, failure):
+def test_there_is_no_venv_check_and_run_checks_runs_nothing(paths, monkeypatch):
     import subprocess
 
-    def run(argv, **kwargs):
-        if failure == "missing":
-            raise FileNotFoundError("python3")
-        if failure == "hang":
-            raise subprocess.TimeoutExpired(argv, 20)
-        return SimpleNamespace(returncode=1)
+    def refuse(*args, **kwargs):
+        raise AssertionError("a check ran a program")
 
+    monkeypatch.setattr(subprocess, "run", refuse)
+    monkeypatch.setattr(subprocess, "Popen", refuse)
     _ready(paths)
-    venv = _by_name(run_checks(paths, Settings(), _env(paths), which=_found, run=run, tunnel=_no_tunnel, fetch=_no_fetch))["venv"]
-    assert venv.status == "warn" and venv.hint == "apt install python3-venv"
-
-
-def test_a_missing_venv_does_not_stop_the_app(paths):
-    def run(argv, **kwargs):
-        return SimpleNamespace(returncode=1)
-
-    _ready(paths)
-    results = run_checks(paths, Settings(), _env(paths), which=_found, run=run, tunnel=_no_tunnel, fetch=_no_fetch)
-    assert not any(r.status == "fail" for r in results)
-    console = FakeConsole()
-    checks.report(console, results)
-    assert ("warn", "venv   python3 cannot make virtual environments") in console.lines
+    results = run_checks(paths, Settings(), _env(paths), which=_found, tunnel=_no_tunnel)
+    assert "venv" not in [r.name for r in results]
+    assert not any("python3" in r.message or "venv" in r.hint for r in results)
 
 
 def _asciinema(results):
@@ -405,38 +368,36 @@ def _asciinema(results):
 def test_asciinema_check_ok_when_present(paths, monkeypatch):
     _ready(paths)
     monkeypatch.setattr(checks.recorder, "present", lambda p: True)
-    result = _asciinema(run_checks(paths, Settings(), _env(paths), which=_found, run=_venv_ok, tunnel=_no_tunnel, fetch=_no_fetch))
+    result = _asciinema(run_checks(paths, Settings(), _env(paths), which=_found, tunnel=_no_tunnel))
     assert (result.status, result.message, result.repair) == ("ok", "asciinema 3.2.1", None)
 
 
-def test_asciinema_check_warns_when_missing_and_repairs_by_fetching(paths):
+def test_asciinema_check_warns_to_run_the_installer_again_and_offers_no_repair(paths):
     _ready(paths)
-    calls = []
-    result = _asciinema(
-        run_checks(
-            paths, Settings(), _env(paths), which=_found, run=_venv_ok, tunnel=_no_tunnel,
-            fetch=lambda p: calls.append(p),
-        )
-    )  # fmt: skip
-    assert result.status == "warn"
-    assert result.message == "asciinema is missing or does not match its checksum"
-    assert calls == []
-    result.repair()
-    assert calls == [paths]
+    result = _asciinema(run_checks(paths, Settings(), _env(paths), which=_found, tunnel=_no_tunnel))
+    assert (result.status, result.message, result.hint) == (
+        "warn",
+        "asciinema is missing or does not match its checksum",
+        "run the installer again",
+    )
+    assert result.repair is None
 
 
 def test_asciinema_check_sees_a_wrong_file(paths):
     _ready(paths)
     paths.asciinema.parent.mkdir(parents=True)
     paths.asciinema.write_bytes(b"not it")
-    results = run_checks(paths, Settings(), _env(paths), which=_found, run=_venv_ok, tunnel=_no_tunnel, fetch=_no_fetch)
+    results = run_checks(paths, Settings(), _env(paths), which=_found, tunnel=_no_tunnel)
     assert _asciinema(results).status == "warn"
 
 
-def test_report_repair_recorder_error_prints_one_fail():
-    def boom():
-        raise RecorderError("the download does not match its checksum")
-
-    c = FakeConsole(["y"])
-    report(c, [CheckResult("asciinema", "warn", "m", repair=boom)])
-    assert c.lines == [("warn", "asciinema   m"), ("fail", "the download does not match its checksum")]
+def test_reporting_a_missing_asciinema_asks_nothing_and_changes_nothing(paths):
+    _ready(paths)
+    results = run_checks(paths, Settings(), _env(paths), which=_found, tunnel=_no_tunnel)
+    console = FakeConsole([])  # an answer asked for would fail: there are none to give
+    report(console, [_asciinema(results)])
+    assert console.lines == [
+        ("warn", "asciinema   asciinema is missing or does not match its checksum"),
+        ("info", "run the installer again"),
+    ]
+    assert not paths.asciinema.exists()

@@ -1,33 +1,15 @@
 import hashlib
-import stat
 import sys
 from pathlib import Path
 
 import pytest
 
 from pwn_broker import recorder
-from pwn_broker.recorder import RecorderError, fetch, present
-from pwn_broker.toolindex import ToolError
+from pwn_broker.recorder import present
 from pwn_broker.toolinstall import sh_quote
 
 GOOD = b"pretend this is the binary"
 SUM = hashlib.sha256(GOOD).hexdigest()
-SIZE = len(GOOD)
-
-
-def writer(data):
-    seen = []
-
-    def download(url, dest, limit, timeout):
-        seen.append((url, limit, timeout))
-        dest.write_bytes(data)
-
-    download.seen = seen
-    return download
-
-
-def leftovers(paths):
-    return sorted(p.name for p in paths.asciinema.parent.iterdir() if p.name != "asciinema")
 
 
 def test_the_pin():
@@ -68,93 +50,12 @@ def test_present_hashes_the_file_each_time(paths):
     assert present(paths, sha256=SUM) is False
 
 
-def test_fetch_installs_the_right_bytes(paths):
-    download = writer(GOOD)
-    fetch(paths, download=download, timeout=7.0, size=SIZE, sha256=SUM)
-    assert paths.asciinema.read_bytes() == GOOD
-    assert download.seen == [(recorder.URL, SIZE, 7.0)]
-    assert leftovers(paths) == []
-    assert present(paths, sha256=SUM)
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="no file modes on Windows")
-def test_fetch_makes_it_executable(paths):
-    fetch(paths, download=writer(GOOD), size=SIZE, sha256=SUM)
-    assert stat.S_IMODE(paths.asciinema.stat().st_mode) == 0o755
-
-
-def test_fetch_makes_the_folder(paths):
-    assert not paths.asciinema.parent.exists()
-    fetch(paths, download=writer(GOOD), size=SIZE, sha256=SUM)
-    assert paths.asciinema.is_file()
-
-
-def test_fetch_replaces_a_wrong_copy(paths):
-    paths.asciinema.parent.mkdir(parents=True)
-    paths.asciinema.write_bytes(b"old and wrong")
-    fetch(paths, download=writer(GOOD), size=SIZE, sha256=SUM)
-    assert paths.asciinema.read_bytes() == GOOD
-
-
-def test_fetch_closes_a_refused_response(paths):
-    import io
-    import urllib.error
-
-    body = io.BytesIO(b"not found")
-    # held here, so collecting the error cannot close the body in place of the code under test
-    raised = []
-
-    def refused(url, dest, limit, timeout):
-        raised.append(urllib.error.HTTPError(url, 404, "Not Found", {}, body))
-        raise raised[-1]
-
-    with pytest.raises(RecorderError):
-        fetch(paths, download=refused, size=SIZE, sha256=SUM)
-    assert raised and body.closed
-
-
-def raising(error):
-    def download(url, dest, limit, timeout):
-        dest.write_bytes(b"partial")
-        raise error
-
-    return download
-
-
-@pytest.mark.parametrize(
-    "download,words",
-    [
-        (writer(b"x" * SIZE), "checksum"),
-        (writer(GOOD[:-1]), "size"),
-        (writer(GOOD + b"!"), "size"),
-        (raising(ToolError("the download took too long")), "took too long"),
-        (raising(OSError("no space left")), "no space left"),
-    ],
-)
-def test_a_failed_fetch_keeps_a_good_copy_and_leaves_nothing(paths, download, words):
-    paths.asciinema.parent.mkdir(parents=True)
-    paths.asciinema.write_bytes(GOOD)
-    with pytest.raises(RecorderError, match=words):
-        fetch(paths, download=download, size=SIZE, sha256=SUM)
-    assert paths.asciinema.read_bytes() == GOOD
-    assert leftovers(paths) == []
-
-
-def test_a_failed_first_fetch_installs_nothing(paths):
-    with pytest.raises(RecorderError, match="checksum"):
-        fetch(paths, download=writer(b"y" * SIZE), size=SIZE, sha256=SUM)
-    assert not paths.asciinema.exists()
-    assert leftovers(paths) == []
-
-
-def test_the_size_is_judged_before_the_checksum(paths):
-    with pytest.raises(RecorderError, match="size"):
-        fetch(paths, download=writer(b"short"), size=SIZE, sha256="0" * 64)
-
-
-def test_a_download_that_writes_nothing_is_a_size_failure(paths):
-    with pytest.raises(RecorderError, match="size"):
-        fetch(paths, download=lambda url, dest, limit, timeout: None, size=SIZE, sha256=SUM)
+def test_nothing_downloads_asciinema_and_the_pin_is_kept_for_the_build():
+    # the release carries asciinema; URL and SIZE are read by release/build.py alone
+    assert not hasattr(recorder, "fetch")
+    assert not hasattr(recorder, "RecorderError")
+    for name in ("VERSION", "URL", "SIZE", "SHA256", "present"):
+        assert hasattr(recorder, name)
 
 
 # -- the window a record command starts --

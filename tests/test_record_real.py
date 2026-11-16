@@ -183,7 +183,7 @@ def installed(paths):
     shutil.copyfile(REAL, paths.asciinema)
     os.chmod(paths.asciinema, 0o755)
     assert recorder.present(paths), (
-        f"{REAL} does not match the pinned asciinema {recorder.VERSION}; fetch it again with recorder.fetch"
+        f"{REAL} does not match the pinned asciinema {recorder.VERSION}; fetch the pinned asciinema again"
     )
     return paths
 

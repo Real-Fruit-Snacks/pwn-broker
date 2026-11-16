@@ -972,6 +972,26 @@ def test_a_schema_1_build_of_a_python_tool_installs_as_before(session, shop, pys
     assert load_box(session.box.path).tools[0].runtime is None
 
 
+def test_a_schema_1_build_that_cannot_make_its_environment_says_to_install_python3(
+    session, shop, pyshop, monkeypatch
+):
+    schema_1_certipy(shop, pyshop)
+    toolkit.no_real_venv(monkeypatch, fail="venv")
+    [fail] = lines(run(session, "tool install certipy@5.1.0-2"), "fail")
+    assert fail.endswith(
+        ". certipy 5.1.0-2 runs on Kali's own python3: apt install python3 python3-venv, "
+        "or install a build that requires a runtime"
+    )
+
+
+def test_a_build_on_a_runtime_that_fails_does_not_mention_kalis_python(
+    session, shop, pyshop, monkeypatch
+):
+    toolkit.no_real_venv(monkeypatch, fail="venv")
+    [fail] = lines(run(session, "tool install certipy"), "fail")
+    assert "Kali" not in fail and "apt install" not in fail
+
+
 def test_install_refuses_a_runtime(session, shop, pyshop):
     console = run(session, "tool install python-3.13")
     assert lines(console, "fail") == [REFUSED]

@@ -168,14 +168,14 @@ def test_status_shows_box_at_a_glance(session):
 def test_check_command_reruns_checks(session, monkeypatch):
     calls = []
 
-    def fake(paths, settings, env, home, include_version=True, tunnel=None, fetch=None):
-        calls.append((paths, settings, include_version, tunnel, fetch))
+    def fake(paths, settings, env, home, include_version=True, tunnel=None):
+        calls.append((paths, settings, include_version, tunnel))
         return [CheckResult("vim", "ok", "/usr/bin/vim")]
 
     monkeypatch.setattr(checks, "launch_checks", fake)
     monkeypatch.setattr(checks, "version_check", lambda settings: CheckResult("version", "warn", "9.9 is available"))
     dispatch(session, "check")
-    assert calls == [(session.paths, session.settings, False, session.tunnel, session.fetch)]
+    assert calls == [(session.paths, session.settings, False, session.tunnel)]
     assert session.console.lines == [("ok", "1 check passed"), ("warn", "version   9.9 is available")]
 
 
@@ -195,12 +195,12 @@ def test_check_command_does_not_wait_long_for_the_update_check(session, monkeypa
 def test_launch_checks_repairs_path_and_adds_version(paths, tmp_path, monkeypatch):
     newer = CheckResult("version", "warn", "9.9 is available, this is 0.1")
     monkeypatch.setattr(checks, "version_check", lambda settings: newer)
-    results = checks.launch_checks(paths, Settings(), {"PATH": ""}, tmp_path, tunnel=lambda: None, fetch=lambda p: None)
+    results = checks.launch_checks(paths, Settings(), {"PATH": ""}, tmp_path, tunnel=lambda: None)
     assert results[-1] is newer
     next(r for r in results if r.name == "path").repair()
     assert paths.bin.as_posix() in (tmp_path / ".zshrc").read_text(encoding="utf-8")
     monkeypatch.setattr(checks, "version_check", lambda settings: None)
-    results = checks.launch_checks(paths, Settings(), {}, tmp_path, tunnel=lambda: None, fetch=lambda p: None)
+    results = checks.launch_checks(paths, Settings(), {}, tmp_path, tunnel=lambda: None)
     assert all(r.name != "version" for r in results)
 
 

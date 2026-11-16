@@ -1,24 +1,20 @@
 import hashlib
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
-from pwn_broker import toolindex
 from pwn_broker.paths import AppPaths
 from pwn_broker.store import write_text
-from pwn_broker.toolindex import ToolError
 from pwn_broker.toolinstall import sh_quote
 
 VERSION = "3.2.1"
+# URL and SIZE are read by release/build.py alone: the app downloads nothing, it checks the copy
+# the release carries against SHA256
 URL = f"https://github.com/asciinema/asciinema/releases/download/v{VERSION}/asciinema-x86_64-unknown-linux-musl"
 SIZE = 8130064
 SHA256 = "bec9781bc8f297a9d3d74ff60205599507f2abba1183578b8b2f22be4c999214"
 
 _CHUNK = 1 << 16
-
-
-class RecorderError(Exception):
-    pass
 
 
 def _sha256(path: Path) -> str:
@@ -35,41 +31,6 @@ def present(paths: AppPaths, *, sha256: str = SHA256) -> bool:
         return paths.asciinema.is_file() and _sha256(paths.asciinema) == sha256
     except OSError:
         return False
-
-
-def fetch(
-    paths: AppPaths,
-    *,
-    download: Callable[[str, Path, int, float], None] = toolindex.download,
-    timeout: float = 120.0,
-    size: int = SIZE,
-    sha256: str = SHA256,
-) -> None:
-    """Download the pinned asciinema into place, or raise RecorderError and change nothing."""
-    target = paths.asciinema
-    temp = target.with_name(f".{target.name}.{os.getpid()}.part")
-    try:
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            download(URL, temp, size, timeout)
-            try:
-                got = temp.stat().st_size
-            except FileNotFoundError:
-                raise RecorderError("the download has the wrong size: nothing was written") from None
-            if got != size:
-                raise RecorderError(f"the download has the wrong size: {got} bytes, expected {size}")
-            if _sha256(temp) != sha256:
-                raise RecorderError("the download does not match its checksum")
-            os.chmod(temp, 0o755)
-            os.replace(temp, target)
-        except (ToolError, OSError) as exc:
-            toolindex.close_response(exc)
-            raise RecorderError(str(exc)) from exc
-    finally:
-        try:
-            temp.unlink()
-        except OSError:
-            pass
 
 
 # The shell a recorded window runs gets the user's own startup files, then the [rec <target>]

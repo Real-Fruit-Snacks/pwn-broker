@@ -412,82 +412,91 @@ def test_start_setup_subcommand(env, monkeypatch, ran):
     calls = []
     monkeypatch.setattr(setup, "install_data", lambda p: calls.append("data"))
     monkeypatch.setattr(setup, "write_launcher", lambda p, py: calls.append(("launcher", py)))
+    monkeypatch.setattr(cli.recorder, "present", lambda p: True)
 
     def nope(*a, **k):
         raise AssertionError("must not run")
 
     monkeypatch.setattr(checks, "launch_checks", nope)
     monkeypatch.setattr(privilege, "wrong_owner", nope)
-    env.environ = {**env.environ, "PWN_BROKER_SKIP_ASCIINEMA": "1"}
     assert start(env, ["setup"]) == 0
     assert calls[0] == "data" and calls[1][0] == "launcher"
-    assert len(lines(env, "ok")) == 2 and ran == []
+    assert len(lines(env, "ok")) == 3 and ran == []
 
 
-def _setup_env(env, monkeypatch, **environ):
+def _setup_env(env, monkeypatch):
     monkeypatch.setattr(setup, "install_data", lambda p: None)
     monkeypatch.setattr(setup, "write_launcher", lambda p, py: Path("/opt/bin/pwn-broker"))
-    env.environ = {**env.environ, **environ}
-    fetched = []
-    env.fetch = fetched.append
-    return fetched
 
 
-def test_setup_fetches_asciinema(env, monkeypatch):
-    fetched = _setup_env(env, monkeypatch)
-    assert start(env, ["setup"]) == 0
-    assert fetched == [env.paths]
-    assert lines(env, "ok")[-1] == f"asciinema 3.2.1 in {env.paths.asciinema}"
+def _shut_network(monkeypatch):
+    import socket
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("setup contacted the network")
+
+    monkeypatch.setattr(socket, "socket", refuse)
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
 
 
-@pytest.mark.parametrize("value", ["1", "yes", "x"])
-def test_setup_skips_asciinema_when_asked(env, monkeypatch, value):
-    fetched = _setup_env(env, monkeypatch, PWN_BROKER_SKIP_ASCIINEMA=value)
-    assert start(env, ["setup"]) == 0
-    assert fetched == [] and len(lines(env, "ok")) == 2 and lines(env, "warn") == []
+def _put_asciinema(env, monkeypatch, data=b"the pinned asciinema"):
+    import hashlib
+
+    # the pin is a default of present(), so the stand-in pin is set there
+    monkeypatch.setattr(
+        cli.recorder.present, "__kwdefaults__", {"sha256": hashlib.sha256(data).hexdigest()}
+    )
+    env.paths.asciinema.parent.mkdir(parents=True, exist_ok=True)
+    return env.paths.asciinema
 
 
-def test_setup_an_empty_skip_variable_does_not_skip(env, monkeypatch):
-    fetched = _setup_env(env, monkeypatch, PWN_BROKER_SKIP_ASCIINEMA="")
-    assert start(env, ["setup"]) == 0
-    assert fetched == [env.paths]
-
-
-def test_setup_does_not_fetch_what_is_present(env, monkeypatch):
-    fetched = _setup_env(env, monkeypatch)
-    monkeypatch.setattr(cli.recorder, "present", lambda p: True)
-    assert start(env, ["setup"]) == 0
-    assert fetched == []
-    assert lines(env, "ok")[-1] == f"asciinema 3.2.1 in {env.paths.asciinema}"
-
-
-def test_setup_warns_when_the_fetch_fails_and_still_succeeds(env, monkeypatch):
+def test_setup_reports_the_asciinema_that_matches(env, monkeypatch):
     _setup_env(env, monkeypatch)
-
-    def refuse(paths):
-        raise cli.recorder.RecorderError("the download does not match its checksum")
-
-    env.fetch = refuse
+    _shut_network(monkeypatch)
+    _put_asciinema(env, monkeypatch).write_bytes(b"the pinned asciinema")
     assert start(env, ["setup"]) == 0
-    assert lines(env, "warn") == [
-        "asciinema was not installed: the download does not match its checksum. "
-        "record and replay will not work until it is: run check in the prompt"
+    assert lines(env, "ok")[-1] == f"asciinema 3.2.1 in {env.paths.asciinema}"
+    assert lines(env, "fail") == [] and lines(env, "warn") == []
+
+
+@pytest.mark.parametrize("state", ["missing", "wrong"])
+def test_setup_fails_when_asciinema_is_missing_or_wrong(env, monkeypatch, state):
+    _setup_env(env, monkeypatch)
+    _shut_network(monkeypatch)
+    target = _put_asciinema(env, monkeypatch)
+    if state == "wrong":
+        target.write_bytes(b"something else")
+    assert start(env, ["setup"]) == 1
+    assert lines(env, "fail") == [
+        f"asciinema is missing from {env.paths.asciinema} or does not match its checksum. "
+        "run the installer again"
     ]
+    assert not any(t.startswith("asciinema 3") for t in lines(env, "ok"))
+    # nothing was fetched or written in its place
+    if state == "wrong":
+        assert target.read_bytes() == b"something else"
+    else:
+        assert not target.exists()
 
 
-def test_a_test_env_cannot_reach_the_network(env):
+def test_recorder_cannot_download_and_the_env_has_no_fetch(env):
+    from dataclasses import fields
+
     from pwn_broker import recorder
+    from pwn_broker.session import Session
 
-    assert env.fetch is not recorder.fetch
-    env.fetch(env.paths)
+    assert not hasattr(recorder, "fetch") and not hasattr(recorder, "RecorderError")
+    assert not hasattr(env, "fetch")
+    assert "fetch" not in {f.name for f in fields(cli.Env)} | {f.name for f in fields(Session)}
 
 
 def test_launch_checks_can_skip_version(paths, tmp_path, monkeypatch):
     called = []
     monkeypatch.setattr(checks, "version_check", lambda s: called.append(1))
-    checks.launch_checks(paths, Settings(), {}, tmp_path, include_version=False, tunnel=lambda: None, fetch=lambda p: None)
+    checks.launch_checks(paths, Settings(), {}, tmp_path, include_version=False, tunnel=lambda: None)
     assert called == []
-    checks.launch_checks(paths, Settings(), {}, tmp_path, tunnel=lambda: None, fetch=lambda p: None)
+    checks.launch_checks(paths, Settings(), {}, tmp_path, tunnel=lambda: None)
     assert called == [1]
 
 
@@ -601,7 +610,7 @@ def test_start_runs_the_checks_then_the_update_check(env, quiet, monkeypatch, bo
     )
     env.cwd = box.path
     start(env, [])
-    assert order == [("checks", {"include_version": False, "tunnel": env.tunnel, "fetch": env.fetch}), "version"]
+    assert order == [("checks", {"include_version": False, "tunnel": env.tunnel}), "version"]
 
 
 def test_main_reports_unexpected_errors(monkeypatch, tmp_path, capsys):
@@ -810,18 +819,3 @@ def test_prepare_leaves_an_existing_record_launcher_alone(env, quiet):
     env.paths.record_launcher.write_bytes(b"mine\n")
     assert cli._prepare(env) is None
     assert env.paths.record_launcher.read_bytes() == b"mine\n"
-
-
-def test_prepare_passes_its_fetch_to_the_checks(env, monkeypatch):
-    seen = {}
-    monkeypatch.setattr(privilege, "wrong_owner", lambda path: None)
-    monkeypatch.setattr(checks, "version_check", lambda settings: None)
-
-    def fake(*a, **k):
-        seen.update(k)
-        return []
-
-    monkeypatch.setattr(checks, "launch_checks", fake)
-    setup.install_data(env.paths)
-    assert cli._prepare(env) is None
-    assert seen["fetch"] == env.fetch

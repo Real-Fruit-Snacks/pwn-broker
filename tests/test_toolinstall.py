@@ -1672,6 +1672,84 @@ def test_a_schema_1_python_tool_still_uses_kalis_python(paths, box, tmp_path):
     assert "requires" not in paths.tools_state.read_text(encoding="utf-8")
 
 
+KALI_PYTHON = (
+    ". kerbrute 1.0.3-1 runs on Kali's own python3: apt install python3 python3-venv, "
+    "or install a build that requires a runtime"
+)
+
+
+class NoPython(FakeRun):
+    """Kali's python3 cannot be found, cannot run, or reports nothing."""
+
+    def __init__(self, how):
+        super().__init__(version="")
+        self.how = how
+
+    def __call__(self, argv, **kwargs):
+        if argv[1:3] == ["-I", "-c"] and self.how == "missing":
+            self.calls.append(list(argv))
+            raise FileNotFoundError("python3")
+        if argv[1:3] == ["-I", "-c"] and self.how == "exits":
+            self.calls.append(list(argv))
+            return SimpleNamespace(returncode=127, stdout="", stderr="")
+        return super().__call__(argv, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "how,said",
+    [
+        ("missing", "python3 was not found (python3)"),
+        ("exits", "python3 was not found or did not run"),
+        ("silent", "python3 could not report its version"),
+    ],
+)
+def test_a_schema_1_tool_says_what_to_do_when_kalis_python_is_not_usable(
+    paths, box, tmp_path, how, said
+):
+    zip_path, entry = python_zip(tmp_path)
+    with pytest.raises(ToolError) as caught:
+        do_install(paths, box, entry, zip_path, tmp_path, run=NoPython(how))
+    assert str(caught.value) == said + KALI_PYTHON
+    assert_nothing_left(paths)
+
+
+def test_a_schema_1_tool_says_what_to_do_when_the_environment_cannot_be_made(paths, box, tmp_path):
+    zip_path, entry = python_zip(tmp_path)
+    with pytest.raises(ToolError) as caught:
+        do_install(paths, box, entry, zip_path, tmp_path, run=FakeRun(fail_at=1))
+    message = str(caught.value)
+    assert message.startswith("creating the virtual environment failed (exit 1):")
+    assert message.endswith("boom" + KALI_PYTHON)
+    assert_nothing_left(paths)
+
+
+def test_a_schema_1_tool_does_not_get_the_sentence_for_a_pip_failure(paths, box, tmp_path):
+    zip_path, entry = python_zip(tmp_path)
+    with pytest.raises(ToolError) as caught:
+        do_install(paths, box, entry, zip_path, tmp_path, run=FakeRun(fail_at=2))
+    assert "python3" not in str(caught.value) and "boom" in str(caught.value)
+
+
+@pytest.mark.parametrize("failure", ["environment", "interpreter cannot run"])
+def test_a_tool_on_a_runtime_never_gets_the_sentence(paths, box, tmp_path, failure):
+    rt, _c, installed = rt_install(paths, tmp_path)
+    zip_path, entry = runtime_tool(tmp_path)
+
+    class Broken(FakeRun):
+        def __call__(self, argv, **kwargs):
+            super().__call__(argv, **kwargs)
+            if failure == "interpreter cannot run":
+                raise FileNotFoundError(argv[0])
+            return SimpleNamespace(returncode=1, stdout="", stderr="no venv\n")
+
+    with pytest.raises(ToolError) as caught:
+        do_install(
+            paths, box, entry, zip_path, tmp_path, installed=installed, run=Broken(), runtime=rt
+        )
+    assert "creating the virtual environment" in str(caught.value)
+    assert "runs on Kali" not in str(caught.value) and "apt install" not in str(caught.value)
+
+
 def test_install_refuses_a_runtime(paths, box, tmp_path):
     zip_path, entry = toolkit.make_runtime(tmp_path / "rtzips")
     with pytest.raises(ToolError, match="python-3.13 is a runtime; it is installed with the tools"):

@@ -1,7 +1,6 @@
 import json
 import os
 import shutil
-import subprocess
 import threading
 import urllib.request
 from collections.abc import Callable, Mapping
@@ -34,31 +33,14 @@ def _tool(name: str, binary: str, which: Callable[[str], str | None], hint: str)
     return CheckResult(name, "fail", f"{binary} not found", hint)
 
 
-def _venv(run: Callable) -> CheckResult:
-    # venv --help answers even without python3-venv; ensurepip is what that package adds.
-    # Only Python tools need it, so a missing one is a warning, not a reason to stop
-    try:
-        done = run(["python3", "-c", "import ensurepip"], capture_output=True, timeout=20)
-        working = done.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        working = False
-    if working:
-        return CheckResult("venv", "ok", "python3 can make virtual environments")
-    return CheckResult(
-        "venv", "warn", "python3 cannot make virtual environments", "apt install python3-venv"
-    )
-
-
 def run_checks(
     paths: AppPaths,
     settings: Settings,
     env: Mapping[str, str],
     which: Callable[[str], str | None] = shutil.which,
     repair_path: Callable[[], None] | None = None,
-    run: Callable = subprocess.run,
     *,
     tunnel: Callable[[], vpn.Tunnel | None],
-    fetch: Callable[[AppPaths], None],
 ) -> list[CheckResult]:
     results = [
         _tool("vim", "vim", which, "apt install vim"),
@@ -69,7 +51,6 @@ def run_checks(
             f"install {settings.terminal} or set terminal in {paths.config_file}",
         ),
         _tool("tar", "tar", which, "apt install tar"),
-        _venv(run),
     ]
 
     if has_display(env):
@@ -116,7 +97,7 @@ def run_checks(
                 "asciinema",
                 "warn",
                 "asciinema is missing or does not match its checksum",
-                repair=lambda: fetch(paths),
+                "run the installer again",
             )
         )
 
@@ -157,7 +138,7 @@ def _offer_repair(console: Console, name: str, repair: Callable[[], None]) -> No
         return
     try:
         repair()
-    except (OSError, ValueError, recorder.RecorderError) as exc:
+    except (OSError, ValueError) as exc:
         console.fail(str(exc))
     else:
         console.ok(f"{name} fixed")
@@ -236,7 +217,6 @@ def launch_checks(
     include_version: bool = True,
     *,
     tunnel: Callable[[], vpn.Tunnel | None],
-    fetch: Callable[[AppPaths], None],
 ) -> list[CheckResult]:
     def add_path_lines() -> None:
         # the same rc files the installer writes to
@@ -244,8 +224,7 @@ def launch_checks(
         if (home / ".bashrc").exists():
             setup.ensure_path_line(home / ".bashrc", paths.bin)
 
-    results = run_checks(paths, settings, env, repair_path=add_path_lines, tunnel=tunnel, fetch=fetch
-    )
+    results = run_checks(paths, settings, env, repair_path=add_path_lines, tunnel=tunnel)
     if include_version:
         version = version_check(settings)
         if version is not None:

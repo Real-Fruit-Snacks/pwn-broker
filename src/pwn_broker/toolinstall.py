@@ -491,24 +491,44 @@ def _join(
     return current
 
 
+def _venv_on_kalis_python(manifest: Manifest, folder: Path, python: str, run) -> None:
+    """A schema 1 tool has no runtime: its environment is made with Kali's own python3."""
+    spec = manifest.python
+    venv = folder / "venv"
+    advice = (
+        f". {manifest.name} {build_id(manifest.version, manifest.build)} runs on Kali's own "
+        "python3: apt install python3 python3-venv, or install a build that requires a runtime"
+    )
+    try:
+        found = python_version(python, folder, run)
+    except ToolError as exc:
+        raise ToolError(f"{exc}{advice}") from exc
+    if found not in spec.versions:
+        raise ToolError(
+            f"{manifest.name} supports Python {', '.join(spec.versions)}; "
+            f"this machine has {found}"
+        )
+    try:
+        _run_checked(
+            run, [python, "-I", "-m", "venv", str(venv)], "creating the virtual environment", folder
+        )
+    except ToolError as exc:
+        raise ToolError(f"{exc}{advice}") from exc
+
+
 def _build_venv(
     manifest: Manifest, folder: Path, python: str, run, runtime: Installed | None
 ) -> None:
     spec = manifest.python
+    venv = folder / "venv"
     if runtime is not None:
         # the wheels are built for the runtime's series, so there is no version to check
         python = runtime.python
+        _run_checked(
+            run, [python, "-I", "-m", "venv", str(venv)], "creating the virtual environment", folder
+        )
     else:
-        found = python_version(python, folder, run)
-        if found not in spec.versions:
-            raise ToolError(
-                f"{manifest.name} supports Python {', '.join(spec.versions)}; "
-                f"this machine has {found}"
-            )
-    venv = folder / "venv"
-    _run_checked(
-        run, [python, "-I", "-m", "venv", str(venv)], "creating the virtual environment", folder
-    )
+        _venv_on_kalis_python(manifest, folder, python, run)
     lock = folder / Path(*spec.lock.split("/"))
     try:
         with open(lock, "rb") as fh:
