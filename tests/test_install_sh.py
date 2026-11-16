@@ -221,10 +221,16 @@ def add_link(tar, name, target):
     tar.addfile(info)
 
 
-def python_archive(bin_is_a_link=False):
+def python_archive(bin_is_a_link=False, marker=None):
+    """A stand-in Python build. marker, if given, is a member named python/.pwn-broker: bytes
+    for a file or a Link."""
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
         add_folder(tar, "python")
+        if isinstance(marker, Link):
+            add_link(tar, "python/.pwn-broker", marker)
+        elif marker is not None:
+            add_file(tar, "python/.pwn-broker", marker)
         if bin_is_a_link:
             add_folder(tar, "python/real-bin")
             add_file(tar, "python/real-bin/python3", FAKE_PYTHON.encode(), 0o755)
@@ -270,6 +276,8 @@ class Rig:
         self.shell = shell
         self.tmp = tmp_path
         self.opt = tmp_path / "opt"
+        # the install folder as the shell spells it, since the installer takes only an absolute path
+        self.opt_text = sh_path(self.opt)
         self.home = tmp_path / "home"
         self.home.mkdir()
         self.log = tmp_path / "python.log"
@@ -286,7 +294,7 @@ class Rig:
     def run(self, *args, cwd=None, **extra_env):
         env = {
             **os.environ,
-            "PWN_BROKER_OPT": self.opt.as_posix(),
+            "PWN_BROKER_OPT": self.opt_text,
             "HOME": self.home.as_posix(),
             "PATH": f"{self.fakebin}{os.pathsep}{os.environ['PATH']}",
             "FAKE_PY_LOG": self.log.as_posix(),
@@ -334,7 +342,7 @@ def ok_lines(result):
 def test_a_full_install_runs_every_step_in_order(rig):
     result = rig.install()
     assert result.returncode == 0, result.stderr
-    opt = rig.opt.as_posix()
+    opt = rig.opt_text
     digest = hashlib.sha256(rig.release.read_bytes()).hexdigest()
     zshrc = (rig.home / ".zshrc").as_posix()
     if sys.platform == "win32":
@@ -377,6 +385,7 @@ def test_a_full_install_runs_every_step_in_order(rig):
 
     assert (rig.opt / "python/bin/python3").read_bytes() == FAKE_PYTHON.encode()
     assert (rig.opt / "python/lib/README").exists()
+    assert (rig.opt / "python/.pwn-broker").read_bytes() == b""
     assert (rig.opt / "app/pyvenv.cfg").exists()
     assert (rig.opt / "app/bin/asciinema").read_bytes() == b"asciinema stand-in\n"
     assert rig.work_folders() == []
@@ -442,7 +451,7 @@ def test_config_is_copied_after_setup(rig):
     settings.write_text("x = 1\n")
     result = rig.install("--no-path", "--config", str(settings))
     assert result.returncode == 0, result.stderr
-    assert ok_lines(result)[-2] == f"ok    settings copied to {rig.opt.as_posix()}/config.toml"
+    assert ok_lines(result)[-2] == f"ok    settings copied to {rig.opt_text}/config.toml"
     assert (rig.opt / "config.toml").read_text() == "x = 1\n"
 
 
@@ -450,6 +459,7 @@ def previous_install(rig):
     """An install folder as a user has it: an app of its own and data that must survive."""
     (rig.opt / "python/bin").mkdir(parents=True)
     (rig.opt / "python/bin/python3").write_text("old python\n")
+    (rig.opt / "python/.pwn-broker").write_bytes(b"")
     (rig.opt / "app").mkdir()
     (rig.opt / "app/pyvenv.cfg").write_text("home = old\n")
     (rig.opt / "config.toml").write_text("theme = 'dark'\n")
@@ -467,7 +477,11 @@ def broken_releases(tmp):
     bad_version = write_release(tmp / "version" / RELEASE_NAME, top="pwn-broker-0.4;0")
     plain = tmp / "plain" / RELEASE_NAME
     plain.write_bytes(b"not an archive\n")
+    marked_members = release_members()
+    marked_members["python.tar.gz"] = python_archive(marker=b"")
+    marked = write_release(tmp / "marker" / RELEASE_NAME, members=marked_members)
     return {
+        "a Python that carries the installer's marker": marked,
         "truncated": truncated,
         "wrong layout": wrong_layout,
         "two top folders": two_tops,
@@ -478,7 +492,7 @@ def broken_releases(tmp):
 
 
 def test_a_file_that_is_not_a_release_changes_nothing(rig):
-    for sub in ("layout", "two", "name", "version", "plain"):
+    for sub in ("layout", "two", "name", "version", "plain", "marker"):
         (rig.tmp / sub).mkdir()
     previous_install(rig)
     before = snapshot(rig.opt)
@@ -498,11 +512,14 @@ def linked_releases(tmp):
     folder_link["wheels"] = Link("licences")
     python_bin_link = release_members()
     python_bin_link["python.tar.gz"] = python_archive(bin_is_a_link=True)
+    marker_link = release_members()
+    marker_link["python.tar.gz"] = python_archive(marker=Link("../../../../outside"))
     found = {}
     for case, members in (
         ("asciinema is a link", file_link),
         ("wheels is a link", folder_link),
         ("python/bin is a link", python_bin_link),
+        ("python/.pwn-broker is a link", marker_link),
     ):
         folder = tmp / case.replace(" ", "-").replace("/", "-")
         folder.mkdir()
@@ -548,9 +565,114 @@ def test_a_python_folder_that_is_not_ours_is_refused(rig):
     result = rig.install("--no-path")
     assert result.returncode == 1
     assert result.stderr.splitlines() == [
-        f"fail  {rig.opt.as_posix()}/python exists and is not a pwn-broker Python. move it or choose another folder"
+        f"fail  {rig.opt_text}/python exists and is not a pwn-broker Python. move it or choose another folder"
     ]
     assert snapshot(rig.opt) == before
+
+
+def test_a_python_without_the_installer_s_marker_is_refused_and_untouched(rig):
+    # a Python of someone else's, with bin/python3 but not the marker the installer writes
+    previous_install(rig)
+    (rig.opt / "python/.pwn-broker").unlink()
+    before = snapshot(rig.opt)
+    result = rig.install("--no-path")
+    assert result.returncode == 1
+    assert result.stderr.splitlines() == [
+        f"fail  {rig.opt_text}/python exists and is not a pwn-broker Python. move it or choose another folder"
+    ]
+    assert snapshot(rig.opt) == before
+    assert rig.work_folders() == []
+
+
+def test_a_python_with_the_installer_s_marker_is_replaced(rig):
+    previous_install(rig)
+    result = rig.install("--no-path")
+    assert result.returncode == 0, result.stderr
+    assert (rig.opt / "python/bin/python3").read_bytes() == FAKE_PYTHON.encode()
+    assert (rig.opt / "python/.pwn-broker").read_bytes() == b""
+    assert (rig.opt / "config.toml").read_text() == "theme = 'dark'\n"
+
+
+@pytest.mark.parametrize("value", ["opt", "./opt", "opt/pwn-broker", "~/opt"])
+def test_an_install_folder_that_is_not_absolute_is_refused(rig, value):
+    result = rig.run("--no-path", "--from", sh_path(rig.release), cwd=rig.tmp, PWN_BROKER_OPT=value)
+    assert result.returncode == 1
+    assert result.stderr.splitlines() == [f"fail  PWN_BROKER_OPT must be an absolute path, not {value}"]
+    assert result.stdout == ""
+    assert not (rig.tmp / "opt").exists() and not (rig.tmp / "~").exists()
+    assert rig.calls() == []
+
+
+ROOT_SPELLINGS = ["/", "/.", "/./", "/./."] + ([] if sys.platform == "win32" else ["//", "///."])
+
+
+@pytest.mark.parametrize("value", ROOT_SPELLINGS)
+def test_an_install_folder_that_is_the_root_is_refused(rig, value):
+    result = rig.install("--no-path", PWN_BROKER_OPT=value)
+    assert result.returncode == 1
+    assert result.stderr.splitlines() == ["fail  the install folder must not be empty or /"]
+    assert result.stdout == ""
+    assert rig.calls() == []
+
+
+def test_an_install_folder_made_by_the_installer_that_resolves_to_the_root_is_refused(rig):
+    # mkdir -p makes new/, and the .. after it climb to /
+    new = sh_path(rig.tmp / "new")
+    value = new + "/.." * len(new.strip("/").split("/"))
+    result = rig.install("--no-path", PWN_BROKER_OPT=value)
+    assert result.returncode == 1
+    assert result.stderr.splitlines() == ["fail  the install folder must not be empty or /"]
+    assert result.stdout == ""
+    assert (rig.tmp / "new").is_dir() and list((rig.tmp / "new").iterdir()) == []
+    assert rig.calls() == []
+
+
+def an_upgrade_whose_path_line_cannot_be_written(rig, result):
+    """The install is complete and kept: the new Python and app, not the previous ones."""
+    assert result.returncode == 1
+    assert "ok    launcher and data written in " in result.stdout
+    assert PUT_BACK not in result.stdout
+    assert "PATH line" not in result.stdout
+    assert (rig.opt / "python/bin/python3").read_bytes() == FAKE_PYTHON.encode()
+    assert (rig.opt / "app/pyvenv.cfg").read_text().startswith("home = ")
+    assert (rig.opt / "config.toml").read_text() == "theme = 'dark'\n"
+    assert rig.work_folders() == []
+
+
+def test_a_home_that_cannot_be_written_is_one_fail_line_after_the_install(rig):
+    previous_install(rig)
+    gone = rig.tmp / "gone" / "home"
+    result = rig.install(HOME=gone.as_posix())
+    an_upgrade_whose_path_line_cannot_be_written(rig, result)
+    (line,) = result.stderr.splitlines()
+    tail = f". pwn-broker is installed; add {rig.opt_text}/bin to your PATH yourself"
+    if sys.platform == "win32":
+        # Git Bash hands the script $HOME in its own spelling
+        assert line.startswith("fail  cannot write ") and line.endswith(f"/gone/home/.zshrc{tail}")
+    else:
+        assert line == f"fail  cannot write {gone.as_posix()}/.zshrc{tail}"
+    assert not gone.exists()
+
+
+@not_on_windows
+def test_an_unset_home_is_one_fail_line_after_the_install(rig):
+    # on Windows, Git Bash would make up a HOME of its own
+    previous_install(rig)
+    env = {
+        **os.environ,
+        "PWN_BROKER_OPT": rig.opt_text,
+        "PATH": f"{rig.fakebin}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_PY_LOG": rig.log.as_posix(),
+        "FAKE_MACHINE_LOG": rig.machine_log.as_posix(),
+    }
+    env.pop("HOME", None)
+    result = subprocess.run(
+        [rig.shell, str(SCRIPT), "--from", sh_path(rig.release)], capture_output=True, text=True, env=env
+    )
+    an_upgrade_whose_path_line_cannot_be_written(rig, result)
+    assert result.stderr.splitlines() == [
+        f"fail  cannot write ~/.zshrc. pwn-broker is installed; add {rig.opt_text}/bin to your PATH yourself"
+    ]
 
 
 def test_an_app_folder_that_is_not_ours_is_refused_and_python_is_kept(rig):
@@ -561,7 +683,7 @@ def test_an_app_folder_that_is_not_ours_is_refused_and_python_is_kept(rig):
     result = rig.install("--no-path")
     assert result.returncode == 1
     assert result.stderr.splitlines() == [
-        f"fail  {rig.opt.as_posix()}/app exists and is not a pwn-broker environment. move it or choose another folder"
+        f"fail  {rig.opt_text}/app exists and is not a pwn-broker environment. move it or choose another folder"
     ]
     assert snapshot(rig.opt) == before
 
@@ -597,7 +719,7 @@ def test_a_python_or_app_that_is_a_link_is_refused(rig, name, line):
     before, before_target = snapshot(rig.opt), snapshot(target)
     result = rig.install("--no-path")
     assert result.returncode == 1
-    assert result.stderr.splitlines() == [line.format(opt=rig.opt.as_posix())]
+    assert result.stderr.splitlines() == [line.format(opt=rig.opt_text)]
     assert (rig.opt / name).is_symlink() and os.readlink(rig.opt / name) == str(target)
     assert snapshot(rig.opt) == before
     assert snapshot(target) == before_target
@@ -644,7 +766,7 @@ def run_merged(rig, *args, **extra_env):
     """A run with stderr folded into stdout, to see the order of the fail and ok lines."""
     env = {
         **os.environ,
-        "PWN_BROKER_OPT": rig.opt.as_posix(),
+        "PWN_BROKER_OPT": rig.opt_text,
         "HOME": rig.home.as_posix(),
         "PATH": f"{rig.fakebin}{os.pathsep}{os.environ['PATH']}",
         "FAKE_PY_LOG": rig.log.as_posix(),
@@ -666,7 +788,7 @@ def test_a_failed_upgrade_puts_the_previous_install_back(rig, step, line):
     before = snapshot(rig.opt)
     result = run_merged(rig, "--no-path", FAKE_PY_FAIL=step)
     assert result.returncode == 1
-    assert result.stdout.splitlines()[-2:] == [line.format(opt=rig.opt.as_posix()), PUT_BACK]
+    assert result.stdout.splitlines()[-2:] == [line.format(opt=rig.opt_text), PUT_BACK]
     assert snapshot(rig.opt) == before
     assert rig.work_folders() == []
     # once the step passes, the same folder installs
@@ -710,7 +832,7 @@ def test_a_second_signal_during_the_put_back_does_not_stop_it(rig, signal):
 def test_a_failed_first_install_leaves_no_python_and_no_app(rig, step, line):
     result = rig.install("--no-path", FAKE_PY_FAIL=step)
     assert result.returncode == 1
-    assert result.stderr.splitlines() == [line.format(opt=rig.opt.as_posix())]
+    assert result.stderr.splitlines() == [line.format(opt=rig.opt_text)]
     assert PUT_BACK not in result.stdout
     assert sorted(p.name for p in rig.opt.iterdir()) == []
 

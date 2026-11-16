@@ -18,7 +18,7 @@ usage_full() {
   --help           show this text
 
 Run it as the user who will use pwn-broker, not with sudo.
-PWN_BROKER_OPT sets the install folder (default /opt/pwn-broker).
+PWN_BROKER_OPT sets the install folder, an absolute path (default /opt/pwn-broker).
 HELP
 }
 
@@ -31,24 +31,38 @@ fail() {
     exit 1
 }
 
+refuse_root() {
+    resolved="$(cd "$OPT" && pwd -P)" || fail "cannot open $OPT"
+    if [ "$resolved" = "/" ]; then
+        fail "the install folder must not be empty or /"
+    fi
+}
+
 need() {
     command -v "$1" >/dev/null 2>&1 || fail "$1 is not installed. run: apt install $2"
+}
+
+# By now the install is complete, so a file that cannot be written is one fail line that says
+# so; the previous install is not put back.
+cannot_write() {
+    fail "cannot write $1. pwn-broker is installed; add $OPT/bin to your PATH yourself"
 }
 
 add_path_line() {
     rc="$1"
     if [ -f "$rc" ]; then
-        if grep -qF '# pwn-broker' "$rc"; then
+        if grep -qF '# pwn-broker' "$rc" 2>/dev/null; then
             ok "PATH line already in $rc"
             return 0
         fi
-        if [ -n "$(tail -c 1 "$rc")" ]; then
-            printf '\n' >>"$rc"
+        last="$(tail -c 1 "$rc" 2>/dev/null)" || cannot_write "$rc"
+        if [ -n "$last" ]; then
+            { printf '\n' >>"$rc"; } 2>/dev/null || cannot_write "$rc"
         fi
     fi
     # $PATH is written as it stands, for the shell that reads the file to expand
     # shellcheck disable=SC2016
-    printf 'export PATH="%s/bin:$PATH"  # pwn-broker\n' "$OPT" >>"$rc"
+    { printf 'export PATH="%s/bin:$PATH"  # pwn-broker\n' "$OPT" >>"$rc"; } 2>/dev/null || cannot_write "$rc"
     ok "PATH line added to $rc"
 }
 
@@ -137,7 +151,11 @@ main() {
     done
 
     OPT="${PWN_BROKER_OPT:-/opt/pwn-broker}"
-    if [ -z "$OPT" ] || [ "$OPT" = "/" ]; then
+    case "$OPT" in
+        /*) ;;
+        *) fail "PWN_BROKER_OPT must be an absolute path, not $OPT" ;;
+    esac
+    if [ "$OPT" = "/" ]; then
         fail "the install folder must not be empty or /"
     fi
 
@@ -177,14 +195,20 @@ main() {
         fail "pwn-broker is built for x86_64 Linux. this machine is $arch"
     fi
 
+    # a path such as //, /. or /x/.. is / itself: each branch looks at where the folder really
+    # is before it uses it, and before sudo chown could be given /
     if [ -d "$OPT" ]; then
+        refuse_root
         owner_uid="$(stat -c %u "$OPT")"
         if [ "$owner_uid" != "$(id -u)" ]; then
             owner_name="$(stat -c %U "$OPT")"
             fail "$OPT belongs to $owner_name. run the installer as that user"
         fi
-    elif ! mkdir -p "$OPT" 2>/dev/null; then
+    elif mkdir -p "$OPT" 2>/dev/null; then
+        refuse_root
+    else
         sudo mkdir -p "$OPT" || fail "cannot create $OPT"
+        refuse_root
         if ! sudo chown "$(id -u):$(id -g)" "$OPT"; then
             sudo rmdir "$OPT" || true
             fail "cannot give $OPT to $(id -un)"
@@ -260,13 +284,22 @@ main() {
             fail "$not_release"
         fi
     done
+    # the installer writes the marker .pwn-broker itself; a Python that carries one, perhaps a
+    # link to a file elsewhere, is not a release's
+    if [ -e "$WORK/py/python/.pwn-broker" ] || [ -L "$WORK/py/python/.pwn-broker" ]; then
+        fail "$not_release"
+    fi
     no_python="the Python in this release does not run on this machine. pwn-broker needs x86_64 Linux with glibc"
     "$WORK/py/python/bin/python3" -I -c 'import sys' >/dev/null 2>&1 || fail "$no_python"
     PY_VERSION="$("$WORK/py/python/bin/python3" -I -c 'import platform; print(platform.python_version())' 2>/dev/null)" || fail "$no_python"
+    # the marker goes in before the Python is moved into place, so a kill between the two cannot
+    # leave this installer's Python without it
+    : >"$WORK/py/python/.pwn-broker" || fail "cannot write $WORK/py/python/.pwn-broker"
 
-    # only folders this installer made are moved aside: a Python holds bin/python3, an environment pyvenv.cfg
+    # only folders this installer made are moved aside: its Python holds the marker .pwn-broker,
+    # an environment pyvenv.cfg
     if [ -e "$OPT/python" ] || [ -L "$OPT/python" ]; then
-        if [ -L "$OPT/python" ] || [ ! -d "$OPT/python" ] || { [ ! -e "$OPT/python/bin/python3" ] && [ ! -L "$OPT/python/bin/python3" ]; }; then
+        if [ -L "$OPT/python" ] || [ ! -d "$OPT/python" ] || [ -L "$OPT/python/.pwn-broker" ] || [ ! -f "$OPT/python/.pwn-broker" ]; then
             fail "$OPT/python exists and is not a pwn-broker Python. move it or choose another folder"
         fi
     fi
@@ -314,6 +347,11 @@ main() {
     fi
 
     if [ "$NO_PATH" -eq 0 ]; then
+        if [ -z "${HOME-}" ]; then
+            # the name is printed, not opened
+            # shellcheck disable=SC2088
+            cannot_write "~/.zshrc"
+        fi
         add_path_line "$HOME/.zshrc"
         if [ -f "$HOME/.bashrc" ]; then
             add_path_line "$HOME/.bashrc"

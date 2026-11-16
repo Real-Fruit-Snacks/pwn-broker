@@ -37,7 +37,7 @@ Run the installer as the user who will use pwn-broker, not with `sudo`; it asks 
 | `--no-path` | Leave the shell config files alone |
 | `--help` | Show the options |
 
-Set `PWN_BROKER_OPT` to install somewhere other than `/opt/pwn-broker`. `--from` takes a release file only: a checkout (`--from .`) and a wheel are refused.
+Set `PWN_BROKER_OPT` to an absolute path to install somewhere other than `/opt/pwn-broker`; a relative path, and any path that is `/` itself, such as `/.`, are refused. `--from` takes a release file only: a checkout (`--from .`) and a wheel are refused.
 
 A release is one file, `pwn-broker-<version>-linux-x86_64.tar.gz`, about 47 MB. It holds the upstream CPython 3.13.18 build from python-build-standalone byte for byte, the wheel of the app and of each of its eight dependencies, `wheels.lock` pinning each wheel by SHA-256, the pinned asciinema 3.2.1, and `licences/`, a licence text and the address of the exact source for each of the 11 things in it. A release publishes three files: the release file, `SHA256SUMS.txt` and `install.sh`.
 
