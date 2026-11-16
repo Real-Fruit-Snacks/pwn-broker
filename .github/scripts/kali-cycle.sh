@@ -118,7 +118,7 @@ prepare_kali() {
     # a failure here is reported by cycle as the unit suite's result, and the cycle still runs
     rm -rf "$SUITE_VENV"
     if python3 -m venv "$SUITE_VENV" >"$EVIDENCE/suite-install.txt" 2>&1 \
-        && "$SUITE_VENV/bin/pip" install -e "$CHECKOUT[dev]" >>"$EVIDENCE/suite-install.txt" 2>&1; then
+        && "$SUITE_VENV/bin/pip" install -e "${CHECKOUT}[dev]" >>"$EVIDENCE/suite-install.txt" 2>&1; then
         echo ready >"$SUITE_VENV_STATUS"
         echo "the unit suite's environment is in $SUITE_VENV"
     else
@@ -140,18 +140,19 @@ prepare_kali() {
 
 network_off() {
     say "5. the network is off"
+    interfaces="$(ls /sys/class/net)"
     {
+        echo "\$ ls /sys/class/net"
+        echo "$interfaces"
+        echo
         echo "\$ ip addr; ip route"
         ip addr
         ip route
         echo
         echo "\$ getent hosts github.com"
-        if timeout 60 getent hosts github.com; then
-            resolved=1
-        else
-            resolved=0
-            echo "status $?"
-        fi
+        timeout 60 getent hosts github.com
+        resolved=$?
+        echo "status $resolved"
         echo
         echo "\$ curl -k https://1.1.1.1/ (port 443)"
         curl -k -sS -o /dev/null --connect-timeout 10 https://1.1.1.1/
@@ -159,7 +160,9 @@ network_off() {
         echo "status $connected"
     } >"$EVIDENCE/network-off.txt" 2>&1
     cat "$EVIDENCE/network-off.txt"
-    [ "$resolved" -eq 0 ] || stop "github.com resolves, so the network is not off"
+    [ "$interfaces" = lo ] || stop "the container has network interfaces besides lo: $(echo "$interfaces" | tr '\n' ' ')"
+    echo "ok    the only network interface is lo"
+    [ "$resolved" -ne 0 ] || stop "github.com resolves, so the network is not off"
     echo "ok    github.com does not resolve"
     # 7 is curl's could not connect, 28 its connect timeout; 0 or anything else got further
     case "$connected" in
@@ -186,9 +189,16 @@ install_release() {
     status=$?
     cat "$EVIDENCE/install.txt"
     [ "$status" -eq 0 ] || stop "install.sh exited with status $status"
-    grep -qxF "ok    asciinema 3.2.1 in $OPT/app/bin/asciinema" "$EVIDENCE/install.txt" \
-        || stop "the installer did not report the pinned asciinema"
-    "$OPT/app/bin/asciinema" --version
+    asciinema_version="$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' /src/src/pwn_broker/recorder.py)"
+    [ -n "$asciinema_version" ] || stop "no VERSION line in /src/src/pwn_broker/recorder.py"
+    grep -qxF "ok    asciinema $asciinema_version in $OPT/app/bin/asciinema" "$EVIDENCE/install.txt" \
+        || stop "the installer did not report the pinned asciinema $asciinema_version"
+    shown="$("$OPT/app/bin/asciinema" --version)" || stop "$OPT/app/bin/asciinema --version failed"
+    echo "$shown"
+    case "$shown" in
+        *"$asciinema_version"*) ;;
+        *) stop "$OPT/app/bin/asciinema --version does not show $asciinema_version" ;;
+    esac
     # root's .zshrc is Kali's own: /etc/skel/.zshrc plus the installer's one PATH line, nothing else
     # shellcheck disable=SC2016
     path_line="export PATH=\"$OPT/bin:\$PATH\"  # pwn-broker"

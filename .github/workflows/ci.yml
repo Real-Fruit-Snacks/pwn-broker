@@ -73,6 +73,7 @@ jobs:
           path: ${{ runner.temp }}/release-file
       - name: Install the release file
         run: |
+          (cd "$RUNNER_TEMP/release-file" && sha256sum -c SHA256SUMS.txt)
           release="$(ls "$RUNNER_TEMP"/release-file/pwn-broker-*-linux-x86_64.tar.gz)"
           work="$RUNNER_TEMP/installed"
           export PWN_BROKER_OPT="$work/opt"
@@ -91,7 +92,7 @@ jobs:
     # and home, twice, each time checked: the app's version, app/bin/python is the pinned Python
     # and resolves under python/, asciinema is the pinned version, record starts, and .zshrc holds
     # the PATH line once. Then the same file installed in debian:stable-slim with no network and
-    # no python3, which shows that an install needs neither.
+    # no Python at all, which shows that an install needs neither.
     needs: release-file
     runs-on: ubuntu-24.04
     steps:
@@ -114,6 +115,8 @@ jobs:
           release="$(ls "$RUNNER_TEMP"/release-file/pwn-broker-*-linux-x86_64.tar.gz)"
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
           python_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' release/pins.toml)"
+          asciinema_version="$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' src/pwn_broker/recorder.py)"
+          test -n "$version" && test -n "$python_version" && test -n "$asciinema_version"
           work="$(mktemp -d)"
           export PWN_BROKER_OPT="$work/opt"
           export HOME="$work/home"
@@ -130,7 +133,7 @@ jobs:
               *) echo "fail  app/bin/python does not resolve under $PWN_BROKER_OPT/python/"; exit 1 ;;
             esac
             "$PWN_BROKER_OPT/app/bin/asciinema" --version | tee "$work/asciinema-version.txt"
-            grep -qF "3.2.1" "$work/asciinema-version.txt"
+            grep -qF "$asciinema_version" "$work/asciinema-version.txt"
             "$PWN_BROKER_OPT/bin/record" --help | tee "$work/record-help.txt"
             grep -qxF "usage: record [target]" "$work/record-help.txt"
             test "$(grep -c '# pwn-broker' "$HOME/.zshrc")" = 1
@@ -140,22 +143,29 @@ jobs:
           sh install.sh --from "$release"
           checks
       - name: Install with no Python and no network
-        # debian:stable-slim has no python3, and --network none leaves the container only loopback
+        # debian:stable-slim has no Python, and --network none leaves the container only loopback
         run: |
           release="$(cd "$RUNNER_TEMP/release-file" && ls pwn-broker-*-linux-x86_64.tar.gz)"
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
+          asciinema_version="$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' src/pwn_broker/recorder.py)"
+          test -n "$version" && test -n "$asciinema_version"
           docker run --rm --network none \
             -v "$PWD/install.sh:/src/install.sh:ro" -v "$RUNNER_TEMP/release-file:/release:ro" \
-            -e "RELEASE=/release/$release" -e "VERSION=$version" \
+            -e "RELEASE=/release/$release" -e "VERSION=$version" -e "ASCIINEMA_VERSION=$asciinema_version" \
             debian:stable-slim sh -euc '
               echo "network interfaces: $(ls /sys/class/net | tr "\n" " ")"
               if [ "$(ls /sys/class/net)" != lo ]; then echo "fail  the container has a network"; exit 1; fi
               if command -v python3; then echo "fail  python3 is on PATH"; exit 1; fi
-              echo "ok    no network and no python3"
+              if command -v python; then echo "fail  python is on PATH"; exit 1; fi
+              for found in /usr/bin/python* /usr/local/bin/python*; do
+                if [ -e "$found" ] || [ -L "$found" ]; then echo "fail  $found is there"; exit 1; fi
+              done
+              echo "ok    no network and no Python"
               sh /src/install.sh --from "$RELEASE"
               /opt/pwn-broker/bin/pwn-broker --version | tee /tmp/version.txt
               grep -qF "$VERSION" /tmp/version.txt
-              /opt/pwn-broker/app/bin/asciinema --version
+              /opt/pwn-broker/app/bin/asciinema --version | tee /tmp/asciinema-version.txt
+              grep -qF "$ASCIINEMA_VERSION" /tmp/asciinema-version.txt
             '
 
   release-file:
@@ -205,7 +215,7 @@ jobs:
     # own Python. Not a container job, because the tunnel module is loaded on the host first.
     # The container is started detached and kali-cycle.sh runs in it three times: prepare does
     # everything that needs the network; then the container is taken off its only network, and
-    # install shows that nothing resolves or answers before it installs the release-file job's
+    # install shows that it has only loopback and nothing resolves or answers before it installs the release-file job's
     # file with install.sh --from and checks that the app runs on its bundled Python; then the
     # network is connected again and cycle runs the unit suite and the box, the box on the app's
     # bundled Python. So every push shows that an install reaches nothing. --init gives the
@@ -249,7 +259,8 @@ jobs:
           fi
           echo "ok    the container is on no network"
       - name: Install the release file, with the network off
-        # kali-cycle.sh install first shows that github.com does not resolve and 1.1.1.1:443 does not answer
+        # kali-cycle.sh install first shows that lo is the only interface, github.com does not
+        # resolve and 1.1.1.1:443 does not answer
         run: docker exec kali sh /src/.github/scripts/kali-cycle.sh install
       - name: Switch the network on
         run: |
