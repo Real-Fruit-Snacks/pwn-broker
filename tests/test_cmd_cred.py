@@ -640,16 +640,18 @@ def test_cred_clear_note(session):
     assert not any("no longer marked" in t for _, t in session.console.lines)
 
 
-@pytest.mark.parametrize("answer", ["", "n", "maybe"])
-def test_cred_clear_declined_changes_nothing(session, answer):
+@pytest.mark.parametrize("answers", [[""], ["n"], ["maybe", "n"]])
+def test_cred_clear_declined_changes_nothing(session, answers):
     _clear_seed(session)
     session_module.save_creds(session.box, session.creds)
     before = (session.box.path / "creds.toml").read_bytes()
-    session.console = FakeConsole([answer])
+    session.console = FakeConsole(answers)
     dispatch(session, "cred clear 1 secret")
     assert (session.box.path / "creds.toml").read_bytes() == before
     assert session.creds[0].secret == "s3cret"
     assert _lines(session, "ok") == []
+    assert session.console.asked == ["clear the secret of cred 1?"] * len(answers)
+    assert _lines(session, "fail") == ["answer y or n"] * (len(answers) - 1)
 
 
 @pytest.mark.parametrize("field", ["secret", "note"])
