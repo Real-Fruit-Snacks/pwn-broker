@@ -52,6 +52,46 @@ add_path_line() {
     ok "PATH line added to $rc"
 }
 
+put_back() {
+    name="$1"
+    if [ ! -e "$WORK/old-$name" ]; then
+        return 0
+    fi
+    if [ -e "$OPT/$name" ] || [ -L "$OPT/$name" ] || ! mv "$WORK/old-$name" "$OPT/$name"; then
+        KEPT=1
+        return 0
+    fi
+    PUT_BACK=1
+}
+
+# Runs on every exit, Ctrl-C and TERM included. An install that did not reach the end takes
+# away what it made and puts the previous python/ and app/ back from the work folder.
+finish() {
+    if [ -z "$WORK" ]; then
+        return 0
+    fi
+    if [ "$DONE" -eq 0 ]; then
+        if [ "$MADE_APP" -eq 1 ]; then
+            rm -rf "$OPT/app" || true
+        fi
+        if [ "$MADE_PYTHON" -eq 1 ]; then
+            rm -rf "$OPT/python" || true
+        fi
+        KEPT=0
+        PUT_BACK=0
+        put_back app
+        put_back python
+        if [ "$KEPT" -eq 1 ]; then
+            printf 'fail  %s\n' "could not put the previous install back. it is in $WORK" >&2
+            return 0
+        fi
+        if [ "$PUT_BACK" -eq 1 ]; then
+            ok "the previous install was put back"
+        fi
+    fi
+    rm -rf "$WORK" || true
+}
+
 main() {
     BASE="https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/download"
     FROM=""
@@ -60,6 +100,9 @@ main() {
     HAVE_FROM=0
     HAVE_CONFIG=0
     WORK=""
+    DONE=0
+    MADE_APP=0
+    MADE_PYTHON=0
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -95,7 +138,7 @@ main() {
         fail "the install folder must not be empty or /"
     fi
 
-    trap 'if [ -n "$WORK" ]; then rm -rf "$WORK"; fi' EXIT
+    trap finish EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
 
@@ -125,7 +168,7 @@ main() {
     if [ "$HAVE_FROM" -eq 0 ]; then
         need curl curl
     fi
-    arch="$(uname -m)"
+    arch="$(uname -m)" || fail "cannot tell this machine's architecture with uname -m"
     if [ "$arch" != "x86_64" ]; then
         fail "pwn-broker is built for x86_64 Linux. this machine is $arch"
     fi
@@ -175,7 +218,7 @@ main() {
 
     # the file is read on stdin, so tar never takes its name for anything else
     not_release="$RELEASE_NAME is not a pwn-broker release file"
-    mkdir "$WORK/release"
+    mkdir "$WORK/release" || fail "cannot create a folder in $WORK"
     tar -xzf - --no-same-owner -C "$WORK/release" <"$RELEASE" >/dev/null 2>&1 || fail "$not_release"
     count=0
     top=""
@@ -200,13 +243,13 @@ main() {
         fail "$not_release"
     fi
 
-    mkdir "$WORK/py"
+    mkdir "$WORK/py" || fail "cannot create a folder in $WORK"
     tar -xzf - --no-same-owner -C "$WORK/py" <"$top/python.tar.gz" >/dev/null 2>&1 || fail "$not_release"
     no_python="the Python in this release does not run on this machine. pwn-broker needs x86_64 Linux with glibc"
     "$WORK/py/python/bin/python3" -I -c 'import sys' >/dev/null 2>&1 || fail "$no_python"
     PY_VERSION="$("$WORK/py/python/bin/python3" -I -c 'import platform; print(platform.python_version())' 2>/dev/null)" || fail "$no_python"
 
-    # only folders this installer made are removed: a Python holds bin/python3, an environment pyvenv.cfg
+    # only folders this installer made are moved aside: a Python holds bin/python3, an environment pyvenv.cfg
     if [ -e "$OPT/python" ] || [ -L "$OPT/python" ]; then
         if [ -L "$OPT/python" ] || [ ! -d "$OPT/python" ] || { [ ! -e "$OPT/python/bin/python3" ] && [ ! -L "$OPT/python/bin/python3" ]; }; then
             fail "$OPT/python exists and is not a pwn-broker Python. move it or choose another folder"
@@ -218,12 +261,23 @@ main() {
         fi
     fi
 
+    # The previous python/ and app/ wait in the work folder until the install reaches the end;
+    # finish puts them back if it does not. A rename inside $OPT is atomic.
     again="run the installer again"
-    rm -rf "$OPT/app" || fail "cannot remove $OPT/app. $again"
-    rm -rf "$OPT/python" || fail "cannot remove $OPT/python. $again"
+    if [ -d "$OPT/app" ]; then
+        mv "$OPT/app" "$WORK/old-app" || fail "cannot move $OPT/app aside. $again"
+    fi
+    if [ -d "$OPT/python" ]; then
+        mv "$OPT/python" "$WORK/old-python" || fail "cannot move $OPT/python aside. $again"
+    fi
+    MADE_PYTHON=1
     mv "$WORK/py/python" "$OPT/python" || fail "cannot move the Python to $OPT/python. $again"
     ok "Python $PY_VERSION in $OPT/python"
 
+    # an empty pyvenv.cfg first, so a half-made environment is known as this installer's own
+    MADE_APP=1
+    mkdir "$OPT/app" || fail "cannot create $OPT/app. $again"
+    : >"$OPT/app/pyvenv.cfg" || fail "cannot write $OPT/app/pyvenv.cfg. $again"
     "$OPT/python/bin/python3" -I -m venv "$OPT/app" || fail "cannot create the virtual environment in $OPT/app. $again"
     ok "virtual environment created in $OPT/app"
 
@@ -235,7 +289,8 @@ main() {
 
     PWN_BROKER_OPT="$OPT"
     export PWN_BROKER_OPT
-    "$OPT/app/bin/python" -m pwn_broker setup || fail "pwn-broker setup failed. $again"
+    "$OPT/app/bin/python" -I -m pwn_broker setup || fail "pwn-broker setup failed. $again"
+    DONE=1
     ok "launcher and data written in $OPT"
 
     if [ "$HAVE_CONFIG" -eq 1 ]; then

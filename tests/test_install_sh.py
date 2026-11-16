@@ -129,22 +129,27 @@ def test_install_sh_exports_the_install_folder_for_setup():
 
 # A stand-in for the bundled Python. Each call appends one line to $FAKE_PY_LOG: how it was
 # called, PIP_CONFIG_FILE, PWN_BROKER_OPT and its arguments, separated by tabs. The step named
-# by $FAKE_PY_FAIL (run, venv, pip or setup) exits with $FAKE_PY_STATUS.
+# by $FAKE_PY_FAIL (run, venv, pip or setup) exits with $FAKE_PY_STATUS; a failing venv first
+# leaves a half-made environment, <dir>/bin with no pyvenv.cfg of its own. The step named by
+# $FAKE_PY_KILL sends TERM to the installer.
 FAKE_PYTHON = """#!/bin/sh
 printf '%s\\t' "$0" "${PIP_CONFIG_FILE-}" "${PWN_BROKER_OPT-}" "$@" >>"$FAKE_PY_LOG"
 printf '\\n' >>"$FAKE_PY_LOG"
 step=""
-case "$1 $2" in
-    "-I -c") step=run ;;
-    "-I -m")
-        case "$3" in
-            venv) step=venv ;;
-            pip) step=pip ;;
-        esac
-        ;;
-    "-m pwn_broker") step=setup ;;
+case "$1 $2 $3" in
+    "-I -c "*) step=run ;;
+    "-I -m venv") step=venv ;;
+    "-I -m pip") step=pip ;;
+    "-I -m pwn_broker") step=setup ;;
 esac
+if [ "$step" = "${FAKE_PY_KILL-}" ]; then
+    kill -TERM "$PPID"
+    exit 0
+fi
 if [ "$step" = "${FAKE_PY_FAIL-}" ]; then
+    if [ "$step" = venv ]; then
+        mkdir -p "$4/bin"
+    fi
     exit "${FAKE_PY_STATUS:-1}"
 fi
 case "$step" in
@@ -314,7 +319,10 @@ def test_a_full_install_runs_every_step_in_order(rig):
     assert result.stderr == ""
 
     calls = rig.calls()
-    assert [c[3:] for c in calls[:2]] == [["-I", "-c", "import sys"], ["-I", "-c", calls[1][5]]]
+    assert [c[3:] for c in calls[:2]] == [
+        ["-I", "-c", "import sys"],
+        ["-I", "-c", "import platform; print(platform.python_version())"],
+    ]
     work = calls[0][0].split("/py/python/bin/python3")[0]
     assert work.startswith(f"{opt}/.install.")
     assert calls[0][0] == calls[1][0] == f"{work}/py/python/bin/python3"
@@ -329,7 +337,7 @@ def test_a_full_install_runs_every_step_in_order(rig):
         "--only-binary", ":all:",
         "--require-hashes", "-r", f"{top}/wheels.lock",
     ]  # fmt: skip
-    assert calls[4] == [f"{opt}/app/bin/python", "", opt, "-m", "pwn_broker", "setup"]
+    assert calls[4] == [f"{opt}/app/bin/python", "", opt, "-I", "-m", "pwn_broker", "setup"]
     assert len(calls) == 5
 
     assert (rig.opt / "python/bin/python3").read_bytes() == FAKE_PYTHON.encode()
@@ -455,6 +463,14 @@ def test_a_wheel_or_a_folder_is_refused_before_anything_happens(rig):
         assert result.returncode == 1, given
         assert result.stderr.splitlines() == [NOT_A_RELEASE_FILE_HINT], given
     assert not rig.opt.exists()
+    # and over an existing install, nothing in it changes
+    previous_install(rig)
+    before = snapshot(rig.opt)
+    for given in (wheel, rig.tmp, ROOT):
+        result = rig.run("--from", sh_path(given), "--no-path")
+        assert result.returncode == 1, given
+        assert result.stderr.splitlines() == [NOT_A_RELEASE_FILE_HINT], given
+        assert snapshot(rig.opt) == before, given
 
 
 def test_a_python_folder_that_is_not_ours_is_refused(rig):
@@ -502,23 +518,92 @@ def test_another_architecture_is_refused(rig):
     assert not rig.opt.exists()
 
 
-@pytest.mark.parametrize(
-    ("step", "line"),
-    [
-        ("venv", "fail  cannot create the virtual environment in {opt}/app. run the installer again"),
-        ("pip", f"fail  pip could not install the wheels in {RELEASE_NAME}. run the installer again"),
-        ("setup", "fail  pwn-broker setup failed. run the installer again"),
-    ],
-)
-def test_a_failing_step_says_to_run_the_installer_again(rig, step, line):
+def test_an_architecture_that_cannot_be_read_is_a_fail_line(rig):
+    (rig.fakebin / "uname").write_bytes(b"#!/bin/sh\nexit 1\n")
+    (rig.fakebin / "uname").chmod(0o755)
+    result = rig.install("--no-path")
+    assert result.returncode == 1
+    assert result.stderr.splitlines() == ["fail  cannot tell this machine's architecture with uname -m"]
+    assert not rig.opt.exists()
+
+
+FAILING_STEPS = [
+    ("venv", "fail  cannot create the virtual environment in {opt}/app. run the installer again"),
+    ("pip", f"fail  pip could not install the wheels in {RELEASE_NAME}. run the installer again"),
+    ("setup", "fail  pwn-broker setup failed. run the installer again"),
+]
+PUT_BACK = "ok    the previous install was put back"
+
+
+def run_merged(rig, *args, **extra_env):
+    """A run with stderr folded into stdout, to see the order of the fail and ok lines."""
+    env = {
+        **os.environ,
+        "PWN_BROKER_OPT": rig.opt.as_posix(),
+        "HOME": rig.home.as_posix(),
+        "PATH": f"{rig.fakebin}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_PY_LOG": rig.log.as_posix(),
+        "FAKE_MACHINE_LOG": rig.machine_log.as_posix(),
+        **extra_env,
+    }
+    return subprocess.run(
+        [rig.shell, str(SCRIPT), "--from", sh_path(rig.release), *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+    )
+
+
+@pytest.mark.parametrize(("step", "line"), FAILING_STEPS)
+def test_a_failed_upgrade_puts_the_previous_install_back(rig, step, line):
     previous_install(rig)
+    before = snapshot(rig.opt)
+    result = run_merged(rig, "--no-path", FAKE_PY_FAIL=step)
+    assert result.returncode == 1
+    assert result.stdout.splitlines()[-2:] == [line.format(opt=rig.opt.as_posix()), PUT_BACK]
+    assert snapshot(rig.opt) == before
+    assert rig.work_folders() == []
+    # once the step passes, the same folder installs
+    assert rig.install("--no-path").returncode == 0
+
+
+@pytest.mark.parametrize("step", ["venv", "pip", "setup"])
+def test_an_upgrade_stopped_by_term_puts_the_previous_install_back(rig, step):
+    previous_install(rig)
+    before = snapshot(rig.opt)
+    result = rig.install("--no-path", FAKE_PY_KILL=step)
+    assert result.returncode == 143
+    assert result.stdout.splitlines()[-1] == PUT_BACK
+    assert snapshot(rig.opt) == before
+    assert rig.work_folders() == []
+
+
+@pytest.mark.parametrize(("step", "line"), FAILING_STEPS)
+def test_a_failed_first_install_leaves_no_python_and_no_app(rig, step, line):
     result = rig.install("--no-path", FAKE_PY_FAIL=step)
     assert result.returncode == 1
     assert result.stderr.splitlines() == [line.format(opt=rig.opt.as_posix())]
-    assert rig.work_folders() == []
-    assert (rig.opt / "config.toml").read_text() == "theme = 'dark'\n"
-    # once the step passes, the same folder installs
+    assert PUT_BACK not in result.stdout
+    assert sorted(p.name for p in rig.opt.iterdir()) == []
+
+
+def test_a_half_made_environment_does_not_block_the_next_run(rig):
+    result = rig.install("--no-path", FAKE_PY_FAIL="venv")
+    assert result.returncode == 1
+    assert not (rig.opt / "app").exists()
     assert rig.install("--no-path").returncode == 0
+    assert (rig.opt / "app/pyvenv.cfg").read_text().startswith("home = ")
+
+
+def test_an_environment_cut_short_after_its_marker_is_replaced(rig):
+    # a kill between making app/ with its empty pyvenv.cfg and running venv
+    (rig.opt / "app").mkdir(parents=True)
+    (rig.opt / "app/pyvenv.cfg").write_text("")
+    result = rig.install("--no-path")
+    assert result.returncode == 0, result.stderr
+    assert (rig.opt / "app/pyvenv.cfg").read_text().startswith("home = ")
+    assert (rig.opt / "app/bin/python").exists()
 
 
 def publish(rig, sums):
