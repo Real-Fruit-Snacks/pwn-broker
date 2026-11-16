@@ -21,6 +21,8 @@ from pwn_broker.toolpkg import bad_characters as _bad_characters
 from pwn_broker.toolpkg import shown as _shown
 from pwn_broker.toolpkg import too_long as _too_long
 
+# how many files, folders and links a runtime may make: its entries, and every folder on the
+# way to one that the archive does not list
 MAX_MEMBERS = 20_000
 MAX_BYTES = 1024**3
 # as many links as Linux follows in one lookup
@@ -129,6 +131,8 @@ def _resolve(name: str, root: _Node) -> None:
 
 def _checked(members: Iterable[tarfile.TarInfo]) -> dict[str, tarfile.TarInfo]:
     seen: dict[str, tarfile.TarInfo] = {}
+    # the folders on the way to an entry that are not entries themselves (so far)
+    implied: set[str] = set()
     total = 0
     for member in members:
         if len(seen) >= MAX_MEMBERS:
@@ -148,6 +152,16 @@ def _checked(members: Iterable[tarfile.TarInfo]) -> dict[str, tarfile.TarInfo]:
             if total > MAX_BYTES:
                 raise ToolError(f"runtime archive unpacks to more than {MAX_BYTES} bytes")
         seen[bare] = member
+        implied.discard(bare)
+        parent = bare.rpartition("/")[0]
+        while parent and parent not in implied and parent not in seen:
+            implied.add(parent)
+            parent = parent.rpartition("/")[0]
+        if len(seen) + len(implied) > MAX_MEMBERS:
+            # a name of 64 parts makes 63 folders, each a block on disk that no entry accounts for
+            raise ToolError(
+                f"runtime archive would make more than {MAX_MEMBERS} files, folders and links"
+            )
     return seen
 
 
@@ -220,8 +234,18 @@ class _Bounded:
             raise ToolError("runtime archive holds more data than its entries declare")
 
 
+def _no_global_headers(tar: tarfile.TarFile) -> None:
+    # tarfile gathers every global extended header into one table for the whole archive, and
+    # goes through all of it again for each later entry: one before each of 2,000 entries made
+    # an unpack take a minute, and the time grows with the square of the count. A runtime's
+    # archive has none.
+    if tar.pax_headers:
+        raise ToolError("runtime archive has a global extended header, which a runtime's does not")
+
+
 def _allowing(tar: tarfile.TarFile, reader: _Bounded) -> Iterator[tarfile.TarInfo]:
     for member in tar:
+        _no_global_headers(tar)
         yield member
         # the member passed the checks. tarfile keeps every member it has read, and with it the
         # extended header records it came with, which nothing here reads again
@@ -233,6 +257,8 @@ def _allowing(tar: tarfile.TarFile, reader: _Bounded) -> Iterator[tarfile.TarInf
 
 def _read_all(tar: tarfile.TarFile, reader: _Bounded) -> dict[str, tarfile.TarInfo]:
     seen = _check_all(_allowing(tar, reader))
+    # one after the last entry is read with the end of the archive
+    _no_global_headers(tar)
     # tarfile ends quietly at a damaged header or at a cut, so the end is checked here: a tar
     # ends with two blocks of zeros, and tarfile stops at the first without looking for the second
     reader.seek(tar.offset)

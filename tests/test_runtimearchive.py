@@ -901,3 +901,88 @@ def test_no_folder_of_a_runtime_is_ever_looser_than_it_ends_up(tmp_path, monkeyp
         os.umask(old)
     assert made
     assert [entry for entry in made if entry[1] & 0o077] == []
+
+
+# ---- round 3: global extended headers, and the folders names make
+
+
+def with_global_headers(count: int, keys: int) -> bytes:
+    """A tar of `count` empty files, each after a global extended header of `keys` records."""
+    buf = io.BytesIO()
+    for number in range(count):
+        records = {f"k{number}.{key}": "v" for key in range(keys)}
+        buf.write(tarfile.TarInfo.create_pax_global_header(records))
+        buf.write(file(f"python/f{number}").tobuf(tarfile.PAX_FORMAT))
+    buf.write(bytes(2 * 512))
+    return buf.getvalue()
+
+
+def test_a_global_extended_header_is_refused(tmp_path, monkeypatch):
+    # tarfile gathers them into one table for the whole archive and goes through all of it for
+    # every later entry: with one before each of 2,000 entries, unpacking took a minute
+    archive = write_gz(tmp_path / "rt.tar.gz", with_global_headers(1, 3))
+    forbid_writing(monkeypatch)
+    with pytest.raises(ToolError, match="global extended header"):
+        unpack(archive, tmp_path / "rt")
+    assert leftovers(tmp_path) == ["rt.tar.gz"]
+
+
+def test_many_global_extended_headers_are_refused_at_the_first(tmp_path, monkeypatch):
+    archive = write_gz(tmp_path / "rt.tar.gz", with_global_headers(400, 200))
+    forbid_writing(monkeypatch)
+    started = time.perf_counter()
+    with pytest.raises(ToolError, match="global extended header"):
+        unpack(archive, tmp_path / "rt")
+    assert time.perf_counter() - started < 3
+    assert leftovers(tmp_path) == ["rt.tar.gz"]
+
+
+def test_a_global_extended_header_after_the_last_entry_is_refused(tmp_path, monkeypatch):
+    buf = io.BytesIO()
+    buf.write(file("python/a").tobuf(tarfile.PAX_FORMAT))
+    buf.write(tarfile.TarInfo.create_pax_global_header({"comment": "x"}))
+    buf.write(bytes(2 * 512))
+    archive = write_gz(tmp_path / "rt.tar.gz", buf.getvalue())
+    forbid_writing(monkeypatch)
+    # tarfile itself gives up on a header that nothing follows; either way it is refused
+    with pytest.raises(ToolError, match="global extended header|incomplete or damaged"):
+        unpack(archive, tmp_path / "rt")
+    assert leftovers(tmp_path) == ["rt.tar.gz"]
+
+
+def test_the_folders_names_would_make_count_towards_the_limit(monkeypatch):
+    # one file, and the folders a, a/b and a/b/c on the way to it: four
+    monkeypatch.setattr(runtimearchive, "MAX_MEMBERS", 4)
+    check([file("a/b/c/f")])
+    monkeypatch.setattr(runtimearchive, "MAX_MEMBERS", 3)
+    refused([file("a/b/c/f")], "more than 3 files, folders and links")
+
+
+def test_a_folder_that_is_also_a_member_is_counted_once(monkeypatch):
+    monkeypatch.setattr(runtimearchive, "MAX_MEMBERS", 3)
+    check([folder("a"), folder("a/b"), file("a/b/f")])
+    check([file("a/b/f"), folder("a/b"), folder("a")])
+    refused([folder("a"), folder("a/b"), file("a/b/f"), link("a/b/l", "f")], "the limit is 3")
+
+
+def test_a_few_members_that_would_make_thousands_of_folders_are_refused():
+    # each name makes 63 folders of its own; no limit is patched
+    deep = "/".join(["a"] * (runtimearchive.MAX_DEPTH - 2))
+    refused([file(f"p{number}/{deep}/f") for number in range(400)], "files, folders and links")
+
+
+def test_a_member_as_deep_as_a_name_may_be_unpacks(tmp_path):
+    name = "/".join(["d"] * (runtimearchive.MAX_DEPTH - 1)) + "/f"
+    archive = make_tar(tmp_path / "rt.tar.gz", [file(name, 4)], {name: b"deep"})
+    unpack(archive, tmp_path / "rt")
+    assert (tmp_path / "rt").joinpath(*name.split("/")).read_bytes() == b"deep"
+
+
+def test_a_member_with_extended_records_of_its_own_still_unpacks(tmp_path):
+    # the records are dropped once the member has passed; its long name and its data are not
+    name = "python/" + "n" * 150
+    member = file(name, 5)
+    member.pax_headers = {"comment": "x" * 2000}
+    archive = make_tar(tmp_path / "rt.tar.gz", [member], {name: b"bytes"})
+    unpack(archive, tmp_path / "rt")
+    assert (tmp_path / "rt" / "python" / ("n" * 150)).read_bytes() == b"bytes"

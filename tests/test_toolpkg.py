@@ -1283,3 +1283,68 @@ def test_a_link_that_appears_where_a_folder_goes_is_not_followed(tmp_path, monke
         unpack(path, dest)
     assert list(elsewhere.iterdir()) == []
     assert not os.path.lexists(dest)
+
+
+# ---- round 3: the folders an entry's name makes
+
+
+def test_the_folders_names_would_make_count_towards_the_limit(tmp_path, monkeypatch):
+    # manifest.toml, files/kerbrute and files/a/b/c/x, and the folders files, a, b and c: seven
+    path = raw_zip(tmp_path, [GOOD, ("files/a/b/c/x", b"", None)])
+    monkeypatch.setattr(toolpkg, "MAX_MEMBERS", 6)
+    assert "7 files and folders" in str(assert_clean_failure(tmp_path, path))
+    monkeypatch.setattr(toolpkg, "MAX_MEMBERS", 7)
+    assert toolpkg.package_manifest(path).name == "kerbrute"
+
+
+def test_a_folder_that_is_also_an_entry_is_counted_once(tmp_path, monkeypatch):
+    path = raw_zip(tmp_path, [GOOD, ("files/a/", b"", None), ("files/a/x", b"", None)])
+    # manifest.toml, files/kerbrute, files/a/ and files/a/x, and the folder files: five
+    monkeypatch.setattr(toolpkg, "MAX_MEMBERS", 5)
+    assert toolpkg.package_manifest(path).name == "kerbrute"
+    monkeypatch.setattr(toolpkg, "MAX_MEMBERS", 4)
+    with pytest.raises(ToolError, match="5 files and folders"):
+        toolpkg.package_manifest(path)
+
+
+def test_a_few_entries_that_would_make_thousands_of_folders_are_refused(tmp_path):
+    # each name makes 62 folders of its own; no limit is patched
+    deep = "/".join(["a"] * (toolpkg.MAX_DEPTH - 3))
+    members = [GOOD] + [(f"files/p{number}/{deep}/f", b"", None) for number in range(200)]
+    path = raw_zip(tmp_path, members)
+    assert "files and folders" in str(assert_clean_failure(tmp_path, path))
+
+
+def test_a_folder_entry_as_deep_as_a_name_may_be_is_allowed(tmp_path):
+    # the slash that marks a folder is not one more part
+    name = "/".join(["files", *["d"] * (toolpkg.MAX_DEPTH - 1)]) + "/"
+    path = raw_zip(tmp_path, [GOOD, (name, b"", None)])
+    assert toolpkg.package_manifest(path).name == "kerbrute"
+
+
+def test_make_folders_refuses_a_file_in_the_way(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a" / "b").write_bytes(b"a file")
+    with pytest.raises(ToolError, match="is in the way and is not a folder"):
+        toolpkg.make_folders(tmp_path, ["a", "b", "c"], "the package")
+    assert (tmp_path / "a" / "b").read_bytes() == b"a file"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symbolic links")
+@pytest.mark.parametrize("target", ["folder", "file", "nothing"])
+def test_make_folders_refuses_a_link_in_the_way(tmp_path, target):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    aim = elsewhere / "aim"
+    if target == "folder":
+        aim.mkdir()
+    elif target == "file":
+        aim.write_bytes(b"x")
+    root = tmp_path / "root"
+    (root / "a").mkdir(parents=True)
+    (root / "a" / "b").symlink_to(aim)
+    with pytest.raises(ToolError, match="is in the way and is not a folder"):
+        toolpkg.make_folders(root, ["a", "b", "c"], "the package")
+    assert sorted(p.name for p in elsewhere.iterdir()) == (["aim"] if target != "nothing" else [])
+    if target == "folder":
+        assert list(aim.iterdir()) == []

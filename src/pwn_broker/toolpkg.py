@@ -18,6 +18,8 @@ MANIFEST = "manifest.toml"
 
 _CHUNK = 1024 * 1024
 _MANIFEST_LIMIT = 1024 * 1024
+# how many files and folders a package may make: its entries, and every folder on the way to
+# one. A name of 64 parts makes 63 folders, each a block on disk that no entry accounts for.
 MAX_MEMBERS = 10_000
 MAX_UNPACKED_BYTES = 1024**3
 # the zip's own list of its entries, which zipfile reads whole before one entry can be counted:
@@ -168,7 +170,8 @@ def too_long(text: str) -> str | None:
     """What is wrong with the length of a name, to follow "has a name" or "has a target"."""
     if _byte_length(text) > MAX_PATH_BYTES:
         return f"longer than {MAX_PATH_BYTES} bytes"
-    parts = text.split("/")
+    # the slash that marks a folder is not one more part
+    parts = (text[:-1] if text.endswith("/") else text).split("/")
     if any(_byte_length(part) > MAX_PART_BYTES for part in parts):
         return f"with a part longer than {MAX_PART_BYTES} bytes"
     if len(parts) > MAX_DEPTH:
@@ -575,13 +578,18 @@ def _check_entries(infos: list[zipfile.ZipInfo]) -> dict[str, zipfile.ZipInfo]:
         if not allowed:
             raise ToolError(f"package entry {info.filename!r} is not part of the package layout")
         seen[bare] = info
+    folders: set[str] = set()
     for bare, info in seen.items():
         # a file cannot also be a folder another entry lives in
         parent = bare.rpartition("/")[0]
-        while parent:
+        while parent and parent not in folders:
             if parent in seen and not seen[parent].is_dir():
                 raise ToolError(f"package entry {bare!r} sits inside the file {parent!r}")
+            folders.add(parent)
             parent = parent.rpartition("/")[0]
+    made = len(seen.keys() | folders)
+    if made > MAX_MEMBERS:
+        raise ToolError(f"package would make {made} files and folders; the limit is {MAX_MEMBERS}")
     return seen
 
 
