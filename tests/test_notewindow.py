@@ -339,3 +339,52 @@ def test_the_parent_of_a_process_is_read_from_its_stat_line(monkeypatch):
 
     monkeypatch.setattr(notewindow, "Path", lambda p: Stat("42 (vim (x) y) S 7 42 42 0 -1"))
     assert REAL_PARENT_PID(42) == 7
+
+
+def kali_lines(paths, box):
+    # the two command lines as a real Kali showed them: the terminal's tail says `vim`, the process `/usr/bin/vim`
+    vimrc, note = str(paths.vim_dir / "vimrc"), str(box.path / "notes.md")
+    return (
+        ["x-terminal-emulator", "-e", "vim", "-u", vimrc, note],
+        ["/usr/bin/vim", "-u", vimrc, note],
+    )
+
+
+def test_the_terminal_is_closed_when_its_tail_names_vim_and_the_process_the_full_path(paths, box):
+    terminal, vim = kali_lines(paths, box)
+    world = World((5135, terminal), (5140, vim))
+    assert shut(world, paths, box, {5140: 5135}) is False
+    assert world.sent == [5140, 5135] and world.table == {}
+
+
+def test_the_terminal_is_closed_when_its_tail_has_the_full_path_and_the_process_says_vim(paths, box):
+    terminal, vim = kali_lines(paths, box)
+    terminal[2], vim[0] = "/usr/bin/vim", "vim"
+    world = World((5135, terminal), (5140, vim))
+    shut(world, paths, box, {5140: 5135})
+    assert world.sent == [5140, 5135]
+
+
+def test_a_terminal_whose_tail_is_another_boxs_note_is_not_closed(paths, box, other):
+    terminal, vim = kali_lines(paths, box)
+    terminal[-1] = str(other.path / "notes.md")
+    world = World((5135, terminal), (5140, vim))
+    shut(world, paths, box, {5140: 5135})
+    assert world.sent == [5140]
+
+
+def test_a_terminal_whose_tail_is_a_relative_path_is_not_closed(paths, box):
+    terminal, vim = kali_lines(paths, box)
+    terminal[-1] = "notes.md"
+    world = World((5135, terminal), (5140, vim))
+    shut(world, paths, box, {5140: 5135})
+    assert world.sent == [5140]
+
+
+def test_the_parent_is_the_second_field_after_the_last_bracket(monkeypatch):
+    from pwn_broker import notewindow
+
+    for name in ("vim", "my (odd) name", "a ) b", "(my (odd) name)"):
+        line = f"42 ({name}) S 7 42 42 0 -1 4194560"
+        monkeypatch.setattr(notewindow.Path, "read_text", lambda self, **kw: line)
+        assert REAL_PARENT_PID(42) == 7, name

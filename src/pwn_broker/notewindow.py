@@ -100,6 +100,10 @@ def _is_note_vim(argv: list[str], paths: AppPaths, box: Box) -> bool:
     return _same_path(argv[2], paths.vim_dir / "vimrc") and _same_path(argv[3], box.path / NOTE_NAME)
 
 
+def _ends_with_note_vim(argv: list[str], paths: AppPaths, box: Box) -> bool:
+    return len(argv) >= 5 and argv[-5] == "-e" and _is_note_vim(argv[-4:], paths, box)
+
+
 def _find_vim(
     paths: AppPaths, box: Box, processes: Callable[[], Iterable[Process]] | None
 ) -> Process | None:
@@ -153,7 +157,7 @@ def _close(
     found = _find_vim(paths, box, processes)
     if found is None:
         return False, False
-    pid, argv = found
+    pid = found[0]
     # read again right before the signal: that pid must still be the note's vim
     again = _find_vim(paths, box, processes)
     if again is None or again[0] != pid:
@@ -168,10 +172,11 @@ def _close(
         return True, True
     if holder is None or holder == pid:
         return True, False
-    # a terminal started only to run this vim ends its command line with -e and the vim's own arguments
-    tail = ["-e", *argv]
+    # a terminal started only to run this note's vim ends its command line with -e and that vim command,
+    # recognised by the rule that finds a vim; it is not compared with the vim process's own command line
+    # (the terminal wrote `vim`, the process shows the path the terminal resolved)
     holder_argv = next((a for p, a in (processes or _own_processes)() if p == holder), None)
-    if holder_argv is None or holder_argv[-len(tail) :] != tail or len(holder_argv) <= len(tail):
+    if holder_argv is None or not _ends_with_note_vim(holder_argv, paths, box):
         return True, False
     # and once more right before its signal
     if not _alive(holder, holder_argv, processes):
