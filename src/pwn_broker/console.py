@@ -33,6 +33,7 @@ class Console(Protocol):
     def heading(self, text: str) -> None: ...
     def fields(self, rows: list[tuple[str, str]]) -> None: ...
     def gap(self) -> None: ...
+    def typed(self) -> None: ...
     def block(self) -> AbstractContextManager[None]: ...
     def raw(self, text: str) -> None: ...
     def table(self, columns: list[str], rows: list[list[str]], *, cut: str | None = None) -> None: ...
@@ -58,6 +59,16 @@ def _yes_no(answer: str, default: bool) -> bool | None:
     if answer in ("n", "no"):
         return False
     return None
+
+
+# C0 controls but tab, DEL and C1 controls: none of them may move the cursor or change the terminal
+_CONTROLS = {code: "?" for code in [*range(0x20), 0x7F, *range(0x80, 0xA0)] if code != 0x09}
+_CELL_CONTROLS = {**_CONTROLS, 0x09: " "}
+
+
+def shown(text: str, *, cell: bool = False) -> str:
+    """The text as the console writes it: each control character as "?" (and in a cell, a tab as a space)."""
+    return text.translate(_CELL_CONTROLS if cell else _CONTROLS)
 
 
 def _cut_column(columns: list[str], cut: str | None) -> int | None:
@@ -130,6 +141,9 @@ class FakeConsole:
     def gap(self) -> None:
         self.events.append(("gap", ""))
 
+    def typed(self) -> None:
+        self.events.append(("typed", ""))
+
     @contextmanager
     def block(self) -> Iterator[None]:
         self._depth += 1
@@ -195,11 +209,13 @@ class TermConsole:
             return  # the block writes this blank line before its first line, if it has one
         self._blank()
 
+    def typed(self) -> None:
+        # something else wrote a line to the terminal, such as the command line at the prompt
+        self._last = _LINE
+
     @contextmanager
     def block(self) -> Iterator[None]:
         if self._depth == 0:
-            # the line before a block may be one this console did not write, such as the prompt
-            self._last = _LINE
             self._block_printed = False
         self._depth += 1
         try:
@@ -216,7 +232,7 @@ class TermConsole:
         self._start_line()
         system = COLOR_SYSTEMS.get(self._rich.color_system or "")
         stream = self._rich.file
-        stream.write("".join(style.render(text, color_system=system) for text, style in parts) + "\n")
+        stream.write("".join(style.render(shown(text), color_system=system) for text, style in parts) + "\n")
         stream.flush()
         self._last = _LINE
 
@@ -258,10 +274,13 @@ class TermConsole:
         stream = self._rich.file
         stream.write(text + "\n")
         stream.flush()
-        self._last = _LINE
+        # what is on screen now: an empty text or one ending in a newline leaves a blank line
+        self._last = _BLANK if text == "" or text.endswith("\n") else _LINE
 
     def table(self, columns: list[str], rows: list[list[str]], *, cut: str | None = None) -> None:
         index = _cut_column(columns, cut)
+        columns = [shown(name, cell=True) for name in columns]
+        rows = [[shown(cell, cell=True) for cell in row] for row in rows]
         if index is not None and self._rich.is_terminal:
             rows = self._fit(columns, rows, index)
         mute = self._style(theme.MUTE)
@@ -320,7 +339,7 @@ class TermConsole:
         self._start_line()
         try:
             return prompt(
-                [("class:question", message)],
+                [("class:question", shown(message))],
                 style=theme.prompt_style() if self._color else None,
                 lexer=SimpleLexer("class:answer"),
                 completer=completer,

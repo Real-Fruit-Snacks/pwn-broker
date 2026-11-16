@@ -341,6 +341,7 @@ def test_a_block_that_prints_nothing_writes_nothing(monkeypatch):
 
 def test_a_block_has_one_blank_line_above_and_below(monkeypatch):
     c, out = screen(monkeypatch)
+    c.typed()  # the command line, drawn by the prompt loop
     with c.block():
         c.ok("a")
         c.gap()
@@ -355,13 +356,130 @@ def test_a_block_after_a_line_the_console_did_not_write_starts_with_a_blank(monk
     c.ok("a")
     c.gap()
     out.write("forest/dc01 > status\n")  # the prompt line, drawn by the prompt loop
+    c.typed()
     with c.block():
         c.fields([("box", "forest")])
     assert out.getvalue() == "  ok    a\n\nforest/dc01 > status\n\n  box  forest\n\n"
 
 
+def test_a_block_after_a_gap_writes_no_second_blank(monkeypatch):
+    c, out = screen(monkeypatch)
+    c.ok("a")
+    c.gap()
+    with c.block():
+        c.ok("b")
+    assert out.getvalue() == "  ok    a\n\n  ok    b\n\n"
+
+
+def test_typed_counts_as_a_line_between_gaps(monkeypatch):
+    c, out = screen(monkeypatch)
+    c.ok("a")
+    c.gap()
+    out.write("forest/dc01 > note\n")
+    c.typed()
+    c.gap()
+    assert out.getvalue() == "  ok    a\n\nforest/dc01 > note\n\n"
+
+
+@pytest.mark.parametrize("text", ["", "x\n"])
+def test_raw_ending_in_a_blank_line_counts_as_one(monkeypatch, text):
+    c, out = screen(monkeypatch)
+    c.ok("a")
+    c.raw(text)
+    c.gap()
+    c.ok("b")
+    assert out.getvalue() == f"  ok    a\n{text}\n  ok    b\n"
+
+
+def test_fake_records_typed_in_events_only():
+    c = FakeConsole()
+    c.typed()
+    assert c.events == [("typed", "")] and c.lines == []
+
+
+# --- control characters -------------------------------------------------------------------------
+
+CONTROLS = ["\r", "\n", "\x08", "\x07", "\x1b[2J", "\x7f", "\x9b", "\x00", "\x85"]
+
+
+def _shown(control):
+    return "".join("?" if ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F else ch for ch in control)
+
+
+@pytest.mark.parametrize("control", CONTROLS)
+def test_control_characters_in_lines_are_written_as_question_marks(monkeypatch, control):
+    value = f"host{control}  ok    all checks passed"
+    shown = f"host{_shown(control)}  ok    all checks passed"
+    c, out = screen(monkeypatch)
+    c.ok(value)
+    c.warn(value)
+    c.fail(value)
+    c.info(value)
+    c.detail(value)
+    c.fields([(value, value)])
+    c.heading(value)
+    assert out.getvalue() == (
+        f"  ok    {shown}\n  warn  {shown}\n  fail  {shown}\n  {shown}\n        {shown}\n"
+        f"  {shown}  {shown}\n\n{shown}\n"
+    )
+
+
+@pytest.mark.parametrize("control", CONTROLS)
+def test_control_characters_in_table_cells_are_written_as_question_marks(monkeypatch, control):
+    c, out = screen(monkeypatch)
+    c.table([f"h{control}"], [[f"a{control}b"]])
+    text = out.getvalue()
+    assert f"a{_shown(control)}b" in text and f"h{_shown(control)}" in text
+    assert not any(ch in text.replace("\n", "") for ch in "\r\x08\x07\x1b\x7f\x9b\x00\x85")
+
+
+@pytest.mark.parametrize("control", CONTROLS)
+def test_control_characters_in_a_question_are_written_as_question_marks(monkeypatch, control):
+    c, out = screen(monkeypatch, "", "")
+    assert c.ask(f"user{control}", default=f"a{control}b") == f"a{control}b"  # the answer itself is untouched
+    c.confirm(f"go{control}?")
+    shown = _shown(control)
+    assert out.getvalue() == f"  {f'user{shown}':<12} [a{shown}b] > \n  go{shown}? [y/N] > \n"
+
+
+def test_a_tab_is_kept_in_lines_and_a_space_in_cells(monkeypatch):
+    c, out = screen(monkeypatch)
+    c.ok("a\tb")
+    c.detail("c\td")
+    c.table(["h"], [["e\tf"]])
+    assert out.getvalue().splitlines()[:2] == ["  ok    a\tb", "        c\td"]
+    assert "e f" in out.getvalue() and out.getvalue().count("\t") == 2
+
+
+@pytest.mark.parametrize("value", [*CONTROLS, "a\tb"])
+def test_raw_is_still_byte_for_byte_with_control_characters(value):
+    out = io.StringIO()
+    TermConsole({}, out=out).raw(value)
+    assert out.getvalue() == value + "\n"
+
+
+def test_a_tab_in_a_cut_cell_is_measured_as_the_space_it_is_written_as(monkeypatch):
+    c, out = screen(monkeypatch, width=40)
+    cell = "\t".join(["s" * 9] * 6)  # 59 wide once each tab is a space
+    c.table(["n", "secret"], [["1", cell]], cut="secret")
+    [_, row] = out.getvalue().splitlines()
+    assert len(row) == 40 and row.endswith("...")
+    assert row[2:] == "1  " + " ".join(["s" * 9] * 6)[: 40 - 2 - 1 - 2 - 3] + "..."
+
+
+def test_a_terminal_narrower_than_the_fixed_columns_wraps_without_cutting_below_the_minimum(monkeypatch):
+    c, out = screen(monkeypatch, width=12)
+    c.table(["name", "os", "about"], [["w" * 20, "linux", "d" * 40]], cut="about")
+    text = out.getvalue()
+    # the fixed columns are whole (wrapped, not cut); the cut column keeps its minimum of eight
+    assert text.count("w") == 20 and text.count("x") == 1
+    assert text.count("d") == 8 and text.count(".") == 3
+    assert all(line.startswith("  ") for line in text.splitlines())
+
+
 def test_a_block_ending_in_a_question_has_one_blank_below(monkeypatch):
     c, out = screen(monkeypatch, "y")
+    c.typed()  # the command line, drawn by the prompt loop
     with c.block():
         c.ok("a")
         c.confirm("go?")
@@ -371,6 +489,7 @@ def test_a_block_ending_in_a_question_has_one_blank_below(monkeypatch):
 
 def test_a_block_starting_with_a_heading_has_one_blank_above(monkeypatch):
     c, out = screen(monkeypatch, "u")
+    c.typed()  # the command line, drawn by the prompt loop
     with c.block():
         c.gap()
         c.heading("New credential")
@@ -380,6 +499,7 @@ def test_a_block_starting_with_a_heading_has_one_blank_above(monkeypatch):
 
 def test_nested_blocks_behave_as_one(monkeypatch):
     c, out = screen(monkeypatch)
+    c.typed()  # the command line, drawn by the prompt loop
     with c.block():
         with c.block():
             c.ok("a")
@@ -391,6 +511,7 @@ def test_nested_blocks_behave_as_one(monkeypatch):
 
 def test_a_cancelled_block_still_closes_with_a_blank(monkeypatch):
     c, out = screen(monkeypatch, KeyboardInterrupt())
+    c.typed()  # the command line, drawn by the prompt loop
     with pytest.raises(Cancelled), c.block():
         c.ask("name")
     c.ok("cancelled")
