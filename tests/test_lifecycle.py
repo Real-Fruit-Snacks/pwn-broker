@@ -16,6 +16,7 @@ from pwn_broker.lifecycle import export_box, finish_box, import_box, reopen_box
 from pwn_broker.model import Flag
 from pwn_broker.note import read_note
 from pwn_broker.paths import AppPaths
+from pwn_broker.session import write_new_note
 from pwn_broker.store import StoreError, load_box, load_creds, load_files, load_targets, read_toml, save_box
 
 NOFIX = dict(fix=lambda path: 0)
@@ -754,7 +755,9 @@ def test_import_with_an_unsaved_note_stops_and_replaces_nothing(session):
         session.paths, Settings(), console, archive, lambda: NOW, unsaved=lambda b: True, **stand_in
     )  # fmt: skip
     assert result is None and marker.read_text() == "keep" and signalled == []
-    assert [k for k, _ in console.lines] == ["fail"]
+    assert console.lines == [
+        ("fail", f"import failed: the note of {session.box.path.name} has unsaved changes; save it and import again")
+    ]
 
 
 def test_import_does_not_close_anything_when_nothing_is_replaced(session, tmp_path):
@@ -769,3 +772,50 @@ def test_import_declined_closes_nothing(session):
     stand_in, signalled = window()
     assert import_box(session.paths, Settings(), FakeConsole(["n"]), archive, lambda: NOW, **stand_in) is None
     assert signalled == []
+
+
+def test_finish_keeps_the_folder_and_window_when_the_note_changed_after_the_archive(session):
+    stand_in, signalled = window()
+    answers(session, "y", "y")
+    note = session.box.path / "notes.md"
+    write_new_note(session.paths, session.box, session.targets)
+    archived = note.read_text()
+    console = session.console
+    ask = console.confirm
+
+    def confirm(question, default=False):
+        if question == "remove working folder?":
+            note.write_text(archived + "saved when the window lost focus\n")
+        return ask(question, default)
+
+    console.confirm = confirm
+    assert finish_box(session, **SAVED, **stand_in) is not None
+    assert session.box.path.exists() and note.read_text() == archived + "saved when the window lost focus\n"
+    assert signalled == []
+    assert kinds(session, "warn") == ["the note changed after the archive was made; the folder was kept"]
+
+
+def test_finish_keeps_the_folder_when_the_note_cannot_be_read_after_the_archive(session):
+    stand_in, signalled = window()
+    answers(session, "y", "y")
+    note = session.box.path / "notes.md"
+    write_new_note(session.paths, session.box, session.targets)
+    archived = note.read_text()
+    console = session.console
+    ask = console.confirm
+
+    def confirm(question, default=False):
+        if question == "remove working folder?":
+            note.unlink()
+        return ask(question, default)
+
+    console.confirm = confirm
+    finish_box(session, **SAVED, **stand_in)
+    assert session.box.path.exists() and signalled == []
+    assert kinds(session, "warn") == ["the note changed after the archive was made; the folder was kept"]
+
+
+def test_finish_says_so_when_the_signal_could_not_be_sent(session):
+    answers(session, "y", "y")
+    finish_box(session, **SAVED, close=lambda paths, box: False, find=lambda paths, box: 1)
+    assert kinds(session, "warn").count("the note window did not close") == 1

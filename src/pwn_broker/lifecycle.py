@@ -17,12 +17,14 @@ from pwn_broker.archive import (
 )
 from pwn_broker.config import Settings
 from pwn_broker.console import Cancelled, Console
+from pwn_broker.filescan import sha256_file
 from pwn_broker.model import Box
+from pwn_broker.note import NOTE_NAME
 from pwn_broker.notewindow import close_note, find_note, note_unsaved
 from pwn_broker.paths import AppPaths
 from pwn_broker.privilege import fix_ownership
 from pwn_broker.session import Session, load_session, process_checks, refresh, rescan
-from pwn_broker.store import StoreError, load_box, save_box
+from pwn_broker.store import StoreError, load_box, load_files, save_box
 from pwn_broker.toolpkg import ToolError
 
 BLOCK_HOOKS: list[Callable[[Session], str | None]] = []
@@ -104,6 +106,23 @@ def export_box(
     return dest
 
 
+def _recorded_note(box: Box) -> str | None:
+    # the checksum the archive step recorded for the note; None when it had no note
+    for record in load_files(box):
+        if record.path == NOTE_NAME:
+            return record.sha256
+    return None
+
+
+def _note_is_archived(box: Box, recorded: str | None) -> bool:
+    try:
+        return sha256_file(box.path / NOTE_NAME) == recorded
+    except FileNotFoundError:
+        return recorded is None
+    except OSError:
+        return False
+
+
 def _remove_folder(session: Session) -> None:
     folder = session.box.path
     active = session.paths.active.resolve()
@@ -127,7 +146,8 @@ def close_window(
     find: Callable[[AppPaths, Box], int | None] = find_note,
 ) -> None:
     # the window of a note whose folder is about to go; one that stays is said once
-    if close(paths, box) and find(paths, box) is not None:
+    close(paths, box)
+    if find(paths, box) is not None:
         console.warn("the note window did not close")
 
 
@@ -184,6 +204,7 @@ def finish_box(
         box.finished = session.clock()
         save_box(box)
         packed, left_out = _pack(session, "finished")
+        archived_note = _recorded_note(box)
         copy = _copy(session, packed)
     except _FAILURES as exc:
         _rollback(box)
@@ -224,6 +245,8 @@ def finish_box(
         remove = False
     if remove and unsaved(box):
         console.warn("the note has unsaved changes; the folder was kept")
+    elif remove and not _note_is_archived(box, archived_note):
+        console.warn("the note changed after the archive was made; the folder was kept")
     elif remove:
         close_window(console, session.paths, box, close=close, find=find)
         _remove_folder(session)

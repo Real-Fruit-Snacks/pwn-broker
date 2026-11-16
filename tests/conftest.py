@@ -293,3 +293,10 @@ def no_real_processes(monkeypatch):
     from pwn_broker import notewindow
 
     monkeypatch.setattr(notewindow, "_own_processes", lambda: [])
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a test reached a real signal or sleep; pass a kill and sleep stand-in")
+
+    defaults = dict(notewindow.close_note.__kwdefaults__)
+    defaults.update(kill=refuse, sleep=refuse)
+    monkeypatch.setattr(notewindow.close_note, "__kwdefaults__", defaults)

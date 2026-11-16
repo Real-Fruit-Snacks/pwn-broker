@@ -75,10 +75,17 @@ def _own_processes() -> Iterator[Process]:
         except OSError:
             continue
         if raw:
-            yield int(entry.name), raw.rstrip(b"\0").decode("utf-8", "replace").split("\0")
+            yield int(entry.name), _parse_cmdline(raw)
+
+
+def _parse_cmdline(raw: bytes) -> list[str]:
+    return [os.fsdecode(arg) for arg in raw.rstrip(b"\0").split(b"\0")]
 
 
 def _same_path(a: str, b: Path) -> bool:
+    # the app starts vim with absolute paths; a relative one is relative to a folder not known here
+    if not Path(a).is_absolute():
+        return False
     try:
         return Path(a).resolve() == b.resolve()
     except (OSError, RuntimeError, ValueError):
@@ -117,6 +124,9 @@ def close_note(
 ) -> bool:
     pid = find_note(paths, box, processes=processes)
     if pid is None:
+        return False
+    # read again right before the signal: that pid must still be the note's vim
+    if find_note(paths, box, processes=processes) != pid:
         return False
     try:
         kill(pid, signal.SIGTERM)

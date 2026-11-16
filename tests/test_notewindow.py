@@ -1,5 +1,8 @@
+import os
 import signal
 from pathlib import Path
+
+import pytest
 
 from conftest import REAL_OWN_PROCESSES
 from pwn_broker.config import Settings
@@ -152,3 +155,43 @@ def test_close_note_stops_waiting_when_it_is_gone(paths, box):
         processes=lambda: state.pop(0) if len(state) > 1 else state[0],
     )  # fmt: skip
     assert len(sleeps) <= 1
+
+
+def test_find_note_never_matches_a_relative_note_path(paths, box, monkeypatch):
+    # a vim started by hand in this folder as `vim -u <vimrc> notes.md`: its folder is not the app's
+    monkeypatch.chdir(box.path)
+    argv = note_argv(paths, box)
+    argv[3] = "notes.md"
+    assert find_note(paths, box, processes=listing((6, argv))) is None
+
+
+def test_find_note_never_matches_a_relative_vimrc_path(paths, box, monkeypatch):
+    paths.vim_dir.mkdir(parents=True)
+    monkeypatch.chdir(paths.vim_dir.parent)
+    argv = note_argv(paths, box)
+    argv[2] = f"{paths.vim_dir.name}/vimrc"
+    assert find_note(paths, box, processes=listing((6, argv))) is None
+
+
+def test_close_note_sends_nothing_when_the_pid_changed_since_the_listing(paths, box):
+    sent = []
+    seen = [[(42, note_argv(paths, box))], [(42, ["bash"])]]
+    ok = close_note(
+        paths, box, kill=lambda *a: sent.append(a), sleep=lambda s: None,
+        processes=lambda: seen.pop(0) if len(seen) > 1 else seen[0],
+    )  # fmt: skip
+    assert ok is False and sent == []
+
+
+def test_command_line_arguments_are_decoded_as_file_names():
+    from pwn_broker.notewindow import _parse_cmdline
+
+    assert _parse_cmdline(b"vim\0-u\0/a/vimrc\0/b/notes.md\0") == ["vim", "-u", "/a/vimrc", "/b/notes.md"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="file names are bytes only on Linux")
+def test_a_note_path_that_is_not_utf8_still_matches(tmp_path):
+    from pwn_broker.notewindow import _parse_cmdline
+
+    odd = os.fsdecode(os.fsencode(tmp_path) + b"/b\xff")
+    assert _parse_cmdline(os.fsencode(odd) + b"\0") == [odd]

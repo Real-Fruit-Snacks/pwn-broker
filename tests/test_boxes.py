@@ -439,3 +439,9 @@ def test_second_box_of_a_finished_name_gets_its_own_archives(paths):
     second = make(paths, new_id=lambda: "id-2")
     assert archive_path(paths, second, "finished") != archive_path(paths, first, "finished")
     assert archive_path(paths, second, "finished").name == "2026-11-14_htb_forest-2.finished.tar.gz"
+
+
+def test_create_box_with_a_folder_and_a_numbered_archive_gives_the_next_number(paths):
+    (paths.active / "2026-11-14_htb_forest").mkdir(parents=True)
+    archive(paths, "2026-11-14_htb_forest-2", "finished")
+    assert make(paths).path == paths.active / "2026-11-14_htb_forest-3"
