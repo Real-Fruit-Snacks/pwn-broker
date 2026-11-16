@@ -577,7 +577,7 @@ The installer comes from the release it installs, not from `main`, so the two al
 
 - The installer needs `sh`, `tar`, `gzip` and `sha256sum`, and `curl` only without `--from`. It no longer needs `python3` or `python3-venv`.
 - An upgrade replaces `python/` and `app/` and nothing else.
-- The release file is what is trusted. Downloaded, it is checked against `SHA256SUMS.txt`. Given with `--from`, it is mine to vouch for: the installer prints its SHA-256 so I can compare it with the release page. The installer holds no pins of its own and does not check the Python inside the file again. The wheels are checked by `pip` against `wheels.lock`, and asciinema by the app's setup against the app's pin.
+- The release file is what is trusted. Downloaded, it is checked against `SHA256SUMS.txt`. Given with `--from`, it is for whoever gives it to vouch for: the installer prints its SHA-256 to compare with the release page. The installer holds no pins of its own and does not check the Python inside the file again. The wheels are checked by `pip` against `wheels.lock`, and asciinema by the app's setup against the app's pin.
 - `--from` no longer takes a source folder or a wheel. To install from a checkout, build a release file from it first; a script in the repository does that, and CI uses it.
 - `--no-asciinema` goes away: asciinema is always in the file.
 
@@ -616,7 +616,7 @@ Nothing else. With `--from` and a folder index, the install and the tool command
 
 - The release file is gzip with stored blocks, written by the build script itself, so its bytes depend on no compression library. Its contents are already compressed.
 - `setup` fails on a missing or wrong asciinema, so the installer fails; the launch check only warns.
-- The installer's work folder is inside the install folder (`.install.<random>`), and a failed or interrupted install puts the previous `python/` and `app/` back. After a kill or a power cut the folder can be left behind. The installer refuses an install folder that belongs to another user.
+- The installer's work folder is inside the install folder (`.install.<random>`), and a failed or interrupted install puts the previous `python/` and `app/` back. Only those: if `setup` had already started, the launchers in `bin/` and the vim and template files it may have rewritten stay as the new release wrote them. After a kill or a power cut the folder can be left behind. The installer refuses an install folder that belongs to another user.
 - `setup` and the launchers run Python with `-I`.
 - The release workflow has a manual dry run that runs every step but the one that publishes, and publishes from a second job that runs none of the repository's code, as a draft first. Its build environment is installed from the locks only, and the publish job checks the release file against the SHA-256 recorded right after the build.
 - The wheels' licence texts are taken from the wheels themselves at build time. Python's is the file pwn-shop's runtime carries. `licences/README.txt` is written by the build from `release/licences/sources.toml`.

@@ -43,14 +43,14 @@ def test_no_folder_means_nothing_is_recording(paths):
 
 
 def test_a_marker_whose_window_is_gone_is_dropped(paths, box):
-    # Review focus 4: a killed window leaves its marker behind
+    # a killed window leaves its marker behind
     recstate.mark(paths, 4242, "777", "dc01", cast_in(box))
     assert recstate.recording(paths, alive=lambda pid: False, started=lambda pid: "777") == []
     assert not (paths.run_recordings / "4242").exists()
 
 
 def test_a_reused_process_id_is_dropped(paths, box):
-    # Review focus 4: the window died and another program now has its process ID
+    # the window died and another program now has its process ID
     recstate.mark(paths, 4242, "777", "dc01", cast_in(box))
     assert recstate.recording(paths, alive=lambda pid: True, started=lambda pid: "999") == []
     assert not (paths.run_recordings / "4242").exists()

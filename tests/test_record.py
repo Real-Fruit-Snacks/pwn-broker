@@ -310,7 +310,7 @@ def test_an_added_target_goes_through_the_hosts_offer(make_env, opened, dc01, as
 
 
 def test_a_target_added_by_record_is_seen_by_the_prompt(make_env, paths, opened, dc01, asciinema):
-    # Review focus 5: the prompt read the box before record added a target to it
+    # the prompt read the box before record added a target to it, and must see the new target
     prompt = load_session(paths, Settings(), FakeConsole(), load_box(opened.path), lambda: NOW)
     write_note(prompt)
     prompt.box.last_target = "dc01"

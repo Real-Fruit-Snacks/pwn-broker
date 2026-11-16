@@ -286,7 +286,7 @@ def member_bytes(path: Path, name: str) -> bytes:
         return tf.extractfile(name).read()
 
 
-# ---- Review focus 1: the same checkout gives the same bytes
+# ---- the same checkout gives the same bytes
 
 
 def test_two_builds_of_one_checkout_are_byte_identical(tmp_path):
@@ -505,7 +505,7 @@ def test_the_build_leaves_no_temporary_folder(kit, no_real_network_or_tools):
     assert list(no_real_network_or_tools.iterdir()) == []
 
 
-# ---- Review focus 2: every wheel named by wheels.lock, every line with its wheel
+# ---- every wheel named by wheels.lock, every line with its wheel
 
 
 def test_a_wheel_that_wheels_lock_does_not_name_is_refused(kit):
@@ -592,7 +592,7 @@ def test_a_failed_command_is_refused_with_its_last_lines(kit):
     kit.refused(r"cannot build the app's wheel: first line / ERROR: it went wrong")
 
 
-# ---- Review focus 3: the licence of everything in the release
+# ---- the licence of everything in the release
 
 RICH = "rich-15.0.0-py3-none-any.whl"
 RICH_INFO = "rich-15.0.0.dist-info"
