@@ -129,8 +129,8 @@ p { margin: 0 0 var(--space-s); text-wrap: pretty; }
     transition: background-color var(--dur-fast) var(--ease); }
 @media (hover: hover) { .copy:hover { background: var(--ember-hover); } }
 .copy:active { background: var(--ember-press); }
-/* the working install sits right under the line that does not work yet; Amber is the warning, the words say it */
-.caveat { margin-top: var(--space-s); padding-top: var(--space-s); border-top: 2px solid var(--amber); }
+/* the install for a machine with no network sits under the one line, set off by a rule */
+.caveat { margin-top: var(--space-m); padding-top: var(--space-s); border-top: 1px solid var(--line); }
 .caveat p { margin-bottom: var(--space-2xs); }
 .caveat b { font-weight: 600; }
 .cmd-block { border-color: var(--line); }
@@ -139,6 +139,8 @@ p { margin: 0 0 var(--space-s); text-wrap: pretty; }
 @media (hover: hover) { .cmd-block .copy:hover { background: var(--surface); } }
 .cmd-block .copy:active { background: var(--raised); transform: translateY(1px); }
 .install-note { font-size: .95rem; color: var(--mute); margin-top: var(--space-s); max-width: 40em; }
+/* the session is taller than the text beside it: on a screen with room, the name and the install stay in view while it scrolls */
+@media (min-width: 961px) and (min-height: 860px) { .hero-text { position: sticky; top: var(--space-m); } }
 
 /* ---------- the session (BRAND.md §9 palette) ---------- */
 .session { margin: 0; min-width: 0; }

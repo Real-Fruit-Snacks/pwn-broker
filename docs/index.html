@@ -54,7 +54,7 @@
         <div class="hero-text">
             <h1 class="wordmark">pwn-broker</h1>
             <p class="lead">Keeps a box's targets, notes, creds and tools in order</p>
-            <p class="sub">I launch it when I start a Hack The Box machine. It asks a few questions, builds the workspace, opens my notes in vim, and stays open as a prompt for the whole session. When the box is done it packs everything into one archive. It is for Kali Linux with a desktop session. One whole box has run in the official Kali image in CI, as root; a real Kali desktop has not: see <a href="#tested">tested on</a>.</p>
+            <p class="sub">I launch it when I start a Hack The Box machine. It asks a few questions, builds the workspace, opens my notes in vim, and stays open as a prompt for the whole session. When the box is done it packs everything into one archive. It is for Kali Linux with a desktop session; see what it has been <a href="#tested">tested on</a>.</p>
 
             <div class="install" id="install">
                 <p class="install-label">Install</p>
@@ -63,7 +63,7 @@
                     <p><b>No network on the Kali machine:</b> copy the release file and <code>install.sh</code> from the <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest">latest release</a> across and run this. It prints the file's SHA-256 to compare with the release page, and contacts nothing.</p>
                     <div class="cmd cmd-block"><pre><code>sh install.sh --from pwn-broker-0.1.0-linux-x86_64.tar.gz</code></pre><button class="copy" type="button" data-copy="sh install.sh --from pwn-broker-0.1.0-linux-x86_64.tar.gz">Copy</button></div>
                 </div>
-                <p class="install-note">Run it as the user who will use pwn-broker, not with <code>sudo</code>; it uses <code>sudo</code> only to create <code>/opt/pwn-broker</code>, when it has to. It downloads one release file from this repository and checks it against its SHA-256 in <code>SHA256SUMS.txt</code>, then puts the app and its own Python in <code>/opt/pwn-broker</code> and adds one PATH line to <code>~/.zshrc</code>, and to <code>~/.bashrc</code> if you have one. It needs <code>sh</code>, <code>tar</code>, <code>gzip</code>, <code>sha256sum</code> and <code>curl</code>, and no Python from the machine. x86_64 Linux with glibc only. Run it again to upgrade. The <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/guide.md#install-and-upgrade">guide</a> has the options, how to build a release file from a checkout, and what the install trusts.</p>
+                <p class="install-note">Run it as the user who will use pwn-broker, not with <code>sudo</code>. It downloads one release file, checks its SHA-256, and puts the app and its own Python in <code>/opt/pwn-broker</code>; it needs no Python from the machine. x86_64 Linux with glibc only. Run it again to upgrade. The <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/guide.md#install-and-upgrade">guide</a> has the options and what the install trusts.</p>
             </div>
         </div>
 
@@ -167,7 +167,7 @@
             </div>
             <div class="block">
                 <h3>Tools, installed and taken off again</h3>
-                <p><code>tool install &lt;name&gt;</code> installs a package from the index: size and SHA-256 checked, no install script, and a Python tool gets its own virtual environment from bundled wheels with no network. Kali's own copies are never touched. A tool that needs root is run as <code>sudo &lt;full path&gt;</code>, which the app prints: a bare <code>sudo</code> finds nothing, or Kali's own command of that name, as with the <code>ligolo-proxy</code> that Kali's <code>ligolo-ng</code> installs. <code>finish</code> removes the box's tools unless another unfinished box still uses them. The app can also install a Python tool that brings its own Python as a shared runtime package, such as <code>python-3.13</code>, installed with the first tool that requires it and removed with the last; it puts nothing on PATH, so Kali's <code>python3</code> is never shadowed. Build 3 of <code>certipy</code> and <code>targetedkerberoast</code> does this and is the only published build of each; builds 1 and 2 were withdrawn on 2026-11-15, before any box had used them. <code>tool history</code> lists every tool the box has had, removed ones too, and <code>~/pwn-broker/tools.log</code> records each install and removal across boxes. The first set of packages is x86_64 only. A tool's data in the home folder is the one thing removed outside <code>/opt/pwn-broker</code>, at <code>finish</code> or when the last box that uses the tool removes it, and only if it did not exist before the install. It is copied into the box first, and a path that could not be copied in full is kept, with a warning.</p>
+                <p><code>tool install &lt;name&gt;</code> installs a package from <a href="https://github.com/Real-Fruit-Snacks/pwn-shop">pwn-shop</a>'s index, with its size and SHA-256 checked and no install script: kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng and peass-ng. The Python ones bring their own Python as a shared runtime that puts nothing on PATH, so Kali's <code>python3</code> is never used or shadowed. <code>finish</code> takes the box's tools off again unless another unfinished box still uses them, and <code>tool history</code> lists every tool the box has had.</p>
             </div>
             <div class="block">
                 <h3>Recording a window</h3>
@@ -235,13 +235,13 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
                 <li><b>Not tested: a normal user with <code>sudo</code>.</b> Every Kali run so far is root.</li>
                 <li><b>Not tested: a full Kali desktop session.</b> CI used a virtual display and <code>xterm</code>, and the run by hand Kali's qterminal under WSL.</li>
                 <li><b>Not tested: a real Hack The Box connection.</b> The OpenVPN file in the Kali run has no server behind it.</li>
-                <li><b>Not tested: the installer's download from a real release.</b> <code>curl ... | sh</code> with no <code>--from</code> has run only against a stand-in in the unit tests.</li>
             </ul>
             <ul aria-label="Tested">
                 <li><b>The unit suite</b> on Windows 11 under Python 3.13, and on Ubuntu 24.04 in CI under Python 3.11, 3.12, 3.13 and 3.14 and once more as root, with warnings treated as errors.</li>
                 <li><b>One whole box in the official Kali image in CI</b> (Kali 2026.3, as root): installed from the release file with the container's network off, then new box to <code>finish</code> and <code>import</code>, with a real OpenVPN and <code>tun0</code>, under a virtual display with <code>xterm</code>.</li>
                 <li><b>An install in a bare <code>debian:stable-slim</code> container</b> with no Python and no network.</li>
                 <li><b>Every command by hand in Kali 2026.2 under WSL 2</b>, as root, with Kali's own qterminal, including building the release file there and upgrading an install made by the old installer.</li>
+                <li><b>The published v0.1.0 there too</b>: the install line above, then a box with all six tools installed from the published index, each started once, and taken off again by <code>finish</code>.</li>
                 <li><b>The full record</b>, with counts, versions and dates, is in <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/tested.md">docs/tested.md</a>.</li>
             </ul>
         </div>
@@ -268,7 +268,7 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
 <footer>
     <div class="wrap">
         <p>MIT. Not affiliated with Hack The Box.</p>
-        <p><a href="https://github.com/Real-Fruit-Snacks/pwn-broker">Source</a> · <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/SECURITY.md">Security</a> · <a href="https://real-fruit-snacks.github.io/">RFS</a></p>
+        <p><a href="https://github.com/Real-Fruit-Snacks/pwn-broker">Source</a> · <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/guide.md">Guide</a> · <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/SECURITY.md">Security</a> · <a href="https://real-fruit-snacks.github.io/">RFS</a></p>
     </div>
 </footer>
 
