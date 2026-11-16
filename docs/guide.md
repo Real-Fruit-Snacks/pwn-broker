@@ -336,7 +336,15 @@ A package is one zip for one build of one tool: a manifest, the upstream licence
 - Every download and every cached zip is checked against the size and SHA-256 in the index before it is used. The index itself is not signed, so the check catches corruption and a swapped zip, not who published the index.
 - A Python tool gets its own virtual environment, built from the bundled wheels with no network access, wheels only and hash checking on. Its `wheels.lock` is checked line by line before pip reads it.
 - The first set of packages is x86_64 only, and a package built for another architecture is refused at install.
-- A package's commands may not take a name the app or the system already uses: `sh`, `bash`, `dash`, `zsh`, `fish`, `sudo`, `su`, `doas`, `env`, `python`, `python3`, `pip`, `pip3`, `sed`, `cut`, `mkdir`, `kill`, `cat`, `rm`, `ls`, `cp`, `mv`, `ln`, `tar`, `vim`, `vi`, `pwn-broker`, `record`, `asciinema`, `openvpn`, `ping` and `ip`.
+- A package's commands may not take a name that must never be stood in for:
+    - shells and what starts a program for one: `sh`, `bash`, `dash`, `zsh`, `fish`, `env`
+    - what asks for a password or changes who you are: `sudo`, `sudoedit`, `su`, `doas`, `pkexec`, `run0`, `passwd`, `login`, `ssh`, `scp`, `sftp`, `gpg`
+    - Python and pip, under any versioned name too: `python`, `python3`, `python3.13`, `pip`, `pip3`
+    - what the app runs itself: `chown`, `cp`, `rm`, `kill`, `ip`, `ping`, `tar`, `vim`, `openvpn`, `x-terminal-emulator`, `pwn-broker`, `record`, `asciinema`
+    - everyday commands: `sed`, `cut`, `mkdir`, `cat`, `ls`, `mv`, `ln`, `vi`, `grep`, `awk`, `find`, `head`, `tail`, `chmod`, `id`, `uname`, `test`
+    - what manages the system or fetches something to run: `apt`, `apt-get`, `dpkg`, `systemctl`, `mount`, `umount`, `curl`, `wget`, `git`
+
+  It is not a list of everything Kali has. A tool may take the name of Kali's own copy of it, and install prints a `warn` line when it does.
 
 ### Runtimes
 

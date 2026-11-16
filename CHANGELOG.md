@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+What a tool package is checked for, made stricter. No published package is affected.
+
+- A package's commands may not take the name of a program the app runs itself: `chown` and `x-terminal-emulator` were missing, so with `/opt/pwn-broker/bin` first on PATH the app would have run a package's copy, as root when the app is. More names that ask for a password, manage the system or fetch something to run are reserved too, and so are Python and pip under a versioned name such as `python3.13`.
+- A zip whose list of entries is larger than 4 MiB is refused before the list is read. A zip of nothing but two million entries cost 800 MiB of memory before the limit of 10,000 entries was applied.
+- A tool's files and folders get their modes set at unpack (755, and 644 for what is not run), as a runtime's do. They used to follow the umask, so under a loose one a file a launcher runs was writable by anyone on the machine.
+- A package or index version has to start with a letter or digit and hold only letters, digits and `. _ + ~ -`, 100 characters at most. It used to be refused only for a slash, a backslash or a space.
+- A zip entry's name may not hold a colon or a control character, or be longer than a path may be, as a runtime archive's may not.
+- A manifest may not claim more of the home folder: places that hold keys or sign-ins (`.aws`, `.kube`, `.docker`, `.netrc` and others), places that run something at login, and anything under `.local/bin`.
+- A runtime archive that ends after one block of zeros is refused; a tar ends with two.
+- A manifest on disk that is nested too deeply, or holds a number too long to read, is refused with a message, not a Python error.
+
 ## v0.1.0
 
 The first release. pwn-broker keeps a Hack The Box machine in order on Kali Linux: it builds a folder for the box and each target, opens the note in vim, keeps the credentials and the lists made from them, and stays open as a prompt for the whole session. When the box is done, `finish` packs it into one archive and takes its `/etc/hosts` lines and tools off the machine again. This release is one file with its own Python, for x86_64 Linux with glibc. The [guide](https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/guide.md) has every command, and [docs/tested.md](https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/tested.md) what it has run on.

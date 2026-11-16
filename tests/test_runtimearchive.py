@@ -828,3 +828,23 @@ def test_a_failed_cleanup_after_another_error_is_noted(tmp_path, monkeypatch):
         unpack(archive, tmp_path / "rt")
     [tmp] = [p for p in tmp_path.iterdir() if p.name.startswith(TEMP_PREFIX)]
     assert caught.value.__notes__ == [f"the temporary folder {tmp} could not be removed (busy)"]
+
+
+# ---- the end of the tar
+
+
+def test_a_tar_that_ends_after_one_zero_block_is_refused(tmp_path, monkeypatch):
+    # a tar ends with two; tarfile stops at the first and never looks for the second
+    raw = three_files()
+    archive = write_gz(tmp_path / "rt.tar.gz", raw[: 3 * 1024 + 512])
+    forbid_writing(monkeypatch)
+    with pytest.raises(ToolError, match="does not end as a tar does"):
+        unpack(archive, tmp_path / "rt")
+    assert leftovers(tmp_path) == ["rt.tar.gz"]
+
+
+def test_a_tar_that_ends_after_its_two_zero_blocks_unpacks(tmp_path):
+    raw = three_files()
+    archive = write_gz(tmp_path / "rt.tar.gz", raw[: 3 * 1024 + 1024])
+    unpack(archive, tmp_path / "rt")
+    assert sorted(p.name for p in (tmp_path / "rt/python").iterdir()) == ["a", "b", "c"]

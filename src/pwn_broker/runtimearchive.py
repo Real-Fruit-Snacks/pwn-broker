@@ -10,22 +10,21 @@ import os
 import shutil
 import tarfile
 import tempfile
-import unicodedata
 import zlib
 from collections import deque
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
-from pwn_broker.toolpkg import ToolError
+from pwn_broker.toolpkg import MAX_PART_BYTES, MAX_PATH_BYTES, ToolError
+from pwn_broker.toolpkg import bad_characters as _bad_characters
+from pwn_broker.toolpkg import shown as _shown
+from pwn_broker.toolpkg import too_long as _too_long
 
 MAX_MEMBERS = 20_000
 MAX_BYTES = 1024**3
 # as many links as Linux follows in one lookup
 MAX_LINK_HOPS = 40
-# the Linux limits on a path and on one part of it
-MAX_PATH_BYTES = 4096
-MAX_PART_BYTES = 255
 # what an entry may take beyond its own data: its headers, a PAX record holding a name and a
 # target at the limits, and the padding and end blocks after the last entry
 _HEADER_ALLOWANCE = 16 * 1024
@@ -35,29 +34,6 @@ _BLOCK = tarfile.BLOCKSIZE
 _READ_ERRORS = (tarfile.TarError, OSError, EOFError, zlib.error)
 # what tarfile raises, beyond its own errors, for a header it cannot parse
 _HEADER_ERRORS = (*_READ_ERRORS, ValueError, UnicodeError, OverflowError)
-
-
-def _shown(text: str) -> str:
-    return repr(text) if len(text) <= 100 else f"{text[:100]!r}..."
-
-
-def _bad_characters(text: str) -> bool:
-    return any(c in "\\:" or unicodedata.category(c) == "Cc" for c in text)
-
-
-def _byte_length(text: str) -> int:
-    try:
-        return len(text.encode("utf-8", "surrogateescape"))
-    except UnicodeEncodeError:
-        return len(text.encode("utf-8", "surrogatepass"))
-
-
-def _too_long(text: str) -> str | None:
-    if _byte_length(text) > MAX_PATH_BYTES:
-        return f"longer than {MAX_PATH_BYTES} bytes"
-    if any(_byte_length(part) > MAX_PART_BYTES for part in text.split("/")):
-        return f"a part longer than {MAX_PART_BYTES} bytes"
-    return None
 
 
 def _is_file(member: tarfile.TarInfo) -> bool:
@@ -254,9 +230,10 @@ def _allowing(tar: tarfile.TarFile, reader: _Bounded) -> Iterator[tarfile.TarInf
 
 def _read_all(tar: tarfile.TarFile, reader: _Bounded) -> dict[str, tarfile.TarInfo]:
     seen = _check_all(_allowing(tar, reader))
-    # tarfile ends quietly at a damaged header or at a cut, so the end is checked here
+    # tarfile ends quietly at a damaged header or at a cut, so the end is checked here: a tar
+    # ends with two blocks of zeros, and tarfile stops at the first without looking for the second
     reader.seek(tar.offset)
-    if reader.read(_BLOCK) != bytes(_BLOCK):
+    if reader.read(2 * _BLOCK) != bytes(2 * _BLOCK):
         raise ToolError("runtime archive is incomplete or damaged: it does not end as a tar does")
     reader.read_to_end()
     return seen

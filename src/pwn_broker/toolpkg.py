@@ -4,6 +4,7 @@ import re
 import shutil
 import stat
 import tomllib
+import unicodedata
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,17 +20,43 @@ _CHUNK = 1024 * 1024
 _MANIFEST_LIMIT = 1024 * 1024
 MAX_MEMBERS = 10_000
 MAX_UNPACKED_BYTES = 1024**3
+# the zip's own list of its entries, which zipfile reads whole before one entry can be counted:
+# room for MAX_MEMBERS entries whose names are far longer than a package's
+MAX_DIRECTORY_BYTES = 4 * 1024 * 1024
+# the Linux limits on a path and on one part of it
+MAX_PATH_BYTES = 4096
+MAX_PART_BYTES = 255
 # a dot only between other characters, so a name is never ".", "..", hidden or ends with a dot
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*")
 _SERIES = re.compile(r"[0-9]+\.[0-9]+")
+# a version is part of a folder's name and is printed: no slash, space or control character
+_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+~-]{0,99}")
+VERSION_RULE = (
+    "must start with a letter or digit and hold only letters, digits and . _ + ~ -, "
+    "100 characters at most"
+)
 _COMMAND_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _TOP_FILES = (MANIFEST, "LICENSE", "wheels.lock")
-# a launcher by one of these names, first on PATH, would stand in for something the user,
-# sudo or the app itself relies on
+# A launcher by one of these names, first on PATH, would stand in for something the user,
+# sudo or the app itself relies on. It is a list of what must never be stood in for, not of
+# everything Kali has: a tool may take the name of Kali's own copy of it, and install says so.
 RESERVED_COMMANDS = frozenset(
-    "sh bash dash zsh fish sudo su doas env python python3 pip pip3 sed cut mkdir kill cat rm "
-    "ls cp mv ln tar vim vi pwn-broker record asciinema openvpn ping ip".split()
+    # shells, and what starts a program for one
+    "sh bash dash zsh fish env "
+    # what asks for a password or changes who you are
+    "sudo sudoedit su doas pkexec run0 passwd login ssh scp sftp gpg "
+    # Python and pip; their versioned names are refused by _VERSIONED_PYTHON
+    "python python3 pip pip3 "
+    # what the app runs by name, which a test checks against the app's own code
+    "chown cp rm kill ip ping tar vim openvpn x-terminal-emulator pwn-broker record asciinema "
+    # what a shell's start-up files, its prompt and everyday lines run
+    "sed cut mkdir cat ls mv ln vi grep awk find head tail chmod id uname test "
+    # what installs and manages the system
+    "apt apt-get dpkg systemctl mount umount "
+    # what fetches something to run
+    "curl wget git".split()
 )
+_VERSIONED_PYTHON = re.compile(r"(?:python|pip)[0-9.]*")
 LOCK_LIMIT = 1024 * 1024
 # pip obeys options, URLs and markers in a requirements file; only exact pins with hashes pass
 _LOCK_LINE = re.compile(
@@ -100,8 +127,40 @@ def valid_tool_name(name: str) -> bool:
     return isinstance(name, str) and _NAME.fullmatch(name) is not None
 
 
+def reserved_command_name(name: str) -> bool:
+    return name in RESERVED_COMMANDS or _VERSIONED_PYTHON.fullmatch(name) is not None
+
+
 def valid_command_name(name: str) -> bool:
-    return _COMMAND_NAME.fullmatch(name) is not None and name not in RESERVED_COMMANDS
+    return _COMMAND_NAME.fullmatch(name) is not None and not reserved_command_name(name)
+
+
+def valid_version(version: object) -> bool:
+    return isinstance(version, str) and _VERSION.fullmatch(version) is not None
+
+
+def shown(text: str) -> str:
+    return repr(text) if len(text) <= 100 else f"{text[:100]!r}..."
+
+
+def bad_characters(text: str) -> bool:
+    """A backslash, a colon or a control character, none of which a name in a package holds."""
+    return any(c in "\\:" or unicodedata.category(c) == "Cc" for c in text)
+
+
+def _byte_length(text: str) -> int:
+    try:
+        return len(text.encode("utf-8", "surrogateescape"))
+    except UnicodeEncodeError:
+        return len(text.encode("utf-8", "surrogatepass"))
+
+
+def too_long(text: str) -> str | None:
+    if _byte_length(text) > MAX_PATH_BYTES:
+        return f"longer than {MAX_PATH_BYTES} bytes"
+    if any(_byte_length(part) > MAX_PART_BYTES for part in text.split("/")):
+        return f"a part longer than {MAX_PART_BYTES} bytes"
+    return None
 
 
 def build_id(version: str, build: int) -> str:
@@ -123,12 +182,20 @@ def machine_arch() -> str:
 
 # ---- manifest
 
-# finish deletes what a tool wrote under these names, so a manifest may not claim places that
-# hold the user's own keys or settings; a tool's own folder inside one (.config/<tool>) is fine
-_PRIVATE_HOME = (".ssh", ".gnupg")
+# finish moves what a tool wrote under these names into the box and deletes it from the home
+# folder, so a manifest may not claim places that hold the user's own keys or settings, or that
+# run something at login; a tool's own folder inside a shared one (.config/<tool>) is fine.
+# Neither list can name every such place: they hold the ones every Kali home has or soon gets.
+# _PRIVATE_HOME is refused with everything under it, _SHARED_HOME by its exact name.
+_PRIVATE_HOME = (
+    ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".password-store", ".mozilla", ".pki",
+    ".config/gcloud", ".config/gh", ".config/autostart", ".config/systemd", ".local/bin",
+    ".local/share/keyrings", ".local/share/applications",
+)  # fmt: skip
 _SHARED_HOME = frozenset(
-    ".config .local .local/share .local/bin .cache .bashrc .zshrc .profile .bash_profile "
-    ".bash_history .zsh_history .vimrc .gitconfig Desktop Documents Downloads".split()
+    ".config .local .local/share .cache .bashrc .zshrc .profile .bash_profile .bash_login "
+    ".bash_logout .zshenv .zprofile .zlogin .zlogout .bash_history .zsh_history .vimrc "
+    ".gitconfig .netrc .pgpass Desktop Documents Downloads".split()
 )
 
 
@@ -175,7 +242,7 @@ def _table_list(data: dict, key: str) -> list[dict]:
 def _command(row: dict, index: int) -> Command:
     label = f"command[{index}]"
     name = _text(row, "name", f"{label}.name")
-    if name in RESERVED_COMMANDS:
+    if reserved_command_name(name):
         raise ToolError(f"{label}.name: {name!r} is reserved and cannot be a tool's command")
     if not valid_command_name(name):
         raise ToolError(f"{label}.name: {name!r} is not a valid command name")
@@ -300,8 +367,8 @@ def parse_manifest(data: dict) -> Manifest:
             "starting with a letter or digit, with no two dots together and none at the end"
         )
     version = _text(data, "version", "version")
-    if re.search(r"[/\\\s]", version):
-        raise ToolError(f"version: {version!r} must not contain a slash, backslash or space")
+    if not valid_version(version):
+        raise ToolError(f"version: {shown(version)} {VERSION_RULE}")
     build = data.get("build")
     if not isinstance(build, int) or isinstance(build, bool) or build < 1:
         raise ToolError("build: must be a whole number of 1 or more")
@@ -356,7 +423,8 @@ def parse_manifest(data: dict) -> Manifest:
     home = _strings(home_table, "home", "data.home")
     for entry in home:
         _relative(entry, "data.home")
-        if entry.split("/")[0] in _PRIVATE_HOME or entry in _SHARED_HOME:
+        private = any(entry == tree or entry.startswith(tree + "/") for tree in _PRIVATE_HOME)
+        if private or entry in _SHARED_HOME:
             raise ToolError(
                 f"data.home: {entry!r} is shared with everything else in the home folder"
             )
@@ -386,7 +454,10 @@ def parse_manifest(data: dict) -> Manifest:
 def _parse_text(raw: bytes, label: str) -> Manifest:
     try:
         return parse_manifest(tomllib.loads(raw.decode("utf-8")))
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+    except RecursionError as exc:
+        raise ToolError(f"{label} cannot be read (it is nested too deeply)") from exc
+    except ValueError as exc:
+        # not UTF-8, not TOML, or a number too long to read
         raise ToolError(f"{label} cannot be read ({exc})") from exc
 
 
@@ -437,6 +508,8 @@ def verify_zip(path: Path, *, size: int, sha256: str) -> None:
 
 def _check_name(name: str) -> str:
     # judged as text before any path is built; returns the name without a folder's trailing slash
+    if fault := too_long(name):
+        raise ToolError(f"package entry {shown(name)} has a name {fault}")
     bare = name[:-1] if name.endswith("/") else name
     parts = bare.split("/")
     if (
@@ -448,6 +521,10 @@ def _check_name(name: str) -> str:
         or parts[0].endswith(":")
     ):
         raise ToolError(f"package entry {name!r} would write outside the tool's folder")
+    if bad_characters(name):
+        raise ToolError(
+            f"package entry {name!r} has a backslash, colon or control character in its name"
+        )
     return bare
 
 
@@ -514,9 +591,21 @@ def _check_named_files(manifest: Manifest, seen: dict[str, zipfile.ZipInfo]) -> 
             raise ToolError(f"{manifest.python.wheels}: the package holds no wheels")
 
 
-def _write_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo, target: Path) -> None:
+def _make_folders(root: Path, parts: list[str]) -> Path:
+    folder = root
+    for part in parts:
+        folder = folder / part
+        if not folder.is_dir():
+            folder.mkdir()
+            # set after making, so the umask has no say
+            folder.chmod(0o755)
+    return folder
+
+
+def _write_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo, target: Path, mode: int) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
     total = 0
-    with zf.open(info) as src, open(target, "xb") as out:
+    with zf.open(info) as src, os.fdopen(os.open(target, flags, mode), "wb") as out:
         while chunk := src.read(_CHUNK):
             total += len(chunk)
             if total > info.file_size:
@@ -524,6 +613,7 @@ def _write_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo, target: Path) -> N
             out.write(chunk)
     if total != info.file_size:
         raise ToolError(f"package entry {info.filename!r} is not the size it declares")
+    target.chmod(mode)
 
 
 def _make_dest(dest: Path, created: list[Path]) -> None:
@@ -536,6 +626,7 @@ def _make_dest(dest: Path, created: list[Path]) -> None:
     for folder in reversed(missing):
         folder.mkdir()
         created.append(folder)
+        folder.chmod(0o755)
 
 
 def _clean_up(created: list[Path], dest: Path) -> None:
@@ -564,10 +655,39 @@ def _read_package(zf: zipfile.ZipFile) -> tuple[Manifest, dict[str, zipfile.ZipI
     return manifest, seen
 
 
+class _Limited:
+    """The zip's file, on which no one read may be larger than MAX_DIRECTORY_BYTES.
+
+    zipfile reads the zip's list of entries in one read, of whatever size the zip says the list
+    is, and builds an object for each entry before unpack can count them: a zip of nothing but
+    two million entries cost 800 MiB that way. Every other read zipfile makes, or this module
+    asks of it, is no larger than a manifest, a lock file or one _CHUNK.
+    """
+
+    def __init__(self, raw):
+        self._raw = raw
+
+    def read(self, size: int | None = -1) -> bytes:
+        if size is None or size < 0:
+            data = self._raw.read(MAX_DIRECTORY_BYTES + 1)
+            if len(data) > MAX_DIRECTORY_BYTES:
+                raise ToolError(_DIRECTORY_TOO_LARGE)
+            return data
+        if size > MAX_DIRECTORY_BYTES:
+            raise ToolError(_DIRECTORY_TOO_LARGE)
+        return self._raw.read(size)
+
+    def __getattr__(self, name: str):
+        return getattr(self._raw, name)
+
+
+_DIRECTORY_TOO_LARGE = "the package's list of entries is larger than a package's may be"
+
+
 def package_manifest(zip_path: Path) -> Manifest:
     """The manifest of a package, checked as unpack checks it, without writing anything."""
     try:
-        with zipfile.ZipFile(zip_path) as zf:
+        with open(zip_path, "rb") as raw, zipfile.ZipFile(_Limited(raw)) as zf:
             return _read_package(zf)[0]
     except ToolError:
         raise
@@ -580,7 +700,7 @@ def unpack(zip_path: Path, dest: Path) -> Manifest:
         raise ToolError(f"{dest} already exists")
     created: list[Path] = []
     try:
-        with zipfile.ZipFile(zip_path) as zf:
+        with open(zip_path, "rb") as raw, zipfile.ZipFile(_Limited(raw)) as zf:
             manifest, seen = _read_package(zf)
             _make_dest(dest, created)
             _extract(zf, seen, dest)
@@ -593,12 +713,12 @@ def unpack(zip_path: Path, dest: Path) -> Manifest:
 
 
 def _extract(zf: zipfile.ZipFile, seen: dict[str, zipfile.ZipInfo], dest: Path) -> None:
+    # every folder and file gets its mode set here, as a runtime's do, whatever the umask is:
+    # under a loose one, a file a launcher runs would be writable by anyone on the machine
     for bare, info in seen.items():
-        target = dest.joinpath(*bare.split("/"))
+        parts = bare.split("/")
         if info.is_dir():
-            target.mkdir(parents=True, exist_ok=True)
+            _make_folders(dest, parts)
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        _write_member(zf, info, target)
-        if bare.startswith("files/"):
-            target.chmod(0o755)
+        mode = 0o755 if parts[0] == "files" else 0o644
+        _write_member(zf, info, _make_folders(dest, parts[:-1]) / parts[-1], mode)

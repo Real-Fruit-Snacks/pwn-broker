@@ -21,9 +21,12 @@ from pwn_broker.store import write_text
 from pwn_broker.toolpkg import (
     KINDS,
     SCHEMAS,
+    VERSION_RULE,
     ToolError,
     build_id,
+    shown,
     valid_tool_name,
+    valid_version,
     verify_zip,
 )
 
@@ -131,8 +134,8 @@ def _build(tool: str, row: object, label: str, schema: int) -> BuildEntry:
     if not isinstance(row, dict):
         raise ToolError(f"{label}: must be a table")
     version = _text(row, "version", f"{label}.version")
-    if re.search(r"[/\\\s]", version):
-        raise ToolError(f"{label}.version: {version!r} must not contain a slash, backslash or space")
+    if not valid_version(version):
+        raise ToolError(f"{label}.version: {shown(version)} {VERSION_RULE}")
     number = row.get("build")
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
         raise ToolError(f"{label}.build: must be a whole number of 1 or more")

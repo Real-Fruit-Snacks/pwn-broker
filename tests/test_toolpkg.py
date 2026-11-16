@@ -1,3 +1,5 @@
+import ast
+import io
 import os
 import stat
 import subprocess
@@ -9,7 +11,7 @@ from pathlib import Path
 import pytest
 import tomli_w
 
-from pwn_broker import toolpkg
+from pwn_broker import config, toolpkg, vpnctl
 from pwn_broker.toolpkg import ToolError, parse_manifest, unpack
 from toolkit import make_package, make_wheel, sample_manifest
 
@@ -117,9 +119,22 @@ def test_bad_name(name):
     expect_error(sample_manifest(name=name), "name")
 
 
-@pytest.mark.parametrize("version", ["", "1/2", "1\\2", "1 2", "1\t2", 1])
+@pytest.mark.parametrize(
+    "version",
+    [
+        "", "1/2", "1\\2", "1 2", "1\t2", 1, "1\x00x", "1.0\x1b[2J", "1\n2", "..", ".", "-1", "+1",
+        "1:2", "1.0\u202e", "1.0é", "1" * 101,
+    ],
+)  # fmt: skip
 def test_bad_version(version):
     expect_error(sample_manifest(version=version), "version")
+
+
+@pytest.mark.parametrize(
+    "version", ["1.0.3", "2026.11.14", "5.1.0", "3.13.18", "1.0~rc1", "1.0+git5", "v1_2", "7", "1" * 100]
+)
+def test_the_versions_packages_use_are_allowed(version):
+    assert parse_manifest(sample_manifest(version=version)).version == version
 
 
 @pytest.mark.parametrize("build", [0, -1, "1", 1.0, True])
@@ -473,11 +488,11 @@ def test_failure_midway_removes_dest(tmp_path, monkeypatch):
     real = toolpkg._write_member
     calls = []
 
-    def flaky(zf, info, target):
+    def flaky(zf, info, target, mode):
         calls.append(info.filename)
         if len(calls) == 3:
             raise OSError("disk full")
-        real(zf, info, target)
+        real(zf, info, target, mode)
 
     monkeypatch.setattr(toolpkg, "_write_member", flaky)
     err = assert_clean_failure(tmp_path, path)
@@ -565,7 +580,7 @@ def test_interrupt_propagates_and_cleans_up(tmp_path, monkeypatch):
     )
     calls = []
 
-    def interrupted(zf, info, target):
+    def interrupted(zf, info, target, mode):
         calls.append(info.filename)
         if len(calls) == 2:
             raise KeyboardInterrupt
@@ -670,9 +685,19 @@ def test_check_lock_has_a_size_cap():
 
 
 RESERVED = (
-    "sh bash dash zsh fish sudo su doas env python python3 pip pip3 sed cut mkdir kill cat rm "
-    "ls cp mv ln tar vim vi pwn-broker record asciinema openvpn ping ip"
+    "sh bash dash zsh fish env "
+    "sudo sudoedit su doas pkexec run0 passwd login ssh scp sftp gpg "
+    "python python3 pip pip3 "
+    "chown cp rm kill ip ping tar vim openvpn x-terminal-emulator pwn-broker record asciinema "
+    "sed cut mkdir cat ls mv ln vi grep awk find head tail chmod id uname test "
+    "apt apt-get dpkg systemctl mount umount "
+    "curl wget git"
 ).split()
+
+
+def test_the_reserved_names_are_exactly_these():
+    assert sorted(toolpkg.RESERVED_COMMANDS) == sorted(RESERVED)
+    assert len(RESERVED) == len(set(RESERVED))
 
 
 @pytest.mark.parametrize("name", RESERVED)
@@ -684,8 +709,46 @@ def test_reserved_command_names_are_refused(name):
 
 
 def test_names_that_only_look_reserved_are_allowed():
-    for name in ("sed2", "Sudo", "python3.13", "kerbrute"):
+    for name in ("sed2", "Sudo", "pythonic", "pipx", "python-ldap", "kerbrute"):
         assert toolpkg.valid_command_name(name)
+
+
+@pytest.mark.parametrize("name", ["python3.13", "python3.14", "python2", "python3.", "pip3.13", "pip2"])
+def test_python_and_pip_under_a_versioned_name_are_refused(name):
+    assert not toolpkg.valid_command_name(name)
+    data = sample_manifest(command=[{"name": name, "type": "binary", "path": "files/kerbrute"}])
+    with pytest.raises(ToolError, match="is reserved"):
+        parse_manifest(data)
+
+
+_CALLS_THAT_RUN = {"run", "Popen", "call", "check_call", "check_output", "run_privileged", "privileged_argv"}
+
+
+def _programs_named_at_call_sites() -> set[str]:
+    """The first word of every argument list written out where the app starts a program."""
+    found = set()
+    for path in sorted(Path(toolpkg.__file__).parent.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call):
+                continue
+            called = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+            if called not in _CALLS_THAT_RUN:
+                continue
+            for arg in node.args:
+                if isinstance(arg, ast.List) and arg.elts:
+                    first = arg.elts[0]
+                    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                        found.add(first.value)
+    return found
+
+
+def test_every_program_the_app_runs_by_name_is_reserved():
+    # /opt/pwn-broker/bin is first on PATH, so a launcher by one of these names would be run by
+    # the app itself, as root when the app is
+    scanned = _programs_named_at_call_sites()
+    assert {"chown", "cp", "ping", "ip", "kill"} <= scanned  # the scan still finds them
+    named = scanned | {"sudo", "vim", vpnctl.COMMAND, config.Settings().terminal}
+    assert sorted(n for n in named if "/" not in n and toolpkg.valid_command_name(n)) == []
 
 
 # ---- home entries
@@ -955,3 +1018,164 @@ def test_schema_2_python_package_unpacks(tmp_path):
     path, _, _ = make_package(tmp_path / "pkg", data, {}, wheels=[wheel])
     m = unpack(path, tmp_path / "out")
     assert m.requires == ["python-3.13"] and m.python.versions == []
+
+
+# ---- modes
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs POSIX modes")
+@pytest.mark.parametrize("mask", [0o000, 0o002, 0o077])
+def test_unpack_sets_its_modes_whatever_the_umask(tmp_path, mask):
+    files = {
+        "files/kerbrute": b"bin",
+        "files/sub/data.txt": b"d",
+        "wheels/x-1-py3-none-any.whl": b"w",
+        "wheels.lock": b"x\n",
+    }
+    path, _, _ = make_package(tmp_path / "pkg", sample_manifest(), files)
+    dest = tmp_path / "out" / "tools" / "kerbrute-1.0.3-1"
+    old = os.umask(mask)
+    try:
+        unpack(path, dest)
+    finally:
+        os.umask(old)
+
+    def mode(rel):
+        return stat.S_IMODE((dest / rel).stat().st_mode)
+
+    assert mode("..") == 0o755 and mode("../..") == 0o755  # made on the way to dest
+    for folder in (".", "files", "files/sub", "wheels"):
+        assert mode(folder) == 0o755, folder
+    for run in ("files/kerbrute", "files/sub/data.txt"):
+        assert mode(run) == 0o755, run
+    for plain in ("manifest.toml", "LICENSE", "wheels.lock", "wheels/x-1-py3-none-any.whl"):
+        assert mode(plain) == 0o644, plain
+
+
+# ---- names of entries
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["files/a\nb", "files/\x1b[2J", "files/a\x7fb", "files/tab\there", "files/C:/evil", "files/a:b", "files/a\rb"],
+)
+def test_an_entry_name_with_a_colon_or_control_character_is_refused(tmp_path, name):
+    path = raw_zip(tmp_path, [GOOD, (name, b"x", None)])
+    assert "backslash, colon or control character" in str(assert_clean_failure(tmp_path, path))
+
+
+def test_an_entry_name_longer_than_a_path_may_be_is_refused(tmp_path):
+    name = "files/" + "/".join(["d"] * 2100)
+    path = raw_zip(tmp_path, [GOOD, (name, b"x", None)])
+    assert "longer than 4096 bytes" in str(assert_clean_failure(tmp_path, path))
+
+
+def test_an_entry_name_with_a_part_longer_than_a_file_name_may_be_is_refused(tmp_path):
+    path = raw_zip(tmp_path, [GOOD, ("files/" + "n" * 256, b"x", None)])
+    assert "a part longer than 255 bytes" in str(assert_clean_failure(tmp_path, path))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows limits a path to 260 characters")
+def test_an_entry_nested_as_deep_as_a_path_allows_unpacks(tmp_path):
+    # folders are made one by one, so depth alone is no problem
+    name = "files/" + "/".join(["d"] * 300) + "/x"
+    path = raw_zip(tmp_path, [GOOD, (name, b"deep", None)])
+    dest = tmp_path / "out"
+    unpack(path, dest)
+    assert dest.joinpath(*name.split("/")).read_bytes() == b"deep"
+
+
+# ---- the list of entries
+
+
+def test_a_list_of_entries_too_large_is_refused_before_it_is_counted(tmp_path, monkeypatch):
+    path = raw_zip(tmp_path, [GOOD] + [(f"files/f{i}", b"", None) for i in range(200)])
+    monkeypatch.setattr(toolpkg, "MAX_DIRECTORY_BYTES", 4096)
+    # were the entries read and counted first, this would be the message
+    monkeypatch.setattr(toolpkg, "MAX_MEMBERS", 2)
+    assert "list of entries" in str(assert_clean_failure(tmp_path, path))
+    with pytest.raises(ToolError, match="list of entries"):
+        toolpkg.package_manifest(path)
+
+
+def test_the_list_of_entries_is_read_in_one_piece(tmp_path, monkeypatch):
+    # the limit is on that one read; if zipfile began reading the list in pieces, the limit would
+    # stop nothing, and this is where it would show
+    path = raw_zip(tmp_path, [GOOD] + [(f"files/f{i}", b"", None) for i in range(200)])
+    sizes = []
+    real = toolpkg._Limited.read
+
+    def watch(self, size=-1):
+        sizes.append(size)
+        return real(self, size)
+
+    monkeypatch.setattr(toolpkg._Limited, "read", watch)
+    toolpkg.package_manifest(path)
+    with zipfile.ZipFile(path) as zf:
+        directory = sum(46 + len(i.filename.encode()) + len(i.extra) + len(i.comment) for i in zf.infolist())
+    assert directory in sizes
+
+
+def test_a_package_with_two_thousand_entries_is_within_the_limits(tmp_path):
+    members = [GOOD] + [(f"files/lib/python3.13/site-packages/module_{i:04}.py", b"", None) for i in range(2000)]
+    path = raw_zip(tmp_path, members)
+    assert toolpkg.package_manifest(path).name == "kerbrute"
+
+
+def test_a_manifest_larger_than_its_limit_is_refused(tmp_path, monkeypatch):
+    path = raw_zip(tmp_path, [GOOD])
+    monkeypatch.setattr(toolpkg, "_MANIFEST_LIMIT", 10)
+    assert "manifest.toml is too large" in str(assert_clean_failure(tmp_path, path))
+
+
+def test_an_entry_shorter_than_it_declares_is_refused(tmp_path, monkeypatch):
+    path = raw_zip(tmp_path, [("files/kerbrute", b"x" * 10, None)])
+    real = zipfile.ZipFile.open
+
+    def short(self, name, *args, **kwargs):
+        if getattr(name, "filename", name) == "files/kerbrute":
+            return io.BytesIO(b"xx")
+        return real(self, name, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", short)
+    assert "is not the size it declares" in str(assert_clean_failure(tmp_path, path))
+
+
+# ---- a manifest read from disk
+
+
+def test_read_manifest_wraps_a_manifest_nested_too_deeply(tmp_path):
+    path = tmp_path / "manifest.toml"
+    path.write_text("a = " + "[" * 100_000 + "]" * 100_000 + "\n", encoding="utf-8")
+    with pytest.raises(ToolError, match="cannot be read"):
+        toolpkg.read_manifest(path)
+
+
+def test_read_manifest_wraps_a_number_too_long_to_read(tmp_path):
+    path = tmp_path / "manifest.toml"
+    path.write_text("schema = 1\nbuild = " + "9" * 5000 + "\n", encoding="utf-8")
+    with pytest.raises(ToolError, match="cannot be read"):
+        toolpkg.read_manifest(path)
+
+
+# ---- data.home
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        ".aws", ".aws/credentials", ".kube/config", ".docker/config.json", ".netrc", ".pgpass",
+        ".password-store", ".mozilla", ".pki", ".local/share/keyrings", ".config/autostart",
+        ".config/autostart/x.desktop", ".local/share/applications", ".config/gh", ".zshenv",
+        ".zprofile", ".zlogin", ".bash_logout", ".ssh/config", ".gnupg/private-keys-v1.d",
+    ],
+)  # fmt: skip
+def test_data_home_may_not_claim_what_holds_keys_or_runs_at_login(entry):
+    expect_error(sample_manifest(data={"home": [entry]}), "data.home")
+
+
+@pytest.mark.parametrize(
+    "entry", [".kerbrute", ".ligolo-proxy", ".config/certipy", ".local/share/certipy", ".cache/kerbrute"]
+)
+def test_data_home_may_claim_a_tools_own_folder(entry):
+    assert parse_manifest(sample_manifest(data={"home": [entry]})).home == [entry]
