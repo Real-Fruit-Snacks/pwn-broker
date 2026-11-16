@@ -692,13 +692,13 @@ The sketch shortens `status`; it keeps every row it has now. It is what the app 
 
 **The rules.**
 
-- **Indent.** Everything the app prints is indented two spaces: status lines, questions, tables, lists. Three things are not: the prompt line (`forest/dc01 >`), headings, and output that exists to be copied or piped whole (`cred show`, `path`).
+- **Indent.** Everything the app prints is indented two spaces: status lines, questions, tables, lists. These are not: the prompt line (`forest/dc01 >`), the launch header, headings, output that exists to be copied or piped whole (`cred show`, `path`), `vpn log`'s lines, and the usage text and lines that stay flush left as before (`--help`, `--version`, `record --help`, `setup`).
 - **Detail lines.** A line that belongs to the status line above it (the hint under a `warn`, the hosts lines under `/etc/hosts updated`, the paths under `recording saved`) is aligned under that line's text.
 - **Blocks.** What one command prints is one block, with one blank line above it and one below. A command that prints nothing adds no blank line. There are never two blank lines in a row.
 - **Headings.** A group of questions gets a heading, flush left, in the text colour and bold, with a blank line above: `New box`, `Target 1`, `Target 2`, `New target`, `Edit <target>`, `New credential`, `Edit credential <n>`. The start menu gets `Boxes`. A single question on its own gets no heading. Headings are sentence case and never coloured Ember.
 - **Questions.** Every question is `  <label padded to 12> [default] > `, as before but indented: `  box name     > forest`. A yes or no question stands on its own, with a blank line above and below, and the console places both, so no caller can forget one.
 - **Control characters.** Every line but output meant to be copied (`cred show`, `path`) shows a control character from a value as `?`, table cells included, so a hostname or credential taken from a target cannot move the cursor or change the terminal.
-- **Header.** At launch, and only there, the first line is `pwn-broker <version>`, then a blank line, then the checks.
+- **Header.** At launch, and only there, the first line is `pwn-broker <version>`, then a blank line, then the checks. `pwn-broker import <file>` is a launch with no header: it prints the checks and the import's own lines, nothing above them.
 - **Lists of fields.** `status`, `target show`, `tool info`, the summary before `finish` and every other label-and-value list are printed by one function that pads the labels to the longest one. No command pads its own.
 - **Help.** `help` groups the commands by their first word with a blank line between groups, both columns aligned across every group. A group's name alone (`tool`, `cred`, `host file`) prints that group the same way. Before this they were ragged.
 - **Long values.** A table cell that would wrap is cut and ends in `...`; the command that shows the whole value is one step away (`cred show <n>`, `tool info <name>`). The summary before `finish` lists one tool per line.
@@ -722,7 +722,7 @@ The sketch shortens `status`; it keeps every row it has now. It is what the app 
 **Cutting long values.**
 
 - Only when the output is a terminal, and at that terminal's width. Piped output and the Kali job see every value whole.
-- Each table names the one column that may be cut (the secret in `cred list`, the description in `tool list` and `tool search`, the hostnames in `target list`). No other column is cut; if the table still does not fit, it wraps as now.
+- Each table names the one column that may be cut (the secret in `cred list`, the file in `files`, the hostnames in `target list`, the run command in `tool list --installed`, the description in `tool search`). `tool list` has no long column and names none. No other column is cut; if the table still does not fit, it wraps as now.
 
 **Headings, in full.** `Boxes` (the start menu), `New box`, `Target <n>` (counting the targets added while the box is made), `New target` (`target add`, and when `record` adds one), `Edit <target>`, `New credential`, `Edit credential <n>`, `Import usernames` (`cred import`). Yes or no questions and single questions (`vpn start`, `flag`, `import`) get none.
 

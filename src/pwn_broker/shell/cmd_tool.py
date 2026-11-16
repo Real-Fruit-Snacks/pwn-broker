@@ -98,8 +98,8 @@ def tool_list(session: Session, args: list[str]) -> None:
         if not rows:
             console.info("no tools in the index")
             return
-        # no column is long but the last; it is the one cut
-        console.table(["name", "version", "kind", "status", "kali"], rows, cut="kali")
+        # no column here is long, so none is cut
+        console.table(["name", "version", "kind", "status", "kali"], rows)
         return
 
     records = current_tools(session.box)

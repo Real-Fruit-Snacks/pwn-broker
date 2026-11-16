@@ -177,7 +177,7 @@ def test_search_without_words_fails_with_the_usage(session, shop):
 
 def test_each_table_names_the_one_column_it_may_cut(session, shop):
     run(session, "tool install kerbrute")
-    assert run(session, "tool list").events == [("table", "kali")]
+    assert run(session, "tool list").events == [("table", "")]  # no long column: nothing is cut
     assert run(session, "tool list --installed").events == [("table", "run")]
     assert run(session, "tool search ker").events == [("table", "description")]
 
