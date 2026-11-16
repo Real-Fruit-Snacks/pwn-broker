@@ -56,7 +56,7 @@ def test_ask_value_default():
 
 def test_ask_cred_catches_a_multiline_domain_at_the_question(session):
     console = FakeConsole(["bob", "HTB\nCORP", "CORP", "", "", ""])
-    got = ask_cred(console, session)
+    got = ask_cred(console, session, heading="New credential")
     assert got.domain == "CORP"
     assert console.asked[:3] == ["username", "domain", "domain"]
     assert len([k for k, _ in console.lines if k == "fail"]) == 1
@@ -65,33 +65,33 @@ def test_ask_cred_catches_a_multiline_domain_at_the_question(session):
 def test_ask_cred_domain_dash_is_not_an_edge_space_question(session):
     _seed(session, domain="CORP")
     console = FakeConsole(["bob", "-", "", "", ""])
-    assert ask_cred(console, session).domain == ""
+    assert ask_cred(console, session, heading="New credential").domain == ""
     assert "keep or trim" not in console.asked
 
 
 @pytest.mark.parametrize("answer, stored", [("keep", " CORP "), ("trim", "CORP")])
 def test_ask_cred_domain_edge_space_asks_keep_or_trim(session, answer, stored):
     console = FakeConsole(["bob", " CORP ", answer, "", "", ""])
-    assert ask_cred(console, session).domain == stored
+    assert ask_cred(console, session, heading="New credential").domain == stored
     assert console.asked[:3] == ["username", "domain", "keep or trim"]
 
 
 def test_ask_cred_catches_a_multiline_note_and_edge_spaces_at_the_question(session):
     console = FakeConsole(["bob", "", "", "", "line one\nline two", " n ", "trim"])
-    assert ask_cred(console, session).note == "n"
+    assert ask_cred(console, session, heading="New credential").note == "n"
     assert console.asked[-3:] == ["note", "note", "keep or trim"]
 
 
 def test_ask_cred_blank_secret_skips_kind(session):
     console = FakeConsole(["bob", "-", "", "", "n"])
-    got = ask_cred(console, session)
+    got = ask_cred(console, session, heading="New credential")
     assert got == CredAnswers("bob", "", "", "", "dc01", "n")
     assert console.asked == ["username", "domain", "secret", "found on", "note"]
 
 
 def test_ask_cred_bad_kind_and_empty_username(session):
     console = FakeConsole(["", "bob", "", "pw", "key", "hash", "", ""])
-    got = ask_cred(console, session)
+    got = ask_cred(console, session, heading="New credential")
     assert got.kind == "hash"
     fails = [t for k, t in console.lines if k == "fail"]
     assert len(fails) == 2 and all(kind in fails[1] for kind in KINDS)
@@ -100,7 +100,7 @@ def test_ask_cred_bad_kind_and_empty_username(session):
 def test_ask_cred_no_targets_accepts_only_blank(paths, box):
     console = FakeConsole(["bob", "", "", "dc01", "", ""])
     bare = Session(paths, Settings(), console, box, [], [], None, lambda: NOW)
-    got = ask_cred(console, bare)
+    got = ask_cred(console, bare, heading="New credential")
     assert got.found_on == ""
     assert len(_lines(bare, "fail")) == 1
 
@@ -114,6 +114,7 @@ def test_cred_add_question_order_and_result(session):
     )  # fmt: skip
     assert session.console.asked == ["username", "domain", "secret", "kind", "found on", "note"]
     assert session.console.lines == [
+        ("heading", "New credential"),
         ("ok", "cred 1 saved, found on dc01"),
         ("ok", "lists updated: 1 username, 1 password, 1 pair"),
     ]
@@ -350,6 +351,27 @@ def test_cred_list_shows_values_literally(session):
     _, rows = session.console.tables[0]
     assert rows[0] == ["1", "administrator", "HTB", "[red]x[/red]", "password", "dc01", "dc01, web"]
     assert rows[1] == ["2", "administrator", "", "", "", "", ""]
+    # the secret is the one column cut on a narrow terminal
+    assert session.console.events == [("table", "secret")]
+
+
+@pytest.mark.parametrize(
+    "line, message, usage",
+    [
+        ("cred show", "missing argument: cred number", "usage: cred show <n>"),
+        ("cred edit 1 2", "too many arguments: 2", "usage: cred edit <n>"),
+        ("cred remove", "missing argument: cred number", "usage: cred remove <n>"),
+        ("cred works", "missing argument: cred number", "usage: cred works <n> [<target>...]"),
+        ("cred import", "missing argument: file", "usage: cred import <file>"),
+        ("cred add x", "too many arguments: x", "usage: cred add"),
+        ("cred list x", "too many arguments: x", "usage: cred list"),
+    ],
+)
+def test_a_wrong_number_of_arguments_shows_the_usage(session, line, message, usage):
+    _seed(session)
+    dispatch(session, line)
+    assert session.console.lines == [("fail", message), ("detail", usage)]
+    assert session.console.asked == []
 
 
 def test_cred_list_empty(session):
@@ -533,7 +555,7 @@ def test_cred_import_nothing_new(session, tmp_path):
     names.write_text("\n\n", encoding="utf-8")
     session.console = FakeConsole(["", ""])
     dispatch(session, f"cred import {names}")
-    assert session.console.lines == [("ok", "0 usernames added")]
+    assert session.console.lines == [("heading", "Import usernames"), ("ok", "0 usernames added")]
 
 
 def test_cred_import_single_name_is_singular(session, tmp_path):
@@ -640,16 +662,18 @@ def test_cred_clear_note(session):
     assert not any("no longer marked" in t for _, t in session.console.lines)
 
 
-@pytest.mark.parametrize("answer", ["", "n", "maybe"])
-def test_cred_clear_declined_changes_nothing(session, answer):
+@pytest.mark.parametrize("answers", [[""], ["n"], ["maybe", "n"]])
+def test_cred_clear_declined_changes_nothing(session, answers):
     _clear_seed(session)
     session_module.save_creds(session.box, session.creds)
     before = (session.box.path / "creds.toml").read_bytes()
-    session.console = FakeConsole([answer])
+    session.console = FakeConsole(answers)
     dispatch(session, "cred clear 1 secret")
     assert (session.box.path / "creds.toml").read_bytes() == before
     assert session.creds[0].secret == "s3cret"
     assert _lines(session, "ok") == []
+    assert session.console.asked == ["clear the secret of cred 1?"] * len(answers)
+    assert _lines(session, "fail") == ["answer y or n"] * (len(answers) - 1)
 
 
 @pytest.mark.parametrize("field", ["secret", "note"])
@@ -667,11 +691,26 @@ def test_cred_clear_bad_field(session):
     assert session.creds[0].secret == "s3cret"
 
 
-@pytest.mark.parametrize("line", ["cred clear", "cred clear 1", "cred clear 1 note x", "cred clear x note", "cred clear 0 note", "cred clear 9 note"])
+@pytest.mark.parametrize("line", ["cred clear x note", "cred clear 0 note", "cred clear 9 note"])
 def test_cred_clear_bad_arguments(session, line):
     _clear_seed(session)
     dispatch(session, line)
     assert [k for k, _ in session.console.lines] == ["fail"]
+    assert session.creds[0].note == "a note"
+
+
+@pytest.mark.parametrize(
+    "line, message",
+    [
+        ("cred clear", "missing argument: cred number"),
+        ("cred clear 1", "missing argument: field"),
+        ("cred clear 1 note x", "too many arguments: x"),
+    ],
+)
+def test_cred_clear_with_the_wrong_number_of_arguments_shows_its_usage(session, line, message):
+    _clear_seed(session)
+    dispatch(session, line)
+    assert session.console.lines == [("fail", message), ("detail", "usage: cred clear <n> <field>")]
     assert session.creds[0].note == "a note"
 
 

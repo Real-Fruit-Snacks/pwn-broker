@@ -319,7 +319,12 @@ def block(
     return None
 
 
-def summary(session: Session) -> list[str]:
+def _one_per_row(label: str, items: list[str], note: str) -> list[tuple[str, str]]:
+    # the label once, on the first row; a long list never wraps in the middle of a name
+    return [(label if n == 0 else "", f"{item}   {note}") for n, item in enumerate(items)]
+
+
+def summary(session: Session) -> list[tuple[str, str]]:
     box = session.box
     records = current_tools(box)
     if not records:
@@ -328,17 +333,14 @@ def summary(session: Session) -> list[str]:
         installed = load_installed(session.paths)
     except (ToolError, OSError):
         return []
-    names = ", ".join(f"{t.name} {t.version}" for t in records)
-    shown = [f"tools     {names}   (will be removed)"]
+    shown = _one_per_row("tools", [f"{t.name} {t.version}" for t in records], "(will be removed)")
     try:
         holding = toolstate.holding_boxes(session.paths, installed, excluding=box.id)
         freed = _freed_runtimes(session, installed, holding)
     except (ToolError, OSError) as exc:
         session.console.warn(f"the runtimes to remove could not be listed: {exc}")
         freed = []
-    if freed:
-        runtimes = ", ".join(f"{t.name} {t.version}" for t in freed)
-        shown.append(f"runtimes  {runtimes}   (will be removed)")
+    shown += _one_per_row("runtimes", [f"{t.name} {t.version}" for t in freed], "(will be removed)")
     try:
         unfinished = unfinished_boxes(session.paths)
         homes = user_homes()
@@ -347,7 +349,7 @@ def summary(session: Session) -> list[str]:
             if item is None:
                 continue
             for path in tooldata.to_delete(item, homes, _others(item, box.id, unfinished)):
-                shown.append(f"home      {path}   (will be deleted)")
+                shown.append(("home", f"{path}   (will be deleted)"))
     except (ToolError, OSError) as exc:
         session.console.warn(f"the tool data to delete could not be listed: {exc}")
     return shown
@@ -490,7 +492,7 @@ def _restore(session: Session) -> None:
     wanted = [r for r in current_tools(box) if _needs_install(box.id, r, installed)]
     if not wanted:
         return
-    console.info("tools     " + ", ".join(f"{r.name} {r.version}" for r in wanted))
+    console.fields([("tools", ", ".join(f"{r.name} {r.version}" for r in wanted))])
     if not console.confirm("install these tools again?", default=True):
         return
     try:
@@ -572,7 +574,7 @@ def _orphans(paths: AppPaths, console: Console, installed: dict[str, Installed])
     orphans = toolstate.orphans(installed, set(unfinished_boxes(paths)))
     if not orphans:
         return
-    console.info("tools     " + ", ".join(f"{t.name} {t.version}" for t in orphans))
+    console.fields([("tools", ", ".join(f"{t.name} {t.version}" for t in orphans))])
     if not console.confirm("remove tools left by finished boxes?", default=True):
         return
     homes = user_homes()
@@ -595,7 +597,7 @@ def _idle(paths: AppPaths, console: Console, installed: dict[str, Installed]) ->
     # while a box cannot be read nothing is judged unused; _orphans has said so already
     if not idle or toolstate.unreadable_boxes(paths):
         return
-    console.info("runtimes  " + ", ".join(f"{t.name} {t.version}" for t in idle))
+    console.fields([("runtimes", ", ".join(f"{t.name} {t.version}" for t in idle))])
     if not console.confirm("remove runtimes no installed tool requires?", default=True):
         return
     for item in idle:
@@ -612,8 +614,7 @@ def _strays(paths: AppPaths, console: Console, installed: dict[str, Installed]) 
     strays = toolinstall.stray_files(paths, installed)
     if not strays:
         return
-    for path in strays:
-        console.info(f"left      {path}")
+    console.fields([("left", str(path)) for path in strays])
     if not console.confirm("remove files left by an interrupted install?", default=True):
         return
     for path in strays:

@@ -86,7 +86,7 @@ def _report(
     if changed:
         console.ok(f"{FILE} updated")
         for text in outcome.written:
-            console.info("    " + text.split(MARK, 1)[0])
+            console.detail(text.split(MARK, 1)[0])
     if outcome.taken_out:
         names = _box_names(session)
         for box_id, text in outcome.taken_out:
@@ -95,7 +95,7 @@ def _report(
                 f"took out a line of box {name} that names the same host; "
                 f"it returns when {name} is opened"
             )
-            console.info("    " + text)
+            console.detail(text)
     ips = {entry.target: entry.ip for entry in want}
     for target, name in outcome.already:
         console.ok(f"{name} already resolves to {ips[target]}")
@@ -105,7 +105,7 @@ def _report(
             f"{name} is on {where} with another address. "
             f"remove it there, then: host file on {target}"
         )
-        console.info("    " + text)
+        console.detail(text)
 
 
 def _left_out(session: Session, want: list[hosts.Wanted]) -> None:
@@ -266,11 +266,11 @@ def _own_lines(session: Session) -> int | None:
         return None
 
 
-def summary(session: Session) -> list[str]:
+def summary(session: Session) -> list[tuple[str, str]]:
     found = _own_lines(session)
     if not found:
         return []
-    return [f"hosts     {_count(found)} to remove from {FILE}"]
+    return [("hosts", f"{_count(found)} to remove from {FILE}")]
 
 
 def undo(session: Session) -> None:

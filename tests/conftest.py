@@ -1,9 +1,14 @@
 import pytest
 
 from helpers import NOW, make_cred
+from pwn_broker import notewindow as _notewindow
 from pwn_broker.model import Box
 from pwn_broker.paths import AppPaths
 from pwn_broker.store import save_box
+
+# the real listing of the current user's processes, for the one test of it
+REAL_OWN_PROCESSES = _notewindow._own_processes
+REAL_PARENT_PID = _notewindow._parent_pid
 
 __all__ = ["NOW", "make_cred"]
 
@@ -263,4 +268,21 @@ def no_real_vpn(monkeypatch):
         for name in ("run", "sleep", "which"):
             if name in defaults:
                 defaults[name] = refuse
+        monkeypatch.setattr(function, "__kwdefaults__", defaults)
+
+
+@pytest.fixture(autouse=True)
+def no_real_processes(monkeypatch):
+    """No test finds, or signals, a real process: the listing of them is empty unless a test gives one."""
+    from pwn_broker import notewindow
+
+    monkeypatch.setattr(notewindow, "_own_processes", lambda: [])
+    monkeypatch.setattr(notewindow, "_parent_pid", lambda pid: None)
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a test reached a real signal or sleep; pass a kill and sleep stand-in")
+
+    for function in (notewindow.close_note, notewindow.shut_note):
+        defaults = dict(function.__kwdefaults__)
+        defaults.update(kill=refuse, sleep=refuse, parent=lambda pid: None)
         monkeypatch.setattr(function, "__kwdefaults__", defaults)

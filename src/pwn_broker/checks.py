@@ -78,16 +78,17 @@ def run_checks(
             )
         )
 
-    def make_folders() -> None:
-        paths.active.mkdir(parents=True, exist_ok=True)
-        paths.wrapped.mkdir(parents=True, exist_ok=True)
-
-    if paths.active.exists() and paths.wrapped.exists():
-        results.append(CheckResult("folders", "ok", "box folders exist"))
+    # the app makes its own folders; the check only speaks when it cannot
+    problems = []
+    for folder in (paths.active, paths.wrapped):
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            problems.append(f"cannot make {folder}: {exc.strerror or exc}")
+    if problems:
+        results.append(CheckResult("folders", "warn", "; ".join(problems)))
     else:
-        results.append(
-            CheckResult("folders", "warn", "box folders are missing", repair=make_folders)
-        )
+        results.append(CheckResult("folders", "ok", "box folders exist"))
 
     if recorder.present(paths):
         results.append(CheckResult("asciinema", "ok", f"asciinema {recorder.VERSION}"))
@@ -124,7 +125,7 @@ def report(console: Console, results: list[CheckResult]) -> None:
         else:
             console.warn(line)
         if result.hint:
-            console.info(result.hint)
+            console.detail(result.hint)
         if result.repair is not None:
             _offer_repair(console, result.name, result.repair)
 

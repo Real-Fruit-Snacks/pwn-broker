@@ -91,7 +91,7 @@ def test_offer_asks_with_yes_as_the_default_and_records_the_target(session):
     assert _text(session) == "127.0.0.1 localhost\n" + _line(session, "10.10.10.161 forest.htb.local") + "\n"
     assert session.console.lines == [
         ("ok", "/etc/hosts updated"),
-        ("info", "    10.10.10.161 forest.htb.local"),
+        ("detail", "10.10.10.161 forest.htb.local"),
     ]
 
 
@@ -238,11 +238,11 @@ def test_sync_names_the_box_whose_line_it_took_out(session, other):
     assert hostflow.sync(session) is True
     assert session.console.lines == [
         ("ok", "/etc/hosts updated"),
-        ("info", "    10.10.10.161 forest.htb.local"),
+        ("detail", "10.10.10.161 forest.htb.local"),
         ("warn", "took out a line of box Cascade that names the same host; it returns when Cascade is opened"),
-        ("info", f"    {theirs}"),
+        ("detail", f"{theirs}"),
         ("warn", "took out a line of box id-gone that names the same host; it returns when id-gone is opened"),
-        ("info", f"    {gone}"),
+        ("detail", f"{gone}"),
     ]
     assert _text(session) == _line(session, "10.10.10.161 forest.htb.local") + "\n"
 
@@ -262,10 +262,10 @@ def test_sync_shows_a_line_that_blocks_a_name(session):
     assert hostflow.sync(session) is True
     assert session.console.lines == [
         ("ok", "/etc/hosts updated"),
-        ("info", "    10.10.10.161 dc01.htb.local"),
+        ("detail", "10.10.10.161 dc01.htb.local"),
         ("warn", "forest.htb.local is on line 2 of /etc/hosts with another address. "
                  "remove it there, then: host file on dc01"),
-        ("info", "    10.10.10.9 forest.htb.local"),
+        ("detail", "10.10.10.9 forest.htb.local"),
     ]  # fmt: skip
 
 
@@ -454,7 +454,7 @@ def test_summary_counts_the_lines_in_the_file(session):
     box_id = session.box.id
     assert hostflow.summary(session) == []
     _put(session, LOCALHOST + _lines((box_id, "10.10.10.161 a.htb")))
-    assert hostflow.summary(session) == ["hosts     1 line to remove from /etc/hosts"]
+    assert hostflow.summary(session) == [("hosts", "1 line to remove from /etc/hosts")]
     _put(
         session,
         LOCALHOST
@@ -464,7 +464,7 @@ def test_summary_counts_the_lines_in_the_file(session):
             (OTHER_ID, "10.0.0.1 c.htb"),
         ),
     )
-    assert hostflow.summary(session) == ["hosts     2 lines to remove from /etc/hosts"]
+    assert hostflow.summary(session) == [("hosts", "2 lines to remove from /etc/hosts")]
 
 
 def test_summary_shows_nothing_when_the_file_cannot_be_read(session):

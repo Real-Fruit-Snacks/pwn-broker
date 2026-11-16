@@ -144,12 +144,21 @@ def test_path_must_match_an_entry_exactly(paths):
     assert _by_name(run_checks(paths, Settings(), env, which=_found, tunnel=_no_tunnel))["path"].status == "warn"
 
 
-def test_folders_missing_are_repairable(paths):
+def test_missing_folders_are_made_without_asking(paths):
     results = run_checks(paths, Settings(), _env(paths), which=_found, tunnel=_no_tunnel)
     folders = _by_name(results)["folders"]
-    assert folders.status == "warn"
-    folders.repair()
+    assert folders.status == "ok" and folders.repair is None
     assert paths.active.is_dir() and paths.wrapped.is_dir()
+
+
+def test_folders_that_cannot_be_made_warn_with_the_reason(paths):
+    paths.active.parent.mkdir(parents=True)
+    paths.active.write_text("a file in the way", encoding="utf-8")
+    results = run_checks(paths, Settings(), _env(paths), which=_found, tunnel=_no_tunnel)
+    folders = _by_name(results)["folders"]
+    assert folders.status == "warn" and folders.repair is None
+    assert folders.message.startswith(f"cannot make {paths.active}: ")
+    assert paths.wrapped.is_dir()
 
 
 def test_report_one_line_when_all_ok():
@@ -172,10 +181,10 @@ def test_report_lists_each_problem_and_offers_repair():
     assert c.lines == [
         ("ok", "1 check passed"),
         ("warn", "path   not on PATH"),
-        ("info", "open a new terminal"),
+        ("detail", "open a new terminal"),
         ("ok", "path fixed"),
         ("fail", "tar   not found"),
-        ("info", "apt install tar"),
+        ("detail", "apt install tar"),
     ]
 
 
@@ -398,6 +407,6 @@ def test_reporting_a_missing_asciinema_asks_nothing_and_changes_nothing(paths):
     report(console, [_asciinema(results)])
     assert console.lines == [
         ("warn", "asciinema   asciinema is missing or does not match its checksum"),
-        ("info", "run the installer again"),
+        ("detail", "run the installer again"),
     ]
     assert not paths.asciinema.exists()

@@ -17,16 +17,19 @@ from pwn_broker.archive import (
 )
 from pwn_broker.config import Settings
 from pwn_broker.console import Cancelled, Console
+from pwn_broker.filescan import sha256_file
 from pwn_broker.model import Box
-from pwn_broker.notewindow import note_unsaved
+from pwn_broker.note import NOTE_NAME
+from pwn_broker.notewindow import note_unsaved, shut_note
 from pwn_broker.paths import AppPaths
 from pwn_broker.privilege import fix_ownership
 from pwn_broker.session import Session, load_session, process_checks, refresh, rescan
-from pwn_broker.store import StoreError, load_box, save_box
+from pwn_broker.store import StoreError, load_box, load_files, save_box
 from pwn_broker.toolpkg import ToolError
 
 BLOCK_HOOKS: list[Callable[[Session], str | None]] = []
-SUMMARY_HOOKS: list[Callable[[Session], list[str]]] = []
+# each gives the label and value rows it adds to the summary before finish
+SUMMARY_HOOKS: list[Callable[[Session], list[tuple[str, str]]]] = []
 PRE_PACK_HOOKS: list[Callable[[Session], None]] = []
 UNDO_HOOKS: list[Callable[[Session], None]] = []
 RESTORE_HOOKS: list[Callable[[Session], None]] = []
@@ -103,6 +106,23 @@ def export_box(
     return dest
 
 
+def _recorded_note(box: Box) -> str | None:
+    # the checksum the archive step recorded for the note; None when it had no note
+    for record in load_files(box):
+        if record.path == NOTE_NAME:
+            return record.sha256
+    return None
+
+
+def _note_is_archived(box: Box, recorded: str | None) -> bool:
+    try:
+        return sha256_file(box.path / NOTE_NAME) == recorded
+    except FileNotFoundError:
+        return recorded is None
+    except OSError:
+        return False
+
+
 def _remove_folder(session: Session) -> None:
     folder = session.box.path
     active = session.paths.active.resolve()
@@ -117,10 +137,24 @@ def _remove_folder(session: Session) -> None:
     session.console.ok(f"removed {folder}")
 
 
+def close_window(
+    console: Console,
+    paths: AppPaths,
+    box: Box,
+    *,
+    close: Callable[[AppPaths, Box], bool] = shut_note,
+) -> None:
+    # the window of a note whose folder is about to go; one that stays is said once
+    # close says whether the vim, or the terminal made for it, is still there
+    if close(paths, box):
+        console.warn("the note window did not close")
+
+
 def finish_box(
     session: Session,
     *,
     unsaved: Callable[[Box], bool] = note_unsaved,
+    close: Callable[[AppPaths, Box], bool] = shut_note,
     fix: Callable[[Path], int] = fix_ownership,
 ) -> Path | None:
     box = session.box
@@ -143,13 +177,15 @@ def finish_box(
     except _FAILURES as exc:
         console.fail(f"cannot read the box: {exc}")
         return None
-    console.info(f"box       {box.name} ({box.platform}), started {box.started:%Y-%m-%d}")
-    console.info(f"targets   {len(session.targets)}")
-    console.info(f"files     {len(files)}")
-    console.info(f"archive   {dest}")
+    rows = [
+        ("box", f"{box.name} ({box.platform}), started {box.started:%Y-%m-%d}"),
+        ("targets", str(len(session.targets))),
+        ("files", str(len(files))),
+        ("archive", str(dest)),
+    ]
     for hook in SUMMARY_HOOKS:
-        for line in hook(session):
-            console.info(line)
+        rows.extend(hook(session))
+    console.fields(rows)
 
     if not console.confirm("finish this box?"):
         return None
@@ -166,6 +202,7 @@ def finish_box(
         box.finished = session.clock()
         save_box(box)
         packed, left_out = _pack(session, "finished")
+        archived_note = _recorded_note(box)
         copy = _copy(session, packed)
     except _FAILURES as exc:
         _rollback(box)
@@ -204,9 +241,33 @@ def finish_box(
         remove = console.confirm("remove working folder?")
     except Cancelled:
         remove = False
-    if remove:
+    if remove and unsaved(box):
+        console.warn("the note has unsaved changes; the folder was kept")
+    elif remove and not _note_is_archived(box, archived_note):
+        console.warn("the note changed after the archive was made; the folder was kept")
+    elif remove and close(session.paths, box):
+        # the vim, or the terminal made for it, is still there: the window would show a folder that is gone
+        console.warn("the note window did not close; the folder was kept")
+    elif remove:
         _remove_folder(session)
     return dest
+
+
+def _close_replaced(
+    paths: AppPaths,
+    console: Console,
+    folder: str,
+    unsaved: Callable[[Box], bool],
+    close: Callable[[AppPaths, Box], bool],
+) -> None:
+    try:
+        old = load_box(paths.active / folder)
+    except StoreError:
+        # not a box of ours: it has no note window
+        return
+    if unsaved(old):
+        raise ArchiveError(f"the note of {folder} has unsaved changes; save it and import again")
+    close_window(console, paths, old, close=close)
 
 
 def import_box(
@@ -215,7 +276,13 @@ def import_box(
     console: Console,
     archive: Path,
     clock: Callable[[], datetime],
+    *,
+    unsaved: Callable[[Box], bool] = note_unsaved,
+    close: Callable[[AppPaths, Box], bool] = shut_note,
 ) -> Box | None:
+    if archive.is_dir():
+        console.fail(f"{archive} is a folder, not an exported box")
+        return None
     try:
         verify(archive)
         folder = peek_folder(archive)
@@ -224,6 +291,7 @@ def import_box(
             replace = console.confirm(f"a box named {folder} is already here. replace it?")
             if not replace:
                 return None
+            _close_replaced(paths, console, folder, unsaved, close)
         box = load_box(unpack(archive, paths.active, replace=replace))
         if box.status == "finished":
             reopen_box(box)

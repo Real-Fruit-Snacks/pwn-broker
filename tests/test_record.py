@@ -1,3 +1,4 @@
+import io
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -10,7 +11,7 @@ from helpers import NOW
 from pwn_broker import boxes, boxlock, privilege, record, recorder
 from pwn_broker.boxes import add_target
 from pwn_broker.config import Settings
-from pwn_broker.console import FakeConsole
+from pwn_broker.console import FakeConsole, TermConsole
 from pwn_broker.note import read_note
 from pwn_broker.ping import Result
 from pwn_broker.record import cast_path
@@ -256,7 +257,7 @@ def test_ctrl_c_at_a_question_creates_nothing(make_env, opened, dc01, asciinema)
     # yes, the IP and the hostname, then Ctrl-C at the scope
     env = make_env(["y", "", ""])
     assert record.run(env, ["10.10.10.200"]) == 1
-    assert env.console.lines == [("info", "cancelled")]
+    assert env.console.lines == [("heading", "New target"), ("info", "cancelled")]
     assert [t.name for t in load_targets(opened)] == ["dc01"]
     assert not (opened.path / "targets" / "10.10.10.200").exists()
     assert asciinema.calls == []
@@ -424,12 +425,55 @@ def test_the_lines_before_and_after(make_env, opened, dc01, asciinema):
     assert record.run(env, ["dc01"]) == 0
     assert env.console.lines == [
         ("ok", "recording this window for dc01 (forest)"),
-        ("info", "    targets/dc01/recordings/2026-11-14_1432.cast"),
-        ("info", "    exit this shell to stop"),
+        ("detail", "targets/dc01/recordings/2026-11-14_1432.cast"),
+        ("detail", "exit this shell to stop"),
         ("ok", "recording saved, 14 min"),
-        ("info", "    targets/dc01/recordings/2026-11-14_1432.cast"),
-        ("info", "    targets/dc01/recordings/2026-11-14_1432.txt"),
+        ("detail", "targets/dc01/recordings/2026-11-14_1432.cast"),
+        ("detail", "targets/dc01/recordings/2026-11-14_1432.txt"),
     ]
+
+
+def test_what_record_says_is_one_block_with_a_blank_line_around_the_recorded_shell(
+    make_env, opened, dc01, paths, clock
+):
+    out = io.StringIO()
+
+    def run(argv, **kwargs):
+        # the recorded shell writes to the same window
+        out.write("$ whoami\nroot\n$ exit\n")
+        return Asciinema(paths, clock)(argv, **kwargs)
+
+    env = make_env(run=run, console=TermConsole({"NO_COLOR": "1"}, out=out))
+    out.write("$ record dc01\n")
+    assert record.run(env, ["dc01"]) == 0
+    assert out.getvalue() == (
+        "$ record dc01\n"
+        "\n"
+        "  ok    recording this window for dc01 (forest)\n"
+        "        targets/dc01/recordings/2026-11-14_1432.cast\n"
+        "        exit this shell to stop\n"
+        "\n"
+        "$ whoami\nroot\n$ exit\n"
+        "\n"
+        "  ok    recording saved, 14 min\n"
+        "        targets/dc01/recordings/2026-11-14_1432.cast\n"
+        "        targets/dc01/recordings/2026-11-14_1432.txt\n"
+        "\n"
+    )
+
+
+def test_a_refusal_is_one_block_too(make_env, asciinema):
+    out = io.StringIO()
+    env = make_env(console=TermConsole({"NO_COLOR": "1"}, out=out))
+    assert record.run(env, ["a", "b"]) == 2
+    assert out.getvalue() == "\n  fail  usage: record [target]\n\n"
+
+
+def test_help_is_flush_left_with_no_blank_lines(make_env):
+    out = io.StringIO()
+    env = make_env(console=TermConsole({"NO_COLOR": "1"}, out=out))
+    assert record.run(env, ["--help"]) == 0
+    assert out.getvalue() == "usage: record [target]\n"
 
 
 def test_the_text_copy_is_written(make_env, opened, dc01, asciinema):
@@ -466,8 +510,8 @@ def test_a_failed_asciinema_still_writes_the_text_and_warns_first(make_env, open
     assert env.console.lines[3:] == [
         ("warn", "asciinema ended with status 3; the recording may be incomplete"),
         ("ok", "recording saved, 14 min"),
-        ("info", "    targets/dc01/recordings/2026-11-14_1432.cast"),
-        ("info", "    targets/dc01/recordings/2026-11-14_1432.txt"),
+        ("detail", "targets/dc01/recordings/2026-11-14_1432.cast"),
+        ("detail", "targets/dc01/recordings/2026-11-14_1432.txt"),
     ]
     assert (opened.path / "targets" / "dc01" / "recordings" / "2026-11-14_1432.txt").exists()
 
@@ -489,7 +533,7 @@ def test_a_cast_that_cannot_be_read_is_a_warning(make_env, opened, dc01, paths, 
     env = make_env(run=run)
     assert record.run(env, []) == 0
     kinds = [kind for kind, _ in env.console.lines[3:]]
-    assert kinds == ["warn", "ok", "info"]
+    assert kinds == ["warn", "ok", "detail"]
     assert env.console.lines[3][1] == (
         "no text copy of targets/dc01/recordings/2026-11-14_1432.cast: the first line is not JSON"
     )
@@ -700,7 +744,7 @@ def test_the_marker_is_cleared_when_printing_fails_before_asciinema(make_env, op
 def test_help_prints_the_usage(make_env, opened, dc01, asciinema, flag):
     env = make_env()
     assert record.run(env, [flag]) == 0
-    assert env.console.lines == [("info", "usage: record [target]")]
+    assert env.console.lines == [("raw", "usage: record [target]")]
     assert env.console.asked == []
     assert asciinema.calls == []
 

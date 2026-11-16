@@ -16,7 +16,8 @@ from pwn_broker.lifecycle import export_box, finish_box, import_box, reopen_box
 from pwn_broker.model import Flag
 from pwn_broker.note import read_note
 from pwn_broker.paths import AppPaths
-from pwn_broker.store import StoreError, load_box, load_creds, load_targets, read_toml, save_box
+from pwn_broker.session import write_new_note
+from pwn_broker.store import StoreError, load_box, load_creds, load_files, load_targets, read_toml, save_box
 
 NOFIX = dict(fix=lambda path: 0)
 SAVED = dict(fix=lambda path: 0, unsaved=lambda box: False)
@@ -85,11 +86,13 @@ def test_finish_shows_summary_before_asking(session):
     original = console.confirm
     console.confirm = lambda q, default=False: shown.extend(console.lines) or original(q, default)
     finish_box(session, **SAVED)
-    text = "\n".join(t for k, t in shown if k == "info")
-    assert "forest (htb), started 2026-11-14" in text
-    assert "targets   1" in text
-    assert "files     " in text
-    assert str(archive_path(session.paths, session.box, "finished")) in text
+    archive = archive_path(session.paths, session.box, "finished")
+    assert shown == [
+        ("field", "box  forest (htb), started 2026-11-14"),
+        ("field", "targets  1"),
+        ("field", f"files  {len(load_files(session.box))}"),
+        ("field", f"archive  {archive}"),
+    ]
 
 
 def test_finish_happy_path(session):
@@ -611,15 +614,16 @@ def test_block_reasons_and_an_unsaved_note_are_both_reported(session, monkeypatc
 
 
 def test_summary_hook_lines_follow_the_existing_ones_before_the_question(session, monkeypatch):
-    monkeypatch.setattr(lifecycle, "SUMMARY_HOOKS", [lambda s: ["extra     one", "extra     two"]])
+    monkeypatch.setattr(lifecycle, "SUMMARY_HOOKS", [lambda s: [("extra", "one"), ("", "two")]])
     console = answers(session, "n").console
     shown = []
     original = console.confirm
-    console.confirm = lambda q, default=False: shown.extend(console.lines) or original(q, default)
+    console.confirm = lambda q, default=False: shown.extend(console.events) or original(q, default)
     finish_box(session, **SAVED)
-    info = [t for k, t in shown if k == "info"]
-    assert info[-2:] == ["extra     one", "extra     two"]
-    assert info[-3].startswith("archive   ")
+    # one list, so the hooks' labels line up with the summary's own
+    assert [k for k, _ in shown] == ["field"] * 6
+    assert [t for _, t in shown][-2:] == ["extra  one", "  two"]
+    assert shown[-3][1].startswith("archive  ")
 
 
 def test_pre_pack_hooks_run_after_ownership_and_before_refresh(session, monkeypatch):
@@ -679,3 +683,141 @@ def test_export_packs_a_live_cast_up_to_its_last_whole_line(session, system, mon
     with tarfile.open(path) as tar:
         assert tar.extractfile(f"2026-11-14_htb_forest/{rel}").read() == whole
     assert cast.stat().st_size > len(whole)
+
+
+def window(open_now=True, signalled=None):
+    """Stand-in for closing the note window: it notes the box and says whether a window is left."""
+    signalled = [] if signalled is None else signalled
+
+    def close(paths, box):
+        signalled.append(box.path)
+        return open_now
+
+    return dict(close=close), signalled
+
+
+def test_finish_closes_the_note_window_before_removing_the_folder(session):
+    stand_in, signalled = window(open_now=False)
+    answers(session, "y", "y")
+    folder = session.box.path
+    seen = []
+
+    def close(paths, box):
+        seen.append(folder.exists())
+        return False
+
+    assert finish_box(session, **SAVED, close=close) is not None
+    assert seen == [True] and not folder.exists()
+    assert "the note window did not close" not in kinds(session, "warn")
+
+
+def test_finish_keeps_the_folder_when_the_window_stays(session):
+    stand_in, signalled = window(open_now=True)
+    answers(session, "y", "y")
+    assert finish_box(session, **SAVED, **stand_in) is not None
+    assert signalled == [session.box.path] and session.box.path.exists()
+    assert kinds(session, "warn") == ["the note window did not close; the folder was kept"]
+    assert not any(text.startswith("removed ") for text in kinds(session, "ok"))
+
+
+def test_finish_keeps_the_folder_when_the_note_became_unsaved(session):
+    stand_in, signalled = window()
+    answers(session, "y", "y")
+    states = iter([False, True])
+    assert finish_box(session, fix=lambda p: 0, unsaved=lambda b: next(states), **stand_in) is not None
+    assert session.box.path.exists() and signalled == []
+    assert kinds(session, "warn") == ["the note has unsaved changes; the folder was kept"]
+
+
+def test_finish_leaves_the_window_when_the_folder_is_kept(session):
+    stand_in, signalled = window()
+    answers(session, "y", "n")
+    finish_box(session, **SAVED, **stand_in)
+    assert session.box.path.exists() and signalled == []
+
+
+def test_import_closes_the_window_of_the_box_it_replaces(session):
+    archive = export_box(session, **NOFIX)
+    stand_in, signalled = window(open_now=False)
+    box = import_box(
+        session.paths, Settings(), FakeConsole(["y"]), archive, lambda: NOW,
+        unsaved=lambda b: False, **stand_in,
+    )  # fmt: skip
+    assert box is not None and signalled == [session.box.path]
+
+
+def test_import_with_an_unsaved_note_stops_and_replaces_nothing(session):
+    archive = export_box(session, **NOFIX)
+    marker = session.box.path / "marker.txt"
+    marker.write_text("keep")
+    stand_in, signalled = window()
+    console = FakeConsole(["y"])
+    result = import_box(
+        session.paths, Settings(), console, archive, lambda: NOW, unsaved=lambda b: True, **stand_in
+    )  # fmt: skip
+    assert result is None and marker.read_text() == "keep" and signalled == []
+    assert console.lines == [
+        ("fail", f"import failed: the note of {session.box.path.name} has unsaved changes; save it and import again")
+    ]
+
+
+def test_import_does_not_close_anything_when_nothing_is_replaced(session, tmp_path):
+    archive = export_box(session, **NOFIX)
+    stand_in, signalled = window()
+    box = import_box(fresh_home(tmp_path), Settings(), FakeConsole(), archive, lambda: NOW, **stand_in)
+    assert box is not None and signalled == []
+
+
+def test_import_declined_closes_nothing(session):
+    archive = export_box(session, **NOFIX)
+    stand_in, signalled = window()
+    assert import_box(session.paths, Settings(), FakeConsole(["n"]), archive, lambda: NOW, **stand_in) is None
+    assert signalled == []
+
+
+def test_finish_keeps_the_folder_and_window_when_the_note_changed_after_the_archive(session):
+    stand_in, signalled = window()
+    answers(session, "y", "y")
+    note = session.box.path / "notes.md"
+    write_new_note(session.paths, session.box, session.targets)
+    archived = note.read_text()
+    console = session.console
+    ask = console.confirm
+
+    def confirm(question, default=False):
+        if question == "remove working folder?":
+            note.write_text(archived + "saved when the window lost focus\n")
+        return ask(question, default)
+
+    console.confirm = confirm
+    assert finish_box(session, **SAVED, **stand_in) is not None
+    assert session.box.path.exists() and note.read_text() == archived + "saved when the window lost focus\n"
+    assert signalled == []
+    assert kinds(session, "warn") == ["the note changed after the archive was made; the folder was kept"]
+
+
+def test_finish_keeps_the_folder_when_the_note_cannot_be_read_after_the_archive(session):
+    stand_in, signalled = window()
+    answers(session, "y", "y")
+    note = session.box.path / "notes.md"
+    write_new_note(session.paths, session.box, session.targets)
+    archived = note.read_text()
+    console = session.console
+    ask = console.confirm
+
+    def confirm(question, default=False):
+        if question == "remove working folder?":
+            note.unlink()
+        return ask(question, default)
+
+    console.confirm = confirm
+    finish_box(session, **SAVED, **stand_in)
+    assert session.box.path.exists() and signalled == []
+    assert kinds(session, "warn") == ["the note changed after the archive was made; the folder was kept"]
+
+
+def test_finish_says_so_when_the_signal_could_not_be_sent(session):
+    answers(session, "y", "y")
+    finish_box(session, **SAVED, close=lambda paths, box: True)
+    assert kinds(session, "warn") == ["the note window did not close; the folder was kept"]
+    assert session.box.path.exists()

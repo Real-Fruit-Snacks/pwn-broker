@@ -76,7 +76,7 @@ def vpn_start(session: Session, args: list[str]) -> None:
     except vpnctl.VpnError as exc:
         console.fail(str(exc))
         for line in exc.log:
-            console.raw(line)
+            console.log(line)
         return
     _remember(session, source)
     if found is not None:
@@ -129,8 +129,7 @@ def vpn_status(session: Session, args: list[str]) -> None:
         ("file", marker.file),
         ("started for", marker.box_name),
     ]
-    for label, value in rows:
-        console.info(f"{label:<13}{value}")
+    console.fields(rows)
 
 
 @command("vpn log", "the last lines of OpenVPN's log")
@@ -141,4 +140,4 @@ def vpn_log(session: Session, args: list[str]) -> None:
         session.console.info("no log yet")
         return
     for line in lines:
-        session.console.raw(line)
+        session.console.log(line)

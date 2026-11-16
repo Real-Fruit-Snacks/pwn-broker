@@ -9,18 +9,23 @@ from pwn_broker.console import Cancelled
 from pwn_broker.creds import CredError
 from pwn_broker.note import NoteError
 from pwn_broker.shell.app import completions, prompt_text, toolbar_text
-from pwn_broker.shell.commands import COMMANDS, Quit, command, dispatch, resolve, suggest
+from pwn_broker.shell.commands import (
+    COMMANDS, USAGES, ArgumentError, Quit, command, dispatch, resolve, suggest, take_args,
+)  # fmt: skip
 from pwn_broker.store import StoreError
 from pwn_broker.vpn import Tunnel
 
 
 @pytest.fixture
 def registry():
-    saved = dict(COMMANDS)
+    saved, usages = dict(COMMANDS), dict(USAGES)
     COMMANDS.clear()
+    USAGES.clear()
     yield COMMANDS
     COMMANDS.clear()
     COMMANDS.update(saved)
+    USAGES.clear()
+    USAGES.update(usages)
 
 
 def _noop(session, args):
@@ -96,9 +101,40 @@ def test_dispatch_group_prefix_lists_commands(session, registry):
     _register("target add", "target list", "files")
     dispatch(session, "target")
     assert session.console.lines == [
-        ("info", "target add   help for target add"),
-        ("info", "target list   help for target list"),
+        ("field", "target add  help for target add"),
+        ("field", "target list  help for target list"),
     ]
+
+
+def test_command_registers_its_usage_line(registry):
+    command("target rename", "rename", "<target>")(_noop)
+    command("status", "show")(_noop)
+    assert USAGES == {"target rename": "usage: target rename <target>", "status": "usage: status"}
+
+
+@pytest.mark.parametrize(
+    "args, message",
+    [([], "missing argument: target name"), (["a", "b"], "too many arguments: b")],
+)
+def test_an_argument_error_prints_the_usage_under_the_fail_line(session, registry, args, message):
+    command("target rename", "rename", "<target>")(lambda s, a: take_args(a, ("target name",)))
+    dispatch(session, " ".join(["target rename", *args]))
+    assert session.console.lines == [("fail", message), ("detail", "usage: target rename <target>")]
+
+
+def test_take_args_raises_an_argument_error_that_is_a_value_error():
+    with pytest.raises(ArgumentError):
+        take_args([], ("target name",))
+    assert issubclass(ArgumentError, ValueError)
+
+
+def test_any_other_value_error_prints_no_usage(session, registry):
+    def wrong(s, args):
+        raise ValueError("no target named x")
+
+    command("target use", "use", "<target>")(wrong)
+    dispatch(session, "target use x")
+    assert session.console.lines == [("fail", "no target named x")]
 
 
 def test_dispatch_blank_line_does_nothing(session, registry):
@@ -247,6 +283,13 @@ def test_completions_path_folders(session, registry):
     assert completions(session, "path li") == ["path lists"]
     assert "path screenshots" in completions(session, "path ")
     assert completions(session, "path ").count("path screenshots") == 1
+
+
+def test_completions_offer_exit_and_clear(session):
+    from pwn_broker import shell  # noqa: F401  (fills the command registry)
+
+    assert completions(session, "ex") == ["exit", "export"]
+    assert completions(session, "cle") == ["clear"]
 
 
 def test_completer_replaces_the_whole_line(session, registry):
@@ -560,3 +603,226 @@ def test_each_command_starts_with_a_fresh_recording_count(session, loop, system)
     command("count", "help")(lambda s, a: seen.append(recording_count(s)))
     loop(["count", "count"], between=lambda left: recording_now(session, system, "dc01") if left == 1 else None)
     assert seen == [0, 1]
+
+
+# the layout at the prompt
+
+PROMPT = "forest/dc01 > "
+
+
+class _Screen(_Lines):
+    """The scripted prompt, drawn into the console's stream as a terminal shows it."""
+
+    def __init__(self, out, lines):
+        super().__init__(lines)
+        self.out = out
+
+    def prompt(self):
+        line = super().prompt()
+        self.out.write(PROMPT + line + "\n")
+        return line
+
+
+@pytest.fixture
+def screen(session, monkeypatch):
+    """Runs the real prompt loop on a TermConsole; returns what the window shows."""
+    import io
+
+    from pwn_broker.console import TermConsole
+    from pwn_broker.shell import app
+
+    out = io.StringIO()
+    session.console = TermConsole({"NO_COLOR": "1"}, out=out)
+    answers = []
+
+    def question(message, **kwargs):
+        # a question is drawn by prompt_toolkit, then answered
+        [(_, text)] = message
+        answer = answers.pop(0)
+        out.write(text + answer + "\n")
+        return answer
+
+    monkeypatch.setattr("prompt_toolkit.prompt", question)
+
+    def start(lines, *replies):
+        answers.extend(replies)
+        monkeypatch.setattr(app, "PromptSession", _Screen(out, lines))
+        app.run_shell(session)
+        return out.getvalue()
+
+    return start
+
+
+def _say(*texts):
+    def handler(s, args):
+        for text in texts:
+            s.console.ok(text)
+
+    return handler
+
+
+def _leave(s, args):
+    raise Quit
+
+
+def test_a_command_is_one_block_and_a_silent_command_adds_no_blank_line(registry, screen):
+    command("say", "help")(_say("a", "b"))
+    command("silent", "help")(_noop)
+    command("quit", "help")(_leave)
+    assert screen(["say", "silent", "", "say", "quit"]) == (
+        f"{PROMPT}say\n"
+        "\n"
+        "  ok    a\n"
+        "  ok    b\n"
+        "\n"
+        f"{PROMPT}silent\n"
+        f"{PROMPT}\n"
+        f"{PROMPT}say\n"
+        "\n"
+        "  ok    a\n"
+        "  ok    b\n"
+        "\n"
+        f"{PROMPT}quit\n"
+    )
+
+
+def test_a_block_that_ends_in_a_question_has_one_blank_line_below(registry, screen):
+    def ask(s, args):
+        s.console.ok("found")
+        s.console.confirm("go on?")
+
+    command("ask", "help")(ask)
+    command("quit", "help")(_leave)
+    assert screen(["ask", "quit"], "maybe", "n") == (
+        f"{PROMPT}ask\n"
+        "\n"
+        "  ok    found\n"
+        "\n"
+        "  go on? [y/N] > maybe\n"
+        "  fail  answer y or n\n"
+        "  go on? [y/N] > n\n"
+        "\n"
+        f"{PROMPT}quit\n"
+    )
+
+
+def test_a_command_that_only_gaps_or_nests_blocks_prints_nothing(registry, screen):
+    def quiet(s, args):
+        s.console.gap()
+        with s.console.block():
+            s.console.gap()
+
+    command("quiet", "help")(quiet)
+    command("quit", "help")(_leave)
+    assert screen(["quiet", "quiet", "quit"]) == f"{PROMPT}quiet\n{PROMPT}quiet\n{PROMPT}quit\n"
+
+
+def test_the_loop_s_own_lines_are_in_the_command_s_block(registry, screen, monkeypatch):
+    from pwn_broker import boxlock
+    from pwn_broker.shell import app
+
+    real = app.boxlock.held
+    calls = []
+
+    def busy_once(paths, *, wait):
+        calls.append(1)
+        if len(calls) == 1:
+            raise boxlock.Busy
+        return real(paths, wait=wait)
+
+    command("quit", "help")(_leave)
+    monkeypatch.setattr(app.boxlock, "held", busy_once)
+    command("x", "help")(_noop)
+    assert screen(["x", "quit"]) == (
+        f"{PROMPT}x\n"
+        "\n"
+        "  fail  record is adding a target in another window; try again\n"
+        "\n"
+        f"{PROMPT}quit\n"
+    )
+
+
+def test_the_real_commands_at_the_prompt(session, screen, system):
+    from pwn_broker import shell  # noqa: F401  (fills the command registry)
+    from pwn_broker.console import FakeConsole
+    from pwn_broker.session import rescan
+
+    real = session.console
+    session.console = FakeConsole()
+    dispatch(session, "host file on")
+    session.console = real
+    files = len(rescan(session))
+    text = screen(
+        ["status", "target rename dc01 new", "host add crm.forest.htb", "", "clear", "exit"], "n"
+    )
+    assert text == (
+        f"{PROMPT}status\n"
+        "\n"
+        "  box         forest (htb)\n"
+        "  started     2026-11-14\n"
+        "  status      active\n"
+        "  targets     1\n"
+        "  tools       0\n"
+        "  vpn         not up\n"
+        "  creds       0\n"
+        f"  files       {files}\n"
+        "  recordings  0\n"
+        "  user flag   -\n"
+        "  root flag   -\n"
+        "\n"
+        f"{PROMPT}target rename dc01 new\n"
+        "\n"
+        "  fail  too many arguments: new\n"
+        "        usage: target rename <target>\n"
+        "\n"
+        f"{PROMPT}host add crm.forest.htb\n"
+        "\n"
+        "  ok    dc01 now answers to 2 names\n"
+        "  ok    /etc/hosts updated\n"
+        "        10.10.10.161 forest.htb.local crm.forest.htb\n"
+        "\n"
+        f"{PROMPT}\n"
+        f"{PROMPT}clear\n"
+        f"{PROMPT}exit\n"
+        "\n"
+        "  export forest before you go? [Y/n] > n\n"
+        "\n"
+    )
+
+
+def test_exit_leaves_as_quit_does(session, screen):
+    from pwn_broker import shell  # noqa: F401  (fills the command registry)
+
+    assert COMMANDS["exit"] == COMMANDS["quit"][:1] + ("leave the shell",)
+    text = screen(["exit", "status"], "n")
+    assert text.endswith("  export forest before you go? [Y/n] > n\n\n")
+    assert "status" not in text
+
+
+@pytest.mark.parametrize("lines", [["exit", "run"], ["quit", "run"]])
+def test_exit_leaves_a_box_that_cannot_be_read_as_quit_does(session, loop, lines):
+    ran = []
+    command("quit", "help")(lambda s, a: ran.append("quit handler"))
+    command("exit", "help")(lambda s, a: ran.append("exit handler"))
+    command("run", "help")(lambda s, a: ran.append("run"))
+    _corrupt_a_target(session)
+    loop(lines)
+    assert ran == []
+    assert session.console.lines == [("warn", "forest was not exported because it could not be read")]
+
+
+def test_the_loop_tells_the_console_each_command_line_was_typed(registry, loop, session):
+    command("say", "help")(_say("a"))
+    loop(["say", ""])
+    events = session.console.events
+    assert events[:5] == [("typed", ""), ("block", "begin"), ("ok", "a"), ("block", "end"), ("typed", "")]
+
+
+def test_clear_at_the_prompt_leaves_no_blank_line_above_the_next_output(session, screen, monkeypatch):
+    from pwn_broker import shell  # noqa: F401  (fills the command registry)
+    from pwn_broker.console import CLEAR_SCREEN
+
+    monkeypatch.setattr(type(session.console._rich), "is_terminal", property(lambda self: True))
+    text = screen(["clear", "help x", "exit"], "n")
+    assert text.startswith(f"{PROMPT}clear\n{CLEAR_SCREEN}{PROMPT}help x\n\n  fail  too many arguments: x\n")
+    assert text.count(CLEAR_SCREEN) == 1

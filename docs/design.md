@@ -174,13 +174,16 @@ Root and a normal user are two ways of setting up a VM. They are not two users s
 
 ### 6.3 Launch
 
-`pwn-broker` with no arguments runs the checks, then offers:
+`pwn-broker` with no arguments prints its header, runs the checks, then offers:
 
 ```
-1  new box
-2  import a box from a file
-3  resume forest (htb, started 2026-11-14)
-4  reopen sauna (htb, finished 2026-11-13)
+Boxes
+  1  new box
+  2  import a box from a file
+  3  resume forest (htb, started 2026-11-14)
+  4  reopen sauna (htb, finished 2026-11-13)
+
+  choice       >
 ```
 
 Choice 3 appears once per active box on this VM, and choice 4 once per finished box whose working folder was kept. `pwn-broker new`, `pwn-broker import <file>` and `pwn-broker resume [name]` go straight there. Launching from inside a box folder resumes that box.
@@ -190,37 +193,44 @@ Only one box is open on the VM at a time, enforced by a lock in `/opt/pwn-broker
 **Checks, every launch.** Fast, and quiet when they pass:
 
 ```
-ok    5 checks passed
-warn  display   no desktop session; open the note with: vim -u /opt/pwn-broker/vim/vimrc notes.md
+pwn-broker 0.1.0
+
+  ok    7 checks passed
+  warn  display   no desktop session
+        run vim by hand: vim -u /opt/pwn-broker/vim/vimrc notes.md
 ```
 
 - Dependencies present: vim, a terminal emulator, tar. The recording phase adds the pinned `asciinema` (section 7.10). The tools phase once added a working `python3 -m venv`; section 6.13 removed that check.
 - A VPN tunnel is up (section 7.8).
 - A desktop session exists.
 - The PATH line is present.
-- The home folders exist.
+- The home folders exist. The app makes `active/` and `wrapped/` itself, at setup and at launch, without asking; the check speaks only when it cannot.
 - `/opt/pwn-broker` is owned by the current user. If it is not, the app refuses to start (section 6.2).
 - A newer release of the app exists. This never blocks, stays silent when offline, and never updates anything.
 
-A check that can repair its problem offers to. One that cannot prints the exact command to run. `check` in the prompt reruns them.
+A check that can repair its problem offers to, with `fix it now? [Y/n]`. One that cannot prints the exact command to run. `check` in the prompt reruns them.
 
 ### 6.4 New box
 
 ```
-box name     > forest
-platform     [htb] >
-date         [2026-11-14] >
-os           > windows
-difficulty   > easy
+New box
+  box name     > forest
+  platform     [htb] >
+  date         [2026-11-14] >
+  os           > windows
+  difficulty   > easy
 
-add a target? [Y/n]
-  ip         > 10.10.10.161
-  hostname   > forest.htb.local
-  scope      [external] >
-  name       [forest.htb.local] > dc01
-ok  target dc01 created
+  add a target? [Y/n] >
 
-add another? [y/N]
+Target 1
+  ip           > 10.10.10.161
+  hostname     > forest.htb.local
+  scope        [external] >
+  name         [forest.htb.local] > dc01
+
+  ok    target dc01 created
+
+  add another? [y/N] >
 ```
 
 - Date defaults to today. Platform defaults to the last one used on this VM, then the `default_platform` setting, then `htb`.
@@ -230,6 +240,7 @@ add another? [y/N]
 - The target's name defaults to its hostname, or its IP when there is no hostname. The name is the folder name and what I type in the prompt.
 - After each target it asks whether there is another.
 - When the questions end, the folders are created, the note is written from the template, and the note window opens.
+- The folder is `<date>_<platform>_<name>`. When that name is taken by a folder in `active/` or by an archive in `wrapped/`, the box gets the next free `-<n>`, and its archives carry it too.
 
 ### 6.5 Metadata
 
@@ -273,6 +284,7 @@ Only the app writes these files. Changes to a target go through `target edit`, n
 ### 6.6 The note window
 
 - On launch the app opens a second terminal window running `vim -u /opt/pwn-broker/vim/vimrc notes.md`. My own `~/.vimrc` is never read or changed.
+- A box has one note window. The app knows it by its vim, found in `/proc`: a running `vim -u <the app's vimrc> <that box's notes.md>`, whatever terminal opened it. While it runs, opening the box, importing it or `note` prints `ok    the note is already open` and opens nothing. Outside Linux nothing is found, and a window opens as before.
 - The terminal is `x-terminal-emulator`, with a setting to name another.
 - The vimrc carries the Nightshift colours so the note and the prompt match. IP addresses are Amber and `<Placeholder>` text is Ember wherever they appear, the box included. The note has its own filetype, so no markdown highlighting applies.
 - The note starts from `templates/notes.md`: a box with the box details and the targets at the top, then one section per target, each wrapped in a fold:
@@ -309,6 +321,7 @@ Target: dc01   10.10.10.161   forest.htb.local   external
 - `F8`, in normal or insert mode, adds an empty fold below the current line, open, with the cursor inside it in insert mode.
 - The vimrc saves the note when I leave the window and reloads it when I come back, so the app and vim never overwrite each other. Vim checks the file every second and when I come back to the window, and reloads it only when it changed on disk; if I have unsaved changes too, it asks, as vim always does. Across a reload, open folds stay open, a fold the app just added starts closed, and the cursor stays on the same text. The check waits while I am partway through something: a selection, a command line, an operator or a count. Vim writes no swap or backup file into the box folder.
 - `note` in the prompt reopens the window if I closed it.
+- When `finish` removes the working folder, it closes the note window: TERM to the note's vim, then to the vim's parent only when that parent's command line ends with `-e` and the note's vim command, which is a terminal started only to run it, and only when that parent has no child process left once the vim is gone. A terminal that keeps one process for several windows (Konsole in single-process mode, an alacritty instance that later opened more windows) can have that command line and still hold my other shells; it gets no signal and nothing is said. On Kali's qterminal a program ended by a signal leaves its window open, so that second signal is what closes the window; xterm closes by itself.
 
 ### 6.7 The prompt
 
@@ -342,7 +355,9 @@ Built on `prompt_toolkit` for the prompt and `rich` for tables.
 
 - Tab completion for commands, target names and file paths.
 - History with the up arrow and Ctrl-R, kept per box, with a muted suggestion from the last matching command.
-- A mistyped command gets a suggestion. Every error says what to do next.
+- A mistyped command gets a suggestion. Every error says what to do next. A wrong argument gets the command's usage line under the `fail` line.
+- A yes or no question takes only `y`, `yes`, `n`, `no`, in any case, or Enter for its default. Anything else gets `fail  answer y or n` and the question again. The console enforces this for every such question in the app.
+- The layout is section 6.14's: a header at launch, headings over groups of questions, one indent, one blank line around what each command prints.
 - Ctrl-C cancels the current line. It never ends the session.
 - Values I typed (credentials, hostnames, notes) are always printed literally and never interpreted as colour markup.
 
@@ -366,6 +381,8 @@ Built on `prompt_toolkit` for the prompt and `rich` for tables.
 | `check` | Reruns the launch checks |
 | `export` · `finish` | Sections 6.11 and 6.10 |
 | `help` · `quit` | |
+| `exit` | Does what `quit` does |
+| `clear` | Clears the screen |
 
 ### 6.8 Credentials and lists
 
@@ -373,14 +390,17 @@ One record for the whole box, in `creds.toml`. A password found on one machine o
 
 ```
 forest/dc01 > cred add
-  username   > svc-alfresco
-  domain     [htb.local] >
-  secret     > p@ss "word" with spaces\
-  kind       [password] >
-  found on   [dc01] >
-  note       >
-ok  cred 3 saved, found on dc01
-ok  lists updated: 3 usernames, 2 passwords, 2 pairs
+
+New credential
+  username     > svc-alfresco
+  domain       [htb.local] >
+  secret       > p@ss "word" with spaces\
+  kind         [password] >
+  found on     [dc01] >
+  note         >
+
+  ok    cred 3 saved, found on dc01
+  ok    lists updated: 3 usernames, 2 passwords, 2 pairs
 ```
 
 - One field at a time. Each answer is taken exactly as typed: no quotes needed, no escaping, nothing interpreted.
@@ -441,13 +461,16 @@ lists/
 
 ```
 forest/dc01 > finish
-box       forest (htb), started 2026-11-14
-targets   2
-files     47
-archive   ~/pwn-broker/wrapped/2026-11-14_htb_forest.finished.tar.gz
 
-finish this box? [y/N]
+  box      forest (htb), started 2026-11-14
+  targets  2
+  files    47
+  archive  ~/pwn-broker/wrapped/2026-11-14_htb_forest.finished.tar.gz
+
+  finish this box? [y/N] >
 ```
+
+The labels pad to the longest one in the list, and the phases' rows (`tools`, `runtimes`, `hosts`) join it, one tool or runtime per row.
 
 Nothing happens before a yes. Then, in order:
 
@@ -458,11 +481,11 @@ Nothing happens before a yes. Then, in order:
 5. Write the archive under a temporary name, read it back, and compare it with the manifest. Only then give it its final name.
 6. Copy it to the `copy_to` folder, if one is set, and verify the copy.
 7. Undo what the box changed on Kali (phases 2 and 3).
-8. Ask whether to remove the working folder. The default is no.
+8. Ask whether to remove the working folder. The default is no. On yes, the folder is kept, with a `warn` line, when the note has unsaved changes or when the note on disk is no longer the file that was archived (`warn  the note changed after the archive was made; the folder was kept`). Otherwise the note window is closed (section 6.6) and the folder removed. If the window does not close (its vim, or the terminal started for it, is still running), the folder is kept: `warn  the note window did not close; the folder was kept`.
 
 If any step fails, nothing after it runs, nothing is removed, and the box goes back to active. A finished archive is never overwritten without asking.
 
-A finished box whose working folder I kept shows in the launch menu as a box to reopen. Reopening sets it back to active. Finishing it again asks before replacing the earlier archive.
+A finished box whose working folder I kept shows in the launch menu as a box to reopen. Reopening sets it back to active. Finishing it again asks before replacing the earlier archive. A new box of the same name on the same day has its own `-2` archive (section 6.4), so that question is only ever about the same box.
 
 ### 6.11 Export and import
 
@@ -472,9 +495,11 @@ A finished box whose working folder I kept shows in the launch menu as a box to 
 
 ```
 # pwn-broker import /mnt/share/2026-11-14_htb_forest.exported.tar.gz
-ok     unpacked to ~/pwn-broker/active/2026-11-14_htb_forest
-ok     2 targets
-ok     note opened
+  ok    8 checks passed
+
+  ok    unpacked to ~/pwn-broker/active/2026-11-14_htb_forest
+  ok    2 targets
+
 forest/dc01 >
 ```
 
@@ -599,6 +624,149 @@ Nothing else. With `--from` and a folder index, the install and the tool command
 
 **Not tested.** The release workflow, and the installer's download against a real release. An upgrade over an install made by the old installer, on a real machine.
 
+### 6.14 Layout, and the fixes from the first hands-on test
+
+Built. This section is the design, corrected where the build or a second hands-on run changed it. It changes how sections 6.3, 6.4 and 6.7 look on screen, and fixes what a full pass over every command on a real Kali showed.
+
+**Why.** The app worked, and it did not look finished. Every line sat flush against the next: the launch checks, the menu, a string of one-word questions and the results read as one block. The words are right. What is missing is rhythm and alignment.
+
+**Goals.**
+
+- It opens and reads like a finished tool: a header, sections, space between them, one indent and one alignment everywhere.
+- Everything it prints still copies cleanly into a note and looks right in a recording.
+- The wording, the commands and the colours of section 6.7 stay. `ok`, `warn` and `fail` still start every status line.
+
+**Non-goals.** No new commands beyond `exit` and `clear`. No change to what is stored on disk. No change to the installer or the tools.
+
+**Anti-goals.** Boxes, frames, rules across the screen, banner art, anything that breaks in a narrow terminal or ends up as noise in copied text. Nothing that makes output depend on the terminal's width to be readable.
+
+**Approaches.**
+
+| Approach | What it is | Chosen | Why |
+|---|---|---|---|
+| Blank lines only | Today's output with blank lines between sections | No | Fixes the crowding, but the questions stay an unlabelled string and nothing lines up |
+| Spacing and headings | Blank lines, a header at launch, a quiet heading over each group of questions, one indent, aligned columns | Yes | Reads as designed while staying plain text that copies and records cleanly |
+| Rules and panels | Lines across the screen and a framed summary | No | Striking in a screenshot; the frames land in copied text and recordings and break in narrow terminals |
+
+**What it looks like.**
+
+```
+pwn-broker 0.1.0
+
+  ok    7 checks passed
+  warn  vpn   no VPN tunnel is up
+        start one with: vpn start
+
+Boxes
+  1  new box
+  2  import a box from a file
+
+  choice       > 1
+
+New box
+  box name     > forest
+  platform     [htb] >
+  date         [2026-11-16] >
+  os           > windows
+  difficulty   > easy
+
+  add a target? [Y/n] >
+
+Target 1
+  ip           > 10.10.10.161
+  hostname     > forest.htb.local
+  scope        [external] >
+  name         [forest.htb.local] > dc01
+
+  ok    target dc01 created
+
+  add another? [y/N] >
+
+  add dc01's hostnames to /etc/hosts? [Y/n] >
+
+  ok    /etc/hosts updated
+        10.10.10.161 forest.htb.local
+  ok    10.10.10.161 answered in 31 ms
+  ok    box forest created
+
+forest/dc01 > status
+
+  box         forest (htb)
+  started     2026-11-16
+  targets     1
+  tools       0
+  vpn         not up
+  ...
+
+forest/dc01 >
+```
+
+The sketch shortens `status`; it keeps every row it has now. It is what the app prints, as `tests/test_launch_layout.py` holds it for a whole launch. The first sketch had one space less after each question's label and called the first question `name`; the app kept its one space after the label padded to 12, and `box name`.
+
+**The rules.**
+
+- **Indent.** Everything the app prints is indented two spaces: status lines, questions, tables, lists. These are not: the prompt line (`forest/dc01 >`), the launch header, headings, output that exists to be copied or piped whole (`cred show`, `path`), `vpn log`'s lines, and the usage text and lines that stay flush left as before (`--help`, `--version`, `record --help`, `setup`).
+- **Detail lines.** A line that belongs to the status line above it (the hint under a `warn`, the hosts lines under `/etc/hosts updated`, the paths under `recording saved`) is aligned under that line's text.
+- **Blocks.** What one command prints is one block, with one blank line above it and one below. A command that prints nothing adds no blank line. There are never two blank lines in a row.
+- **Headings.** A group of questions gets a heading, flush left, in the text colour and bold, with a blank line above: `New box`, `Target 1`, `Target 2`, `New target`, `Edit <target>`, `New credential`, `Edit credential <n>`. The start menu gets `Boxes`. A single question on its own gets no heading. Headings are sentence case and never coloured Ember.
+- **Questions.** Every question is `  <label padded to 12> [default] > `, as before but indented: `  box name     > forest`. A yes or no question stands on its own, with a blank line above and below, and the console places both, so no caller can forget one.
+- **Control characters.** Every line but output meant to be copied (`cred show`, `path`) shows a control character from a value as `?`, table cells included, so a hostname or credential taken from a target cannot move the cursor or change the terminal.
+- **Header.** At launch, and only there, the first line is `pwn-broker <version>`, then a blank line, then the checks. `pwn-broker import <file>` is a launch with no header: it prints the checks and the import's own lines, nothing above them.
+- **Lists of fields.** `status`, `target show`, `tool info`, the summary before `finish` and every other label-and-value list are printed by one function that pads the labels to the longest one. No command pads its own.
+- **Help.** `help` groups the commands by their first word with a blank line between groups, both columns aligned across every group. A group's name alone (`tool`, `cred`, `host file`) prints that group the same way. Before this they were ragged.
+- **Long values.** A table cell that would wrap is cut and ends in `...`; the command that shows the whole value is one step away (`cred show <n>`, `tool info <name>`). The summary before `finish` lists one tool per line.
+- **No colour, no terminal.** With `NO_COLOR` the layout is the same without colour. When output is not a terminal the same lines and blank lines are written; nothing depends on the width.
+- **The prompt line and the status bar** are unchanged.
+
+**Where it applies.**
+
+- The app itself: launch, the start menu, every question and every command at the prompt.
+- `record` prints inside the window it records. It gets the indent and the aligned detail lines, with one blank line above and below what it says, and no header.
+- `--help`, `--version` and `record --help` stay as they are, flush left: they are usage text, and scripts read them.
+- `pwn-broker setup` prints flush left, with no header and no blank lines, as before: it runs inside the installer, whose lines are flush left.
+- The installer is not part of this.
+
+**Who leaves the space.**
+
+- At the prompt it is automatic: whatever a command prints becomes one block, with the blank line above written before its first line and the one below after its last. A command that prints nothing gets neither.
+- Outside the prompt (launch, the menu, a new box, an import) the flow asks the console for a gap or a heading where the sketch shows one. No code prints an empty line by hand.
+- The console knows whether the last thing on screen was a blank line, a question included, so two never follow each other. Besides the gaps and headings it has `header`, for the launch's first line; `typed`, which the prompt calls once a command line is on screen, since the console did not write it; `handover`, called just before another program writes to the window (the shell `record` starts, a replay's playback), so that program starts below a blank line even when nothing came before it; and `clear`.
+
+**Cutting long values.**
+
+- Only when the output is a terminal, and at that terminal's width. Piped output and the Kali job see every value whole.
+- Each table names the one column that may be cut (the secret in `cred list`, the file in `files`, the hostnames in `target list`, the run command in `tool list --installed`, the description in `tool search`). `tool list` has no long column and names none. No other column is cut; if the table still does not fit, it wraps as now.
+
+**Headings, in full.** `Boxes` (the start menu), `New box`, `Target <n>` (counting the targets added while the box is made), `New target` (`target add`, and when `record` adds one), `Edit <target>`, `New credential`, `Edit credential <n>`, `Import usernames` (`cred import`). Yes or no questions and single questions (`vpn start`, `flag`, `import`) get none.
+
+**Help, in full.** The commands that are one word (`check`, `export`, `files`, `finish`, `help`, `note`, `path`, `quit`, `exit`, `clear`, `replay`, `status`) come first as one group, then each family (`cred`, `flag`, `host`, `target`, `tool`, `vpn`) as its own, with a blank line between groups. `help` shows each command's one-line description. Usage lines appear when an argument is wrong.
+
+**Fixes from the test.** Each of these was seen on a real Kali (2026.2 under WSL, as root, installed from `main`), running every command.
+
+| Seen | Fix |
+|---|---|
+| Every `note`, every box opened and every import opened another vim on the same note; windows of a finished box stayed open. Four windows on one file, no swap file, so the last one to save wins | One note window per box. The app finds a box's note window by looking for the vim it starts: a running `vim -u <the app's vimrc> <that box's notes.md>`. That works whichever terminal program opened it; the app reads `/proc` for it, so on any other system nothing is found and a window opens as before. While one is running, opening the box, importing it or `note` says `ok    the note is already open` and opens nothing. `finish` already refuses to start while the note has unsaved changes. When the working folder is then removed, the app sends TERM to that vim, then to the vim's parent only when that parent's command line ends with `-e` and the note's vim command and it has no other child left, so the terminal started for it goes too and a terminal that still holds other windows stays. If the note gained unsaved changes in between, or the note on disk is no longer the file that was archived, it says so, closes nothing and keeps the folder. If the window does not close, it says so and keeps the folder too |
+| Two boxes with the same name on the same day got the same archive name; `finish` asked `replace the existing archive?` and yes destroyed the earlier box's archive | A new box's folder name is checked against the archives in `wrapped/` as well as the folders in `active/`, so the second box is `..._abc-2` and its archives are too. `replace the existing archive?` is then only ever asked about the same box |
+| `import` with no file given: `import failed: .: cannot open as a gzip tar ([Errno 21] Is a directory: '.')` | An empty answer asks again, with `fail  give the path of an exported box`. A folder gets `fail  <path> is a folder, not an exported box` |
+| `exit` answered `did you mean: export`; `clear` answered `did you mean: cred clear` | `exit` does what `quit` does. `clear` clears the screen |
+| At a yes or no question, anything that was not yes counted as no, silently: `2` at `fix it now? [Y/n]` skipped the fix | Only `y`, `yes`, `n`, `no` and an empty answer (the default) are accepted, in any case. Anything else: `fail  answer y or n`, and the question again |
+| Wrong arguments got no hint: `target rename old new` said `too many arguments: new` | Every command has a usage line. An argument error prints it under the `fail` line: `usage: target rename <target>` |
+| A fresh install's first launch warned `box folders are missing` and asked to fix it | The app makes `~/pwn-broker/active` and `wrapped` itself, at setup and at launch, without asking. The check stays for a folder it cannot make |
+| `vpn log` and the tools row before `finish` wrapped in the middle of words | Covered by the layout rules above; `vpn log` prints OpenVPN's lines flush left and unwrapped, because they are a log to copy. The log carries text the VPN server sends, so a control character in it is shown as `?` like everywhere else, and a tab stays a tab |
+
+**Constraints.**
+
+- Layout lives in the console layer, not in the commands. Commands say what a line is (a status, a detail, a heading, a field list, a table, a gap); the console decides how it is spaced. A command never prints a blank line or pads a label by hand.
+- The console the tests use records the same calls, so a test can check that a heading or a gap was asked for without knowing how it is drawn.
+- Output that other programs or my own notes rely on does not change: `cred show` prints the secret and nothing else, `path` prints the path and nothing else, the text copy of a recording keeps its format.
+- The Kali job in CI reads the app's output; it is updated in the same change and must stay green.
+
+**Left to the builder.** How the console tracks whether the last thing printed was a blank line; the exact names of the new console methods; how a command declares its usage line; where each existing hand-padded list moves to the shared function.
+
+**Checked by hand afterwards.** On 2026-11-16, the whole flow in the Kali under WSL (2026.2, as root, Kali's qterminal), every command, as in the test that found the above. Seen: the layout as the sketch shows it; one note window, with `ok    the note is already open`, and neither the vim nor its terminal left after `finish` removed the folder; the `-2` folder and archive for a second box of the same name on the same day; both `import` messages; `exit` and `clear`; `fail  answer y or n` at a yes or no question; the usage line under a wrong argument; a first launch that asked nothing about folders; a long hash cut with `...` in `cred list`. Not seen by hand: `vpn log`'s lines, the tools rows before `finish` with several tools, and a note that gained unsaved changes or changed on disk between `finish`'s two questions. On qterminal a program ended by a signal leaves its window open, which is why the app also signals a terminal started only for the note's vim.
+
+**Known, and left.** After Ctrl-C at a yes or no question, the next line follows directly under the question. `--help` and `--version` are printed without colour. On a terminal that hosts all its windows in one server process (gnome-terminal), the app closes the note's vim and cannot close the window; whether that terminal then closes the window by itself has not been tried.
+
 ## 7. Phase 2: recording and Kali changes
 
 Ships in the first release, with phases 1 and 3. It adds `record` and `replay`, the box's lines in `/etc/hosts`, the `host` and `vpn` commands, a VPN check and a ping for each new target.
@@ -619,14 +787,17 @@ Ships in the first release, with phases 1 and 3. It adds `record` and `replay`, 
 
 ```
 # record 10.10.10.161
-ok  recording this window for dc01 (forest)
-    targets/dc01/recordings/2026-11-14_1432.cast
-    exit this shell to stop
+
+  ok    recording this window for dc01 (forest)
+        targets/dc01/recordings/2026-11-14_1432.cast
+        exit this shell to stop
+
 [rec dc01] ┌──(root㉿kali)-[~]
 └─# exit
-ok  recording saved, 14 min
-    targets/dc01/recordings/2026-11-14_1432.cast
-    targets/dc01/recordings/2026-11-14_1432.txt
+
+  ok    recording saved, 14 min
+        targets/dc01/recordings/2026-11-14_1432.cast
+        targets/dc01/recordings/2026-11-14_1432.txt
 ```
 
 - The target can be given as an IP, a hostname or a name, matched the way `target use` matches. With no target, it records for the box's last-used target and says which.
@@ -650,7 +821,8 @@ ok  recording saved, 14 min
 
 ```
 # record 10.10.10.200
-10.10.10.200 is not a target of forest. add it? [y/N]
+
+  10.10.10.200 is not a target of forest. add it? [y/N] >
 ```
 
 On yes, `record` asks the same questions as `target add`, with the address filled in, and creates the target exactly as `target add` does: folders, note section, lists, the `/etc/hosts` offer and the ping. Then it records. The prompt's current target does not change.
@@ -698,10 +870,16 @@ cast     2026-11-14_1432.cast
 
 ```
 forest/dc01 > replay
- n  started            length   size
- 1  2026-11-14 14:32   14 min   212 KB
- 2  2026-11-14 15:10   recording now
+
+  n  started           length         size
+  1  2026-11-14 14:32  14 min         212 KB
+  2  2026-11-14 15:10  recording now
+
 forest/dc01 > replay 1
+
+<the recording plays here>
+
+forest/dc01 >
 ```
 
 | Command | Does |
@@ -709,7 +887,7 @@ forest/dc01 > replay 1
 | `replay [target]` | Lists the recordings of the current target, or the named one, oldest first |
 | `replay [target] <n>` | Plays one in the prompt window. Idle gaps longer than two seconds are cut to two. Space pauses, Ctrl-C stops and returns to the prompt |
 
-Playing needs `asciinema`. Listing does not. A recording whose window is still recording is listed as `recording now` and is not played until that window exits.
+The playback starts below a blank line and the prompt comes back below another, as around the shell `record` starts; a `warn` line about asciinema's status goes under the second. Playing needs `asciinema`. Listing does not. A recording whose window is still recording is listed as `recording now` and is not played until that window exits.
 
 ### 7.6 Finish, export, import, status
 
@@ -744,9 +922,10 @@ A target with an IP and a hostname can have one line in `/etc/hosts`:
 
 ```
 forest/web01 > host add crm.board.htb dev.board.htb
-ok  web01 now answers to 3 names
-ok  /etc/hosts updated
-    10.10.11.5 board.htb crm.board.htb dev.board.htb
+
+  ok    web01 now answers to 3 names
+  ok    /etc/hosts updated
+        10.10.11.5 board.htb crm.board.htb dev.board.htb
 ```
 
 | Command | Does |
@@ -786,9 +965,10 @@ ok  /etc/hosts updated
 
 ```
 forest > vpn start
-vpn file     [/root/Downloads/lab_user.ovpn] >
-ok  copied to vpn/lab_user.ovpn
-ok  vpn up, 10.10.14.7 on tun0
+
+  vpn file     [/root/Downloads/lab_user.ovpn] >
+  ok    copied to vpn/lab_user.ovpn
+  ok    vpn up, 10.10.14.7 on tun0
 ```
 
 | Command | Does |
@@ -1045,14 +1225,16 @@ sha256 = "..."
 
 ```
 forest/dc01 > tool install kerbrute
-ok    kerbrute 1.0.3 installed
-run   kerbrute              from any terminal
+
+  ok    kerbrute 1.0.3 installed
+  run   kerbrute   from any terminal
 
 forest/dc01 > tool install ligolo-ng
-ok    ligolo-ng 0.9.2 installed
-run   ligolo-proxy          from any terminal
-      sudo /opt/pwn-broker/bin/ligolo-proxy
-files /opt/pwn-broker/upload/ligolo-ng/   agent  agent.exe
+
+  ok    ligolo-ng 0.9.2 installed
+  run   ligolo-proxy   from any terminal
+        sudo /opt/pwn-broker/bin/ligolo-proxy
+  files /opt/pwn-broker/upload/ligolo-ng   agent  agent.exe
 ```
 
 `list`, `search` and `info` work without a network, from the cached index.
@@ -1204,9 +1386,10 @@ wheels = "wheels"
 
 ```
 forest/dc01 > tool install certipy
-ok    python-3.13 3.13.18 installed (runtime, 34 MB)
-ok    certipy 5.1.0 installed
-run   certipy   from any terminal
+
+  ok    python-3.13 3.13.18 installed (runtime, 34 MB)
+  ok    certipy 5.1.0 installed
+  run   certipy   from any terminal
 ```
 
 The size is the runtime's zip in mebibytes, rounded to a whole number: 34 for this build.

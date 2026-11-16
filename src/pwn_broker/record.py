@@ -86,7 +86,9 @@ def _add(env: Env, folder: Path, box: Box, targets: list[Target], text: str) -> 
         prefill = {"ips": [text]}
     except ValueError:
         prefill = {"hostnames": [text]}
-    answers = questions.ask_target(console, taken={t.name for t in targets}, **prefill)
+    answers = questions.ask_target(
+        console, heading="New target", taken={t.name for t in targets}, **prefill
+    )
     try:
         with boxlock.held(env.paths, wait=LOCK_WAIT):
             try:
@@ -149,8 +151,17 @@ def _interrupts_ignored() -> Iterator[None]:
 def run(env: Env, argv: list[str]) -> int:
     console = env.console
     if argv in (["--help"], ["-h"]):
-        console.info(USAGE)
+        # usage text, flush left as scripts read it
+        console.raw(USAGE)
         return 0
+    # the record command line is on screen above; what record says is one block below it
+    console.typed()
+    with console.block():
+        return _run(env, argv)
+
+
+def _run(env: Env, argv: list[str]) -> int:
+    console = env.console
     # an option is never a target name, IP or hostname, and must not be offered as one
     if len(argv) > 1 or (argv and argv[0].startswith("-")):
         console.fail(USAGE)
@@ -222,8 +233,10 @@ def _record(env: Env, box: Box, target: Target) -> int:
     error: OSError | None = None
     try:
         console.ok(f"recording this window for {target.name} ({box.name})")
-        console.info(f"    {shown(cast)}")
-        console.info("    exit this shell to stop")
+        console.detail(shown(cast))
+        console.detail("exit this shell to stop")
+        # the recorded shell starts below a blank line
+        console.handover()
         try:
             with _interrupts_ignored():
                 status = env.run(argv, env=environment).returncode
@@ -231,6 +244,10 @@ def _record(env: Env, box: Box, target: Target) -> int:
             error = exc
     finally:
         recstate.clear(paths, env.pid)
+    if status is not None:
+        # the recorded shell wrote to the window; what follows starts below a blank line
+        console.typed()
+        console.gap()
 
     if error is not None:
         console.fail(f"asciinema could not be started: {error}")
@@ -250,9 +267,9 @@ def _record(env: Env, box: Box, target: Target) -> int:
     except OSError as exc:
         console.warn(f"no text copy of {shown(cast)}: {exc.strerror or exc}")
     console.ok(f"recording saved, {recstate.length((env.clock() - started).total_seconds())}")
-    console.info(f"    {shown(cast)}")
+    console.detail(shown(cast))
     if text is not None:
-        console.info(f"    {shown(text)}")
+        console.detail(shown(text))
     return 0
 
 

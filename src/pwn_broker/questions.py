@@ -46,6 +46,7 @@ def _values(console: Console, label: str, default: str, clearable: bool) -> list
 def ask_target(
     console: Console,
     *,
+    heading: str,
     taken: set[str],
     defaults: Target | None = None,
     ask_name: bool = True,
@@ -53,6 +54,20 @@ def ask_target(
     hostnames: list[str] | None = None,
 ) -> TargetAnswers:
     # `ips` and `hostnames` prefill a target that does not exist yet
+    console.heading(heading)
+    answers = _ask_target(console, taken, defaults, ask_name, ips, hostnames)
+    console.gap()
+    return answers
+
+
+def _ask_target(
+    console: Console,
+    taken: set[str],
+    defaults: Target | None,
+    ask_name: bool,
+    ips: list[str] | None,
+    hostnames: list[str] | None,
+) -> TargetAnswers:
     default_ips = " ".join(defaults.ips if defaults else ips or [])
     default_hosts = " ".join(defaults.hostnames if defaults else hostnames or [])
 
@@ -166,7 +181,16 @@ def ask_works_on(console: Console, session: Session, current: list[str]) -> list
         return list(dict.fromkeys(names))
 
 
-def ask_cred(console: Console, session: Session, defaults: Cred | None = None) -> CredAnswers:
+def ask_cred(
+    console: Console, session: Session, defaults: Cred | None = None, *, heading: str
+) -> CredAnswers:
+    console.heading(heading)
+    answers = _ask_cred(console, session, defaults)
+    console.gap()
+    return answers
+
+
+def _ask_cred(console: Console, session: Session, defaults: Cred | None) -> CredAnswers:
     while True:
         username = ask_value(console, "username", defaults.username if defaults else None)
         if username != "":
@@ -199,6 +223,13 @@ class BoxAnswers:
 
 
 def ask_box(console: Console, *, default_platform: str, today: date) -> BoxAnswers:
+    console.heading("New box")
+    answers = _ask_box(console, default_platform, today)
+    console.gap()
+    return answers
+
+
+def _ask_box(console: Console, default_platform: str, today: date) -> BoxAnswers:
     while True:
         name = console.ask("box name")
         if name != "" and _usable(name):

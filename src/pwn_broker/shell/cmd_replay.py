@@ -94,18 +94,23 @@ def _play(session: Session, n: int, casts: list[Path]) -> None:
     # the app's own settings folders, as for recording, and no PWN_BROKER_RECORDING: playing records nothing
     env = {k: v for k, v in os.environ.items() if k != "PWN_BROKER_RECORDING"}
     env.update(recorder.settings_env(session.paths))
+    # the playback starts below a blank line, as a recorded shell does
+    console.handover()
     try:
-        status = session.play(recorder.play_argv(session.paths, cast), env=env).returncode
+        status: int | None = session.play(recorder.play_argv(session.paths, cast), env=env).returncode
     except KeyboardInterrupt:
-        return  # Ctrl-C is how a replay is stopped
+        status = None  # Ctrl-C is how a replay is stopped
     except OSError as exc:
         console.fail(f"asciinema could not be started: {exc}")
         return
-    if status != 0:
+    # asciinema wrote to the window; what follows starts below a blank line
+    console.typed()
+    console.gap()
+    if status is not None and status != 0:
         console.warn(f"asciinema ended with status {status}")
 
 
-@command("replay", "list a target's recordings, or play one")
+@command("replay", "list a target's recordings, or play one", "[<target>] [<n>]")
 def replay(session: Session, args: list[str]) -> None:
     target, n = _parse(session, args)
     casts = casttext.cast_files(session.box, target.name)

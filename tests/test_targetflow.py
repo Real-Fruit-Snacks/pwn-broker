@@ -21,7 +21,7 @@ def test_add_makes_the_target_current_then_offers_and_pings(session, system):
     assert session.console.lines == [
         ("ok", "target web01 created"),
         ("ok", "/etc/hosts updated"),
-        ("info", "    10.10.10.50 web.htb"),
+        ("detail", "10.10.10.50 web.htb"),
         ("ok", "10.10.10.50 answered in 1 ms"),
     ]
     assert system.pings == ["10.10.10.50"]
@@ -110,7 +110,7 @@ def test_a_record_that_cannot_be_saved_is_a_warning_and_the_ping_still_runs(
     # taken out by its next rewrite, or at finish
     assert session.console.lines == [
         ("ok", "/etc/hosts updated"),
-        ("info", "    10.10.10.161 forest.htb.local"),
+        ("detail", "10.10.10.161 forest.htb.local"),
         ("warn", "the /etc/hosts line could not be recorded: box.toml: disk full"),
         ("ok", "10.10.10.161 answered in 1 ms"),
     ]

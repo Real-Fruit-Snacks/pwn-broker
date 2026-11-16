@@ -1,3 +1,4 @@
+import io
 import threading
 import time
 from datetime import timedelta
@@ -10,9 +11,9 @@ from pwn_broker import shell  # noqa: F401  (fills the command registry)
 from pwn_broker.boxes import TARGET_FOLDERS, add_target
 from pwn_broker.checks import CheckResult
 from pwn_broker.config import Settings
-from pwn_broker.console import FakeConsole
+from pwn_broker.console import FakeConsole, TermConsole
 from pwn_broker.model import FileRecord, Flag
-from pwn_broker.shell.commands import COMMANDS, dispatch
+from pwn_broker.shell.commands import COMMANDS, USAGES, dispatch
 from pwn_broker.store import load_box, save_files
 from pwn_broker.vpn import Tunnel
 
@@ -29,6 +30,16 @@ def _info(console):
 
 def _fails(console):
     return [text for kind, text in console.lines if kind == "fail"]
+
+
+def _fields(console):
+    return [text for kind, text in console.lines if kind == "field"]
+
+
+def _term(session):
+    out = io.StringIO()
+    session.console = TermConsole({"NO_COLOR": "1"}, out=out)
+    return out
 
 
 def _record(path, target, seen, size):
@@ -125,6 +136,8 @@ def test_files_lists_records_for_one_target(session):
     ]
     dispatch(session, "files")
     assert len(session.console.tables[1][1]) == 4
+    # the file is the one column cut on a narrow terminal
+    assert session.console.events == [("table", "file")] * 2
 
 
 def test_files_none(session):
@@ -148,21 +161,32 @@ def test_status_shows_box_at_a_glance(session):
     session.box.flags["user"] = Flag(FLAG, NOW)
     save_files(session.box, [_record("targets/dc01/a", "dc01", NOW, 1)])
     dispatch(session, "status")
-    lines = _info(session.console)
+    lines = _fields(session.console)
     assert lines == [
-        "box        forest (htb)",
-        "started    2026-11-14",
-        "status     active",
-        "targets    1",
-        "tools      0",
-        "vpn        not up",
-        "creds      1",
-        "files      1",
-        "recordings 0",
+        "box  forest (htb)",
+        "started  2026-11-14",
+        "status  active",
+        "targets  1",
+        "tools  0",
+        "vpn  not up",
+        "creds  1",
+        "files  1",
+        "recordings  0",
         "user flag  recorded 12:00",
         "root flag  -",
     ]
+    assert [kind for kind, _ in session.console.lines] == ["field"] * 11
     assert FLAG not in "".join(lines)
+
+
+def test_status_aligns_its_values_in_one_column(session):
+    out = _term(session)
+    dispatch(session, "status")
+    lines = out.getvalue().splitlines()
+    assert lines[0] == "  box         forest (htb)"
+    assert lines[8] == "  recordings  0"
+    assert lines[9] == "  user flag   -"
+    assert len(lines) == 11
 
 
 def test_check_command_reruns_checks(session, monkeypatch):
@@ -204,22 +228,98 @@ def test_launch_checks_repairs_path_and_adds_version(paths, tmp_path, monkeypatc
     assert all(r.name != "version" for r in results)
 
 
-def test_help_lists_every_command(session):
+ONE_WORD = ["check", "clear", "exit", "export", "files", "finish", "help", "note", "path", "quit", "replay", "status"]
+FAMILIES = ["cred", "flag", "host", "target", "tool", "vpn"]
+# the longest command name, two spaces, then the description
+DESCRIPTION_COLUMN = 2 + len("tool cache clear") + 2
+
+
+def _groups(events):
+    """The command names in each group help printed, split where it asked for a gap."""
+    groups = [[]]
+    for kind, text in events:
+        if kind == "gap":
+            groups.append([])
+        else:
+            assert kind == "field"
+            groups[-1].append(text.split("  ", 1)[0])
+    return groups
+
+
+def test_help_lists_the_one_word_commands_then_each_family(session):
     dispatch(session, "help")
-    columns, rows = session.console.tables[0]
-    assert columns == ["command", "does"]
-    assert [r[0] for r in rows] == sorted(COMMANDS)
-    expected = {"target add", "files", "flag user", "path", "note", "status", "check", "help"}
-    assert expected <= set(COMMANDS)
+    groups = _groups(session.console.events)
+    assert groups[0] == ONE_WORD
+    assert [group[0].split()[0] for group in groups[1:]] == FAMILIES
+    for first, group in zip(FAMILIES, groups[1:]):
+        assert group == sorted(n for n in COMMANDS if n.split()[0] == first)
+    # host is a command of its own and the head of its family
+    assert groups[3][:2] == ["host", "host add"]
+    assert sorted(n for group in groups for n in group) == sorted(COMMANDS)
+    assert ("field", "help  list the commands") in session.console.lines
+
+
+def _description_columns(text):
+    columns = set()
+    for line in text.splitlines():
+        name = next(n for n in sorted(COMMANDS, key=len, reverse=True) if line.startswith(f"  {n}  "))
+        rest = line[2 + len(name) :]
+        columns.add(2 + len(name) + len(rest) - len(rest.lstrip(" ")))
+    return columns
+
+
+def test_help_aligns_both_columns_across_every_group(session):
+    out = _term(session)
+    dispatch(session, "help")
+    text = out.getvalue()
+    assert len(text.split("\n\n")) == 1 + len(FAMILIES)
+    assert "\n\n\n" not in text and not text.startswith("\n") and not text.endswith("\n\n")
+    assert _description_columns(text.replace("\n\n", "\n")) == {DESCRIPTION_COLUMN}
+    assert "\n  help              list the commands\n" in text
+
+
+@pytest.mark.parametrize("line", ["tool", "cred", "host file", "flag", "tool cache"])
+def test_a_family_name_lists_its_commands_aligned_as_help_does(session, line):
+    dispatch(session, line)
+    names = [text.split("  ", 1)[0] for text in _fields(session.console)]
+    assert names == sorted(n for n in COMMANDS if n.startswith(line + " "))
+    assert [kind for kind, _ in session.console.lines] == ["field"] * len(names)
+    out = _term(session)
+    dispatch(session, line)
+    assert _description_columns(out.getvalue()) == {DESCRIPTION_COLUMN}
+
+
+def test_help_with_an_argument_is_an_error_with_its_usage(session):
+    dispatch(session, "help tool")
+    assert session.console.lines == [("fail", "too many arguments: tool"), ("detail", "usage: help")]
+
+
+def test_clear_asks_the_console_to_clear_the_screen(session):
+    dispatch(session, "clear")
+    assert session.console.events == [("clear", "")]
+    session.console = FakeConsole()
+    dispatch(session, "clear x")
+    assert session.console.lines == [("fail", "too many arguments: x"), ("detail", "usage: clear")]
+    assert ("clear", "") not in session.console.events
 
 
 @pytest.mark.parametrize(
     "line", ["status x", "check x", "note x", "help x", "flag user a b", "path a b", "files a b"]
 )
-def test_extra_arguments_fail(session, line, monkeypatch):
+def test_extra_arguments_fail_with_the_usage(session, line, monkeypatch):
     monkeypatch.setattr(checks, "launch_checks", lambda *a: [])
     dispatch(session, line)
     assert len(_fails(session.console)) == 1
+    name = max((n for n in COMMANDS if line.startswith(n + " ")), key=len)
+    assert session.console.lines[-1] == ("detail", USAGES[name])
+
+
+def test_every_command_has_a_usage_line():
+    assert USAGES.keys() == COMMANDS.keys()
+    assert all(usage == f"usage: {name}" or usage.startswith(f"usage: {name} ") for name, usage in USAGES.items())
+    assert USAGES["files"] == "usage: files [<target>]"
+    assert USAGES["path"] == "usage: path [<folder>]"
+    assert USAGES["status"] == "usage: status"
 
 
 def test_files_added_uses_the_clock_timezone(session):
@@ -246,7 +346,7 @@ def test_note_command_recreates_a_missing_note(session, monkeypatch):
 def test_status_shows_the_tunnel(session, system):
     system.tunnel_found = Tunnel("tun0", "10.10.14.7")
     dispatch(session, "status")
-    assert "vpn        10.10.14.7 on tun0" in _info(session.console)
+    assert "vpn  10.10.14.7 on tun0" in _fields(session.console)
 
 
 def test_check_command_hands_the_session_tunnel_reader_to_the_checks(session, system, monkeypatch):
@@ -264,8 +364,18 @@ def test_status_counts_recordings_and_those_recording_now(session, system):
     write_cast(folder / "2026-11-14_1000.cast", [(0, "o", "a")])
     write_cast(session.box.path / "targets/web01/recordings/2026-11-14_1100.cast", [(0, "o", "a")])
     dispatch(session, "status")
-    assert "recordings 2" in _info(session.console)
+    assert "recordings  2" in _fields(session.console)
     recording_now(session, system, "dc01")
     session.console = FakeConsole()
     dispatch(session, "status")
-    assert "recordings 3 (1 recording now)" in _info(session.console)
+    assert "recordings  3 (1 recording now)" in _fields(session.console)
+
+
+def test_note_command_does_not_open_a_second_window(session, monkeypatch):
+    opened = []
+    monkeypatch.setattr(notewindow, "find_note", lambda paths, box: 99)
+    monkeypatch.setattr(notewindow, "open_note", lambda *a: opened.append(a) or True)
+    dispatch(session, "note")
+    assert opened == []
+    assert session.console.lines[-1] == ("ok", "the note is already open")
+    assert ("ok", "note opened") not in session.console.lines

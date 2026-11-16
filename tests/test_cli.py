@@ -49,8 +49,8 @@ def test_ask_box_reasks_empty_name_and_bad_date():
     console = FakeConsole(["", "!!!", "forest", "", "14/11", "2026-11-15", "", ""])
     a = ask_box(console, default_platform="htb", today=date(2026, 11, 14))
     assert a.name == "forest" and a.day == date(2026, 11, 15)
-    assert [k for k, _ in console.lines] == ["fail", "fail", "fail"]
-    assert "YYYY-MM-DD" in console.lines[2][1]
+    assert [k for k, _ in console.lines] == ["heading", "fail", "fail", "fail"]
+    assert "YYYY-MM-DD" in console.lines[3][1]
     assert console.asked == ["box name"] * 3 + ["platform", "date", "date", "os", "difficulty"]
 
 
@@ -100,7 +100,7 @@ def test_new_box_offers_the_hosts_line_and_pings_each_target(env, system):
     assert system.pings == ["10.10.10.161", "10.10.10.162"]
     assert s.box.hosts == ["dc01"] and load_box(s.box.path).hosts == ["dc01"]
     assert f"forest.htb.local  # pwn-broker {s.box.id}" in system.hosts_path.read_text()
-    tail = [line for line in env.console.lines if line[0] != "info"][-5:]
+    tail = [line for line in env.console.lines if line[0] not in ("info", "detail")][-5:]
     assert tail == [
         ("ok", "target 10.10.10.162 created"),
         ("ok", "/etc/hosts updated"),
@@ -238,10 +238,10 @@ def test_box_for_cwd_ignores_finished_and_broken(env):
 
 def test_start_version_and_help(env):
     assert start(env, ["--version"]) == 0
-    assert lines(env, "info") == [f"pwn-broker {__version__}"]
+    assert lines(env, "raw") == [f"pwn-broker {__version__}"]
     env.console = FakeConsole()
     assert start(env, ["-h"]) == 0
-    assert any("import <file>" in t for t in lines(env, "info"))
+    assert any("import <file>" in t for t in lines(env, "raw"))
 
 
 def test_start_unknown_and_import_without_file(env, quiet, ran):
@@ -823,3 +823,12 @@ def test_prepare_leaves_an_existing_record_launcher_alone(env, quiet):
     env.paths.record_launcher.write_bytes(b"mine\n")
     assert cli._prepare(env) is None
     assert env.paths.record_launcher.read_bytes() == b"mine\n"
+
+
+def test_start_does_not_open_a_second_note_window(env, quiet, box, monkeypatch, ran):
+    monkeypatch.setattr(notewindow, "find_note", lambda paths, b: 99)
+    env.cwd = box.path
+    assert start(env, []) == 0
+    assert quiet == [] and len(ran) == 1
+    assert lines(env, "ok").count("the note is already open") == 1
+    assert lines(env, "warn") == []

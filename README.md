@@ -79,11 +79,12 @@ pwn-broker resume [name]   reopen an active box
 record [target]            record this terminal window for a target of the open box
 ```
 
-Launch runs a few checks, then offers a new box, an import, any active box to resume, or a finished box that is still on disk to reopen. Only one box is open at a time. The prompt commands:
+Launch prints `pwn-broker <version>` and runs a few checks, then offers a new box, an import, any active box to resume, or a finished box that is still on disk to reopen. Only one box is open at a time. Everything the app prints is indented two spaces, apart from the prompt line, the launch header, headings, `setup`'s lines and output meant to be copied, and what each command prints has one blank line above it and one below. A yes or no question takes `y`, `yes`, `n`, `no`, or Enter for its default; anything else gets `fail  answer y or n` and the question again. A wrong argument gets the command's usage under the `fail` line, such as `usage: target rename <target>`. The prompt commands:
 
 | Command | Does |
 |---|---|
 | `check` | Run the setup checks again |
+| `clear` | Clear the screen |
 | `cred add` | Save a credential |
 | `cred clear` | Empty a credential's secret or note |
 | `cred edit` | Change a credential |
@@ -92,6 +93,7 @@ Launch runs a few checks, then offers a new box, an import, any active box to re
 | `cred remove` | Delete a credential |
 | `cred show` | Print one secret and nothing else |
 | `cred works` | Record where a credential works |
+| `exit` | Leave the shell, as `quit` does |
 | `export` | Write a snapshot archive and keep working |
 | `files` | List the files saved for a target or the whole box |
 | `finish` | Archive the box and close it |
@@ -128,7 +130,7 @@ Launch runs a few checks, then offers a new box, an import, any active box to re
 | `vpn status` | Whether a tunnel is up, and which box started it |
 | `vpn stop` | Stop the VPN pwn-broker started |
 
-A box lives in `~/pwn-broker/active/<date>_<platform>_<name>/`:
+A box lives in `~/pwn-broker/active/<date>_<platform>_<name>/`. A second box with the same name and platform on the same day, while the first one's folder or one of its archives is still there, gets `-2` on the end, and its archives too, so one box's archive is never offered to another for replacing:
 
 ```
 box.toml              identity, status, dates, flags, targets with an /etc/hosts line, VPNs and tools used
@@ -147,6 +149,8 @@ targets/
 `finish` and `export` write archives to `~/pwn-broker/wrapped/`. `~/pwn-broker/tools.log` records every tool each box installed and took off.
 
 `notes.md` starts with a box drawn in `#` that holds the box details and one row per target, and the app redraws it whenever the targets change. Below it, each target has a section wrapped in a vim fold that starts with its `Target:` line, and the note opens with every fold closed down to that line. `F8` in vim adds an empty fold below the cursor. The app changes nothing else in the note, apart from a `Target:` line it wrote when that target is renamed or edited.
+
+A box has one note window. While its vim is running, opening the box, importing it or `note` prints `ok    the note is already open` and opens no other; the app finds that vim by reading `/proc`, so this holds on Linux only. When `finish` removes the working folder it closes the note's vim, and the terminal window that was started only to run it, unless that terminal still runs something else, such as a shell in another of its windows. It keeps the folder, with a `warn` line, when the note has unsaved changes, has changed since the archive was made, or its window did not close.
 
 The app rebuilds the `lists/` folder from the credential record whenever a credential or target changes, so other tools can read the files as they are:
 
@@ -170,13 +174,16 @@ Edits made by hand to these files are overwritten at the next rebuild.
 
 ```
 $ record dc01
-ok    recording this window for dc01 (forest)
-    targets/dc01/recordings/2026-11-14_1432.cast
-    exit this shell to stop
+
+  ok    recording this window for dc01 (forest)
+        targets/dc01/recordings/2026-11-14_1432.cast
+        exit this shell to stop
+
 ...
-ok    recording saved, 14 min
-    targets/dc01/recordings/2026-11-14_1432.cast
-    targets/dc01/recordings/2026-11-14_1432.txt
+
+  ok    recording saved, 14 min
+        targets/dc01/recordings/2026-11-14_1432.cast
+        targets/dc01/recordings/2026-11-14_1432.txt
 ```
 
 That is the shape of the output, not a recorded run.
@@ -220,9 +227,10 @@ A target with an IP and a hostname can have one line in `/etc/hosts`, its first 
 
 ```
 forest/web01 > host add crm.board.htb dev.board.htb
-ok    web01 now answers to 3 names
-ok    /etc/hosts updated
-    10.10.11.5 board.htb crm.board.htb dev.board.htb
+
+  ok    web01 now answers to 3 names
+  ok    /etc/hosts updated
+        10.10.11.5 board.htb crm.board.htb dev.board.htb
 ```
 
 - Only the app's marked lines are ever changed. Every other line is written back byte for byte, except that a line break is added before the app's line when the file does not end with one. The file is written in place, not replaced, so its owner and mode stay. Just before writing, it is read again; if another program changed it, the app starts over once, then gives up with a `warn` line. As root the app writes it directly; as a normal user it writes the new content under `/opt/pwn-broker/run` and copies it into place with `sudo cp`. If that fails, nothing is changed and the line is printed for you to add.
@@ -236,9 +244,10 @@ The `vpn` launch check prints a `warn` line when no interface named `tun<n>` has
 
 ```
 forest > vpn start
-vpn file     [/home/kali/Downloads/lab_user.ovpn] >
-ok    copied to vpn/lab_user.ovpn
-ok    vpn up, 10.10.14.7 on tun0
+
+  vpn file     [/home/kali/Downloads/lab_user.ovpn] >
+  ok    copied to vpn/lab_user.ovpn
+  ok    vpn up, 10.10.14.7 on tun0
 ```
 
 - The question takes a path, with Tab completing it, and defaults to the file used last time on any box. The file is copied into the box's `vpn/` folder, mode 600; a copy of the same name and content is reused, and different content gets `-2`, `-3` and so on. A file over 1 MiB is refused.
@@ -261,19 +270,21 @@ The packages are published in a second repository, [`Real-Fruit-Snacks/pwn-shop`
 
 ```
 forest/dc01 > tool install ligolo-ng
-ok    ligolo-ng 0.9.2 installed
-run   ligolo-proxy   from any terminal
-      sudo /opt/pwn-broker/bin/ligolo-proxy
-files /opt/pwn-broker/upload/ligolo-ng   agent  agent.exe
+
+  ok    ligolo-ng 0.9.2 installed
+  run   ligolo-proxy   from any terminal
+        sudo /opt/pwn-broker/bin/ligolo-proxy
+  files /opt/pwn-broker/upload/ligolo-ng   agent  agent.exe
 ```
 
 The first tool that requires a runtime brings it, and says so first:
 
 ```
 forest/dc01 > tool install certipy
-ok    python-3.13 3.13.18 installed (runtime, 34 MB)
-ok    certipy 5.1.0 installed
-run   certipy   from any terminal
+
+  ok    python-3.13 3.13.18 installed (runtime, 34 MB)
+  ok    certipy 5.1.0 installed
+  run   certipy   from any terminal
 ```
 
 Those are the shape of the output, not recorded runs. The runtime's size is its zip in mebibytes, rounded. If the tool then cannot be installed, the runtime it brought is removed again, with `ok    python-3.13 3.13.18 removed (runtime)` before the line that says why. `tool list`, `tool search` and `tool info` read the index. With a URL index they use the cached copy when the source does not answer in time, and fail with one line naming the location when there is neither. A folder index is read directly.
@@ -290,9 +301,10 @@ Those are the shape of the output, not recorded runs. The runtime's size is its 
 
 ```
 forest/dc01 > tool history
-tool       version    installed          removed            runtime
-kerbrute   1.0.3-1    2026-11-15 14:20   2026-11-15 15:02   -
-certipy    5.1.0-3    2026-11-15 14:32   -                  python-3.13 3.13.18-1
+
+  tool      version  installed         removed           runtime
+  kerbrute  1.0.3-1  2026-11-15 14:20  2026-11-15 15:02  -
+  certipy   5.1.0-3  2026-11-15 14:32  -                 python-3.13 3.13.18-1
 ```
 
 That is the shape of the output, not a recorded run. A tool installed again at the same build, when its line is current, keeps that line with the latest install's time.
@@ -318,20 +330,21 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 - That an install needs neither Python nor the network, in the same job: inside `debian:stable-slim` started with `--network none`, where the only network interface was `lo` and no `python` or `python3` was on PATH or in `/usr/bin` or `/usr/local/bin`, `sh install.sh --from <file>` ran to its last line as root, and `pwn-broker --version` and `asciinema --version` worked.
 - The installer's own tests (`tests/test_install_sh.py`), under `sh` and `dash`, against a stand-in release file: a full install, an upgrade that keeps `config.toml`, `tools/`, `run/` and a box folder, every refusal with the install folder unchanged, and a failed or interrupted upgrade (a failing step, TERM, HUP, a second signal) that puts the previous install back.
 - One whole box in the official Kali image (`kalilinux/kali-rolling`, Kali 2026.3 at the time, with Python 3.14.10, zsh 5.9.2 and OpenVPN 2.7.8), as root, in CI's `kali` job. After the packages were installed with the network on, the container was taken off its only network (`docker inspect` showed none; inside, only `lo`, `github.com` did not resolve, a connection to 1.1.1.1:443 failed). With the network off, `sh install.sh --from` the release file printed every `ok` line: the app's Python was 3.13.18 at `/opt/pwn-broker/python/bin/python3.13` while Kali's was 3.14.10 at `/usr/bin/python3.14`, and root's `.zshrc` was Kali's own plus the one PATH line. The network was connected again, then the unit suite ran on Kali's own Python with the installed asciinema (2759 passed, 2 skipped, warnings treated as errors) and the whole box cycle ran on the app's bundled Python and ended with status 0. The cycle is a new box, the `/etc/hosts` line written and later removed byte for byte, a ping, the note window in vim, a credential, a hostname added later, a recording under Kali's own zsh settings with the `[rec dc01]` prefix and its text copy, `export` while recording, `replay`, `vpn start` and `vpn stop` with a real OpenVPN and `tun0`, a tool installed and removed, a Python test tool on a test runtime package around the pinned upstream CPython 3.13 build, which it downloads and checks first: the tool runs on 3.13 from the runtime, which `finish` removes and `import` puts back, `finish`, and `import`, which puts the line and the tools back. It was 19 steps on the bundled Python. Most steps are checked on disk or in the system, not only in what the app prints; `replay` and `status` are checked by their output. Stand-ins: a virtual display with `xterm` for the desktop, the container's gateway as the target, an OpenVPN file with no server behind it, and two small test packages for the tools. The real upstream Python archive passed the app's unpacking rules there.
+- Every command by hand, on 2026-11-16, in Kali 2026.2 under WSL 2 on Windows 11, as root, installed with the installer from before the release file (`sh install.sh --from .`), with Kali's own qterminal as `x-terminal-emulator` and Kali's Python 3.14.7. The layout was as `docs/design.md` section 6.14 describes: the header, the `Boxes`, `New box` and `Target <n>` headings, the indent, and one blank line around each command's output and each yes or no question. `note` with the note open printed `ok    the note is already open` and one vim ran; after `finish` removed the folder, neither that vim nor its terminal window was left. A second box named `forest` on the same day, after the first was finished and removed, got the folder `2026-11-15_htb_forest-2` and the archive `2026-11-15_htb_forest-2.finished.tar.gz`. `import` with no file asked again, and a folder got `fail  /root is a folder, not an exported box`. `exit` left the prompt with the export question, and `clear` cleared the screen. `2` and `maybe` at a yes or no question got `fail  answer y or n` and the question again. `target rename a b` printed `fail  too many arguments: b` with `usage: target rename <target>` under it. A fresh install's first launch asked nothing about folders, because `setup` had made them. A long hash in `cred list` was cut and ended in `...`, and `cred show 1` printed the whole secret alone. `record` in a real zsh session, `replay`, `tool install kerbrute` from the published index, and `finish`, which removed the tool, worked as before.
 - The pinned asciinema, in CI's `recording` job on Ubuntu 24.04: the job installs the release file, and the three real-asciinema tests pass against the installed `app/bin/asciinema`. `record` records a real bash session and a real zsh session through a pseudo-terminal, and the test checks the `[rec dc01]` prefix, the recording marker, the `.cast` header and the text copy. Both sessions are recorded, and both show that asciinema writes the recording to disk as it happens, not at the end.
 - The seven packages in `pwn-shop`, in its CI on `main` (run 43772170454): the six tools and the `python-3.13` runtime. Its `packages` job, on Ubuntu 24.04, built the runtime and build 3 of `certipy` and `targetedkerberoast`, downloaded the four packages already published and rebuilt each to the same bytes, and installed all seven through this app's own code under Python 3.12, 3.13 and 3.14, then started each tool's commands. Its `kali` job, in the official Kali image (Kali 2026.3, Python 3.14.8) with the container's network confirmed off, installed the runtime and all six tools through this app's own code and started each tool. The run then published the runtime and build 3 of `certipy` and `targetedkerberoast`. Builds 1 and 2 of those two were withdrawn afterwards, so every package has exactly one published build.
 - The published index, on Windows 11 on 2026-11-15, the day both repositories became public: with no `tools_index` setting, the app's own code loaded the index from `pwn-shop`'s release and downloaded `certipy` 5.1.0 build 3 and the `python-3.13` runtime, and each matched the size and SHA-256 the index gives. Nothing was installed there.
 - The vimrc, run by Vim 9.2 in headless mode on a note the app wrote: folds, fold text, `F8`, colours, settings, and the reload after the app changes the note. Timers and focus events do not fire in that mode, so the tests run the check by hand.
 - *Not* tested: the release workflow (`.github/workflows/release.yml`). It has never run, and no release exists, so the installer's download path (`curl ... | sh` with no `--from`) has never run against a real release; only against a stand-in in the unit tests. The one-line install cannot work until `v0.1.0` is tagged.
 - *Not* tested: an upgrade from an install made by the old installer (an environment on Kali's own Python) to a release file, on a real machine. The unit tests cover an `app/` with `pyvenv.cfg` being replaced.
-- *Not* tested: a real Kali desktop session and its terminal. The Kali run used a virtual display and `xterm`, so the window manager, focus and the terminal Kali opens by default have not been tried. Nor has your own VM.
-- *Not* tested: a normal user. The Kali run is root, so `sudo` for `/etc/hosts` and OpenVPN has not run, and neither has the installer's own `sudo` step.
+- *Not* tested: a full Kali desktop session. CI's Kali run used a virtual display and `xterm`, and the run by hand used Kali's own qterminal under WSL, so Xfce, its window manager and focus have not been tried. Nor has your own VM.
+- *Not* tested: a normal user. Both Kali runs are root, so `sudo` for `/etc/hosts` and OpenVPN has not run, and neither has the installer's own `sudo` step.
 - *Not* tested: a real Hack The Box connection. The OpenVPN file in the Kali run has no server behind it.
-- *Not* tested: a real tool package used by hand. `pwn-shop`'s CI installed and started each one on Kali, in a container. None has been run on a Kali desktop, against a real target, or by a normal user with `sudo`.
+- *Not* tested: a real tool package against a real target. `pwn-shop`'s CI installed and started each one on Kali, in a container, and kerbrute was installed from the published index and removed by `finish` in the run by hand. None has been run on a full Kali desktop, against a real target, or by a normal user with `sudo`.
 
 ## Known issues
 
-- The recording, `/etc/hosts`, VPN and ping part has run on Kali only as root, in a container, with a virtual display and an OpenVPN file with no server. The checks still to run by hand are in `docs/kali-checks.md`.
+- The recording, `/etc/hosts`, VPN and ping part has run on Kali only as root: in a container, with a virtual display and an OpenVPN file with no server, and by hand under WSL. The checks still to run by hand are in `docs/kali-checks.md`.
 - A window still recording has no text copy until it closes or the box is exported.
 - A full-screen program (vim, less, a menu) appears only in the `.cast`. The text copy has one line saying when it ran.
 - A password typed on a command line in a recorded window is recorded, and goes into the archive. One typed at a hidden prompt is not.
@@ -345,10 +358,12 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 - Starting a second tunnel while one the app did not start is up is reported as not up after 15 seconds, because the app reads only the lowest-numbered tunnel.
 - `quit` leaves the box's `/etc/hosts` lines in place. Only `finish` removes them; until then the hostnames go on resolving to the box's targets.
 - Lines in `/etc/hosts` that are not the app's are never changed. One that names the same host with another address has to be removed by hand; the `warn` line gives its number and the command to run after.
-- `tool install` from the published index has not been run on Kali. CI installs every package from a folder, with the network off. From the published address, the app's own download code has fetched the index and two packages (`certipy` build 3 and the `python-3.13` runtime) and checked each against the index, on Windows (see Tested on).
+- `tool install` from the published index has run on Kali by hand, for kerbrute (see Tested on). CI installs every package from a folder, with the network off. From the published address, the app's own download code has fetched the index and two packages (`certipy` build 3 and the `python-3.13` runtime) and checked each against the index, on Windows (see Tested on).
 - Builds 1 and 2 of the two Python tool packages, `certipy` and `targetedkerberoast`, were withdrawn on 2026-11-15, before any box had used them. Build 3 of each, which requires the `python-3.13` runtime, is the only one published. The other four tools need no Python. A tool that still runs on Kali's own Python says so if Kali's Python cannot make its environment; none is published.
 - A runtime carries its own OpenSSL and other libraries. They are fixed when a new build of the runtime is published, not when Kali updates. The first tool that requires one costs a download the app shows as 34 MB, about 100 MB unpacked, and the zip kept in the download cache.
-- After `finish` removes the working folder, the note window stays open on a file that no longer exists. Close it by hand.
+- On a terminal that hosts all its windows in one server process, such as gnome-terminal, `finish` closes the note's vim but cannot close its window. Whether that terminal then closes the window by itself has not been tried.
+- After Ctrl-C at a yes or no question, the next line follows directly under the question, with no blank line between.
+- `--help` and `--version` are printed without colour.
 - Stop a tool before you type `finish`. `finish` refuses while one of the box's tools is running, but a tool started after that check can write into its home folder while the box is being archived, and those files are deleted without being copied.
 - Tool data that could not be copied into the box in full is left in the home folder with a `warn` line. A later install of the same tool treats it as having been there before, so it is never copied or deleted again. Move it yourself.
 - Within one install of a tool, a second `export` or `finish` replaces the box's copy of that tool's data with the current one. Files the tool deleted in between are only in the earlier archive.

@@ -10,7 +10,7 @@ from pwn_broker import hostflow, hosts, kalihooks, questions, recorder, session 
 from pwn_broker import targetflow, toolhooks, vpn
 from pwn_broker.boxes import BoxError
 from pwn_broker.config import ConfigError, Settings
-from pwn_broker.console import Cancelled, Console, TermConsole
+from pwn_broker.console import INDENT, Cancelled, Console, TermConsole
 from pwn_broker.model import Box, Target
 from pwn_broker.note import NoteError
 from pwn_broker.paths import AppPaths
@@ -18,6 +18,7 @@ from pwn_broker.session import Session
 from pwn_broker.shell.app import run_shell
 from pwn_broker.store import StoreError, load_box
 
+NO_ARCHIVE = "give the path of an exported box"
 SUBCOMMANDS = ("new", "import", "resume")
 HELP = (
     "pwn-broker                 open the menu, or the box you are inside",
@@ -75,7 +76,9 @@ def new_box(env: Env) -> Session:
     try:
         adding = console.confirm("add a target?", default=True)
         while adding:
-            given = questions.ask_target(console, taken={t.name for t in targets})
+            given = questions.ask_target(
+                console, heading=f"Target {len(targets) + 1}", taken={t.name for t in targets}
+            )
             try:
                 target = boxes.add_target(
                     box,
@@ -126,6 +129,7 @@ def choose(env: Env) -> Session | None:
         console.warn(problem)
 
     entries: list[tuple[str, Box | None]] = [("new", None), ("import", None)]
+    console.heading("Boxes")
     console.info("1  new box")
     console.info("2  import a box from a file")
     for box in (b for b in found if b.status == "active"):
@@ -140,17 +144,24 @@ def choose(env: Env) -> Session | None:
             f"{len(entries)}  reopen {box.name} ({box.platform}, finished {_date(shown)})"
         )
 
+    console.gap()
     while True:
         answer = console.ask("choice")
         if answer.isdecimal() and 1 <= int(answer) <= len(entries):
             break
         console.fail(f"choose a number from 1 to {len(entries)}")
+    console.gap()
 
     kind, box = entries[int(answer) - 1]
     if kind == "new":
         return new_box(env)
     if kind == "import":
-        return _import(env, Path(console.ask("file")).expanduser())
+        while True:
+            given = console.ask("file")
+            if given != "":
+                break
+            console.fail(NO_ARCHIVE)
+        return _import(env, Path(given).expanduser())
     assert box is not None
     if kind == "reopen":
         lifecycle.reopen_box(box)
@@ -200,6 +211,9 @@ def _pick_session(env: Env, argv: list[str]) -> Session | None:
     if argv[:1] == ["new"]:
         return new_box(env)
     if argv[:1] == ["import"]:
+        if argv[1] == "":
+            env.console.fail(NO_ARCHIVE)
+            return None
         return _import(env, Path(argv[1]).expanduser())
     if argv[:1] == ["resume"]:
         return _resume(env, argv[1] if len(argv) > 1 else None)
@@ -224,11 +238,11 @@ def _asciinema(env: Env) -> int:
 def _usage(env: Env, argv: list[str]) -> int | None:
     console = env.console
     if argv == ["--version"]:
-        console.info(f"pwn-broker {__version__}")
+        console.raw(f"pwn-broker {__version__}")
         return 0
     if argv in (["--help"], ["-h"]):
         for line in HELP:
-            console.info(line)
+            console.raw(line)
         return 0
     if argv[:1] == ["setup"]:
         try:
@@ -296,6 +310,7 @@ def _prepare(env: Env) -> int | None:
     newer = checks.newer_release_within(env.settings)
     if newer is not None:
         console.warn(f"{newer.name}   {newer.message}")
+    console.gap()
     return None
 
 
@@ -312,6 +327,8 @@ def start(env: Env, argv: list[str]) -> int:
     done = _usage(env, argv)
     if done is not None:
         return done
+    if argv[:1] != ["import"]:
+        console.header(f"pwn-broker {__version__}")
     done = _prepare(env)
     if done is not None:
         return done
@@ -338,9 +355,13 @@ def start(env: Env, argv: list[str]) -> int:
         return 1
     try:
         hostflow.on_open(session)
-        if not notewindow.open_note(env.paths, env.settings, session.box, env.environ):
+        if notewindow.find_note(env.paths, session.box) is not None:
+            console.ok("the note is already open")
+        elif not notewindow.open_note(env.paths, env.settings, session.box, env.environ):
             command = notewindow.vim_command(env.paths, session.box.path / note.NOTE_NAME)
             console.warn("no note window opened, run: " + " ".join(command))
+        # one blank line between whatever the launch printed last and the first prompt
+        console.gap()
         env.run(session)
     finally:
         boxes.release_open(env.paths, pid=env.pid)
@@ -366,7 +387,8 @@ def main(argv: list[str] | None = None) -> int:
     env = Env(
         paths=paths,
         settings=settings,
-        console=TermConsole(os.environ),
+        # setup runs inside the installer's output, which is flush left
+        console=TermConsole(os.environ, indent="" if args[:1] == ["setup"] else INDENT),
         clock=lambda: datetime.now().astimezone(),
         environ=os.environ,
         cwd=cwd,

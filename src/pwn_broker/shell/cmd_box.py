@@ -17,6 +17,7 @@ def finish(session: Session, args: list[str]) -> None:
         raise Quit
 
 
+@command("exit", "leave the shell")
 @command("quit", "leave the shell")
 def quit_shell(session: Session, args: list[str]) -> None:
     take_args(args)

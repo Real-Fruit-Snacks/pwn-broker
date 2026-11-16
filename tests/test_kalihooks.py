@@ -45,7 +45,7 @@ def test_finish_removes_the_boxes_lines_and_keeps_every_other_line(session, regi
     assert session.hosts_path.read_bytes() == (
         b"127.0.0.1 localhost\r\n" + other.encode() + b"# a comment\n10.0.0.9 plain.example"
     )
-    assert ("info", "hosts     1 line to remove from /etc/hosts") in session.console.lines
+    assert ("field", "hosts  1 line to remove from /etc/hosts") in session.console.lines
     assert ("ok", "removed 1 line from /etc/hosts") in session.console.lines
     assert session.box.path.is_dir()
 

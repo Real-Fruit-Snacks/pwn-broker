@@ -1,7 +1,7 @@
 from pwn_broker import boxes, hostflow, hosts, note
 from pwn_broker.model import Target
 from pwn_broker.session import Session, refresh
-from pwn_broker.shell.commands import COMMANDS, command, take_args
+from pwn_broker.shell.commands import ArgumentError, command, family, list_commands, take_args
 from pwn_broker.targetflow import update_note
 
 NO_CURRENT = "no current target; pick one with: target use <name>"
@@ -22,7 +22,7 @@ def _named_or_current(session: Session, args: list[str]) -> Target:
 
 def _names(args: list[str]) -> list[str]:
     if not args:
-        raise ValueError("missing argument: hostname")
+        raise ArgumentError("missing argument: hostname")
     return args
 
 
@@ -45,7 +45,7 @@ def _set_hostnames(session: Session, target: Target, hostnames: list[str]) -> No
     refresh(session)
 
 
-@command("host add", "add hostnames to the current target")
+@command("host add", "add hostnames to the current target", "<hostname>...")
 def host_add(session: Session, args: list[str]) -> None:
     target = _current(session)
     names = _names(args)
@@ -72,7 +72,7 @@ def host_add(session: Session, args: list[str]) -> None:
         hostflow.offer(session, target)
 
 
-@command("host remove", "take hostnames off the current target")
+@command("host remove", "take hostnames off the current target", "<hostname>...")
 def host_remove(session: Session, args: list[str]) -> None:
     target = _current(session)
     names = _names(args)
@@ -111,16 +111,14 @@ def host_list(session: Session, args: list[str]) -> None:
 @command("host file", "the target's line in /etc/hosts")
 def host_file(session: Session, args: list[str]) -> None:
     take_args(args)
-    for name in sorted(COMMANDS):
-        if name.startswith("host file "):
-            session.console.info(f"{name}   {COMMANDS[name][1]}")
+    list_commands(session.console, family("host file"))
 
 
-@command("host file on", "put the target's line into /etc/hosts")
+@command("host file on", "put the target's line into /etc/hosts", "[<target>]")
 def host_file_on(session: Session, args: list[str]) -> None:
     hostflow.file_on(session, _named_or_current(session, args))
 
 
-@command("host file off", "take the target's line out of /etc/hosts and forget it")
+@command("host file off", "take the target's line out of /etc/hosts and forget it", "[<target>]")
 def host_file_off(session: Session, args: list[str]) -> None:
     hostflow.file_off(session, _named_or_current(session, args))
