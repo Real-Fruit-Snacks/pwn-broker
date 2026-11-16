@@ -118,7 +118,7 @@ targets/
 
 `notes.md` starts with a box drawn in `#` that holds the box details and one row per target, and the app redraws it whenever the targets change. Below it, each target has a section wrapped in a vim fold that starts with its `Target:` line, and the note opens with every fold closed down to that line. `F8` in vim adds an empty fold below the cursor. The app changes nothing else in the note, apart from a `Target:` line it wrote when that target is renamed or edited.
 
-A box has one note window. While its vim is running, opening the box, importing it or `note` prints `ok    the note is already open` and opens no other; the app finds that vim by reading `/proc`, so this holds on Linux only. When `finish` removes the working folder it closes the note's vim, and the terminal window that was started only to run it. It keeps the folder, with a `warn` line, when the note has unsaved changes or has changed since the archive was made.
+A box has one note window. While its vim is running, opening the box, importing it or `note` prints `ok    the note is already open` and opens no other; the app finds that vim by reading `/proc`, so this holds on Linux only. When `finish` removes the working folder it closes the note's vim, and the terminal window that was started only to run it, unless that terminal still runs something else, such as a shell in another of its windows. It keeps the folder, with a `warn` line, when the note has unsaved changes or has changed since the archive was made.
 
 The app rebuilds the `lists/` folder from the credential record whenever a credential or target changes, so other tools can read the files as they are:
 

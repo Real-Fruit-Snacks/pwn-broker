@@ -232,6 +232,20 @@ def test_the_terminal_made_for_the_note_is_closed_after_the_vim(paths, box):
     assert world.sent == [42, 7] and world.table == {}
 
 
+def test_a_terminal_that_still_holds_another_program_is_never_signalled(paths, box):
+    # one terminal process for several windows: the user's shell in another window is its child too
+    world = World((7, terminal_argv(paths, box)), (42, note_argv(paths, box)), (60, ["bash"]))
+    assert shut(world, paths, box, {42: 7, 60: 7}) is False
+    assert world.sent == [42] and 7 in world.table and 60 in world.table
+
+
+def test_a_terminal_whose_only_child_was_the_vim_is_signalled_whatever_else_runs(paths, box):
+    # other processes of the user, children of something else, do not keep the terminal
+    world = World((7, terminal_argv(paths, box)), (42, note_argv(paths, box)), (60, ["bash"]), (61, ["sleep"]))
+    assert shut(world, paths, box, {42: 7, 60: 1, 61: 60}) is False
+    assert world.sent == [42, 7] and 7 not in world.table and 60 in world.table
+
+
 def test_a_shell_is_never_signalled(paths, box):
     world = World((7, ["bash"]), (42, note_argv(paths, box)))
     assert shut(world, paths, box, {42: 7}) is False

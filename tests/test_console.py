@@ -500,6 +500,35 @@ def test_raw_is_still_byte_for_byte_with_control_characters(value):
     assert out.getvalue() == value + "\n"
 
 
+@pytest.mark.parametrize("control", CONTROLS)
+def test_a_log_line_is_flush_left_with_control_characters_as_question_marks(monkeypatch, control):
+    value = f"TLS: Initial packet{control}from [AF_INET]10.10.10.1\tok"
+    c, out = screen(monkeypatch)
+    c.log(value)
+    assert out.getvalue() == f"TLS: Initial packet{_shown(control)}from [AF_INET]10.10.10.1\tok\n"
+
+
+def test_a_long_log_line_is_not_wrapped_on_a_narrow_terminal(monkeypatch):
+    c, out = screen(monkeypatch, width=20)
+    c.log("word " * 30)
+    assert out.getvalue() == "word " * 30 + "\n"
+
+
+def test_log_lines_in_a_block_have_its_blank_lines(monkeypatch):
+    c, out = screen(monkeypatch)
+    c.typed()  # the command line, drawn by the prompt loop
+    with c.block():
+        c.log("one")
+        c.log("two")
+    assert out.getvalue() == "\none\ntwo\n\n"
+
+
+def test_fake_records_log_lines():
+    c = FakeConsole()
+    c.log("a\x1bb")
+    assert c.lines == [("log", "a\x1bb")]
+
+
 def test_a_tab_in_a_cut_cell_is_measured_as_the_space_it_is_written_as(monkeypatch):
     c, out = screen(monkeypatch, width=40)
     cell = "\t".join(["s" * 9] * 6)  # 59 wide once each tab is a space

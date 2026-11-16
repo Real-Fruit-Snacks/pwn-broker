@@ -137,6 +137,12 @@ def _alive(pid: int, argv: list[str], processes: Callable[[], Iterable[Process]]
     return any(p == pid and a == argv for p, a in (processes or _own_processes)())
 
 
+def _has_child(
+    pid: int, processes: Callable[[], Iterable[Process]] | None, parent: Callable[[int], int | None]
+) -> bool:
+    return any(parent(p) == pid for p, _ in (processes or _own_processes)())
+
+
 def _wait_gone(gone: Callable[[], bool], sleep: Callable[[float], None], wait: float) -> None:
     waited = 0.0
     while waited < wait and not gone():
@@ -180,6 +186,9 @@ def _close(
         return True, False
     # and once more right before its signal
     if not _alive(holder, holder_argv, processes):
+        return True, False
+    # the vim is gone; a terminal that still has a child holds other windows (one process for several)
+    if _has_child(holder, processes, parent):
         return True, False
     try:
         kill(holder, signal.SIGTERM)

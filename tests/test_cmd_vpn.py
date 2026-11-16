@@ -1,4 +1,5 @@
 import hashlib
+import io
 import subprocess
 from pathlib import Path
 
@@ -7,7 +8,8 @@ import pytest
 from helpers import NOW
 from pwn_broker import shell  # noqa: F401  (fills the command registry)
 from pwn_broker.config import State, load_state, save_state
-from pwn_broker.console import FakeConsole
+from pwn_broker import vpnctl
+from pwn_broker.console import FakeConsole, TermConsole
 from pwn_broker.model import VpnRecord
 from pwn_broker.shell.commands import dispatch
 from pwn_broker.store import load_box, write_toml
@@ -223,8 +225,8 @@ def test_start_prints_the_log_when_openvpn_fails(session, paths, openvpn, source
     assert lines(session) == [
         ("ok", "copied to vpn/lab_user.ovpn"),
         ("fail", "openvpn exited with status 1"),
-        ("raw", "one"),
-        ("raw", "two"),
+        ("log", "one"),
+        ("log", "two"),
     ]
     assert load_state(paths.state_file).last_vpn_file is None
 
@@ -304,16 +306,41 @@ def test_status_of_a_tunnel_not_ours_and_of_none(session, system):
     ]
 
 
-def test_log_prints_the_tail_raw(session, paths):
+def test_log_prints_the_tail_as_log_lines(session, paths):
     dispatch(session, "vpn log")
     paths.run_vpn.mkdir(parents=True)
     (paths.run_vpn / "openvpn.log").write_text("a\tb\nInitialization Sequence Completed\n")
     dispatch(session, "vpn log")
     assert lines(session) == [
         ("info", "no log yet"),
-        ("raw", "a\tb"),
-        ("raw", "Initialization Sequence Completed"),
+        ("log", "a\tb"),
+        ("log", "Initialization Sequence Completed"),
     ]
+
+
+# what a hostile endpoint could put in OpenVPN's log: a screen clear, a title change, a bell
+HOSTILE = "AUTH: Received control message: \x1b[2J\x1b]0;owned\x07done\tok"
+HOSTILE_SHOWN = "AUTH: Received control message: ?[2J?]0;owned?done\tok"
+
+
+def test_log_writes_control_characters_as_question_marks_flush_left(session, paths):
+    out = io.StringIO()
+    session.console = TermConsole({"NO_COLOR": "1"}, out=out)
+    paths.run_vpn.mkdir(parents=True)
+    (paths.run_vpn / "openvpn.log").write_text(f"{HOSTILE}\nInitialization Sequence Completed\n")
+    dispatch(session, "vpn log")
+    assert out.getvalue() == f"{HOSTILE_SHOWN}\nInitialization Sequence Completed\n"
+
+
+def test_the_log_after_a_failed_start_has_its_control_characters_shown(session, openvpn, source, monkeypatch):
+    openvpn.status = 1
+    out = io.StringIO()
+    session.console = TermConsole({"NO_COLOR": "1"}, out=out)
+    monkeypatch.setattr("prompt_toolkit.prompt", lambda message, **kwargs: str(source))
+    monkeypatch.setattr(vpnctl, "log_tail", lambda paths, lines=20: [HOSTILE])
+    dispatch(session, "vpn start")
+    assert out.getvalue().endswith(f"  fail  openvpn exited with status 1\n{HOSTILE_SHOWN}\n")
+    assert "\x1b" not in out.getvalue() and "\x07" not in out.getvalue()
 
 
 def test_session_seams_cannot_start_signal_or_sleep(session, paths, box):

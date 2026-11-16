@@ -39,6 +39,7 @@ class Console(Protocol):
     def typed(self) -> None: ...
     def block(self) -> AbstractContextManager[None]: ...
     def raw(self, text: str) -> None: ...
+    def log(self, text: str) -> None: ...
     def table(self, columns: list[str], rows: list[list[str]], *, cut: str | None = None) -> None: ...
 
 
@@ -183,6 +184,9 @@ class FakeConsole:
     def raw(self, text: str) -> None:
         self._line("raw", text)
 
+    def log(self, text: str) -> None:
+        self._line("log", text)
+
     def table(self, columns: list[str], rows: list[list[str]], *, cut: str | None = None) -> None:
         _cut_column(columns, cut)
         self.tables.append((columns, rows))
@@ -315,6 +319,14 @@ class TermConsole:
 
     def raw(self, text: str) -> None:
         # this output exists to be copied, so it is written byte for byte and flush left
+        self._flush_left(text)
+
+    def log(self, text: str) -> None:
+        # a line of another program's log: flush left and unwrapped like raw, but it may hold text a
+        # server sent, so each control character is written as "?" (a tab stays a tab)
+        self._flush_left(shown(text))
+
+    def _flush_left(self, text: str) -> None:
         self._start_line()
         stream = self._rich.file
         stream.write(text + "\n")
