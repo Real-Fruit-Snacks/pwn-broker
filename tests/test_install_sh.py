@@ -123,6 +123,17 @@ def test_install_sh_unpacks_without_taking_owners_from_the_file():
         assert "tar -xzf - --no-same-owner -C " in row
 
 
+def test_install_sh_finish_ignores_signals_first_and_cannot_stop_on_output():
+    lines = SCRIPT.read_text(encoding="utf-8").splitlines()
+    start = lines.index("finish() {")
+    body = lines[start + 1 : lines.index("}", start)]
+    assert body[0].strip() == "trap '' INT TERM HUP"
+    output = [row for row in body if re.match(r"\s*(printf|ok|echo)\b", row)]
+    assert len(output) == 2
+    for row in output:
+        assert row.endswith("|| true"), row
+
+
 def test_install_sh_exports_the_install_folder_for_setup():
     text = SCRIPT.read_text(encoding="utf-8")
     assert text.index("export PWN_BROKER_OPT") < text.index("-m pwn_broker setup")
@@ -132,7 +143,7 @@ def test_install_sh_exports_the_install_folder_for_setup():
 # called, PIP_CONFIG_FILE, PWN_BROKER_OPT and its arguments, separated by tabs. The step named
 # by $FAKE_PY_FAIL (run, venv, pip or setup) exits with $FAKE_PY_STATUS; a failing venv first
 # leaves a half-made environment, <dir>/bin with no pyvenv.cfg of its own. The step named by
-# $FAKE_PY_KILL sends TERM to the installer.
+# $FAKE_PY_KILL sends the installer $FAKE_PY_SIGNAL (TERM by default).
 FAKE_PYTHON = """#!/bin/sh
 printf '%s\\t' "$0" "${PIP_CONFIG_FILE-}" "${PWN_BROKER_OPT-}" "$@" >>"$FAKE_PY_LOG"
 printf '\\n' >>"$FAKE_PY_LOG"
@@ -144,7 +155,7 @@ case "$1 $2 $3" in
     "-I -m pwn_broker") step=setup ;;
 esac
 if [ "$step" = "${FAKE_PY_KILL-}" ]; then
-    kill -TERM "$PPID"
+    kill "-${FAKE_PY_SIGNAL:-TERM}" "$PPID"
     exit 0
 fi
 if [ "$step" = "${FAKE_PY_FAIL-}" ]; then
@@ -663,10 +674,32 @@ def test_a_failed_upgrade_puts_the_previous_install_back(rig, step, line):
 
 
 @pytest.mark.parametrize("step", ["venv", "pip", "setup"])
-def test_an_upgrade_stopped_by_term_puts_the_previous_install_back(rig, step):
+@pytest.mark.parametrize(("signal", "status"), [("TERM", 143), ("HUP", 129)])
+def test_an_upgrade_stopped_by_a_signal_puts_the_previous_install_back(rig, step, signal, status):
     previous_install(rig)
     before = snapshot(rig.opt)
-    result = rig.install("--no-path", FAKE_PY_KILL=step)
+    result = rig.install("--no-path", FAKE_PY_KILL=step, FAKE_PY_SIGNAL=signal)
+    assert result.returncode == status
+    assert result.stdout.splitlines()[-1] == PUT_BACK
+    assert snapshot(rig.opt) == before
+    assert rig.work_folders() == []
+
+
+# Stands in for rm while the exit trap works: each call first sends the installer one more
+# signal, then removes as rm does, so the trap is interrupted at every step it takes.
+FAKE_RM = """#!/bin/sh
+kill "-${FAKE_RM_SIGNAL:-TERM}" "$PPID"
+exec /bin/rm "$@"
+"""
+
+
+@pytest.mark.parametrize("signal", ["TERM", "INT", "HUP"])
+def test_a_second_signal_during_the_put_back_does_not_stop_it(rig, signal):
+    previous_install(rig)
+    before = snapshot(rig.opt)
+    (rig.fakebin / "rm").write_bytes(FAKE_RM.encode())
+    (rig.fakebin / "rm").chmod(0o755)
+    result = rig.install("--no-path", FAKE_PY_KILL="setup", FAKE_RM_SIGNAL=signal)
     assert result.returncode == 143
     assert result.stdout.splitlines()[-1] == PUT_BACK
     assert snapshot(rig.opt) == before

@@ -64,9 +64,12 @@ put_back() {
     PUT_BACK=1
 }
 
-# Runs on every exit, Ctrl-C and TERM included. An install that did not reach the end takes
-# away what it made and puts the previous python/ and app/ back from the work folder.
+# Runs on every exit, Ctrl-C, TERM and HUP included. An install that did not reach the end
+# takes away what it made and puts the previous python/ and app/ back from the work folder.
+# A second signal is ignored, so the moves and removals run to the end, and a closed
+# stdout or stderr does not stop it either.
 finish() {
+    trap '' INT TERM HUP
     if [ -z "$WORK" ]; then
         return 0
     fi
@@ -82,11 +85,11 @@ finish() {
         put_back app
         put_back python
         if [ "$KEPT" -eq 1 ]; then
-            printf 'fail  %s\n' "could not put the previous install back. it is in $WORK" >&2
+            printf 'fail  %s\n' "could not put the previous install back. it is in $WORK" >&2 || true
             return 0
         fi
         if [ "$PUT_BACK" -eq 1 ]; then
-            ok "the previous install was put back"
+            ok "the previous install was put back" || true
         fi
     fi
     rm -rf "$WORK" || true
@@ -141,6 +144,7 @@ main() {
     trap finish EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
+    trap 'exit 129' HUP
 
     if [ "$HAVE_FROM" -eq 1 ]; then
         if [ ! -e "$FROM" ] && [ ! -L "$FROM" ]; then
