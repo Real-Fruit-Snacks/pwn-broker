@@ -74,10 +74,12 @@ jobs:
         # The build script imports the app. The build tools (hatchling and what it needs) and the
         # app's dependencies come from the two locks, wheels only and every hash required; the app
         # itself goes in with no dependencies and no build isolation, so pip fetches no build
-        # backend of its own. Nothing unpinned is installed before the SHA-256 is recorded.
+        # backend of its own. Not editable: that needs editables, which the lock does not hold; a
+        # plain install builds a wheel with the locked hatchling alone, and build.py needs only
+        # pwn_broker importable. Nothing unpinned is installed before the SHA-256 is recorded.
         run: |
           python -m pip install --require-hashes --only-binary :all: -r release/build-requirements.lock -r release/requirements.lock
-          python -m pip install --no-deps --no-build-isolation -e .
+          python -m pip install --no-deps --no-build-isolation .
       - name: Build the release file
         run: python release/build.py --out "$RUNNER_TEMP/release-out"
       - name: Record the release file's SHA-256
