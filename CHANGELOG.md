@@ -1,45 +1,47 @@
 # Changelog
 
-## v0.1.0 (unreleased)
+## v0.1.0
 
-- A release is one file, `pwn-broker-<version>-linux-x86_64.tar.gz`, built by `release/build.py` from pinned inputs: the upstream CPython 3.13.18 build byte for byte, the wheel of the app and of each dependency with `wheels.lock` pinning them by SHA-256, the pinned asciinema 3.2.1, and `licences/`, a licence text and a source address for each of the 11 things in it. It is about 47 MB, the same checkout gives the same file byte for byte, and it needs x86_64 Linux with glibc. A release publishes the release file, `SHA256SUMS.txt` and `install.sh`.
-- Installer: `install.sh` installs from the release file only. Without `--from` it downloads the file and `SHA256SUMS.txt` from the latest release and checks the file; with `--from <file>` it prints the file's SHA-256 and contacts nothing. It unpacks the app's own Python into `/opt/pwn-broker/python/`, makes the virtual environment in `app/` with it, installs the wheels with `pip --no-index --only-binary :all: --require-hashes`, copies asciinema into `app/bin/`, runs `setup` and adds the PATH line. It needs `sh`, `tar`, `gzip` and `sha256sum`, and `curl` without `--from`; it no longer needs `python3` or `python3-venv`, and no longer contacts PyPI or asciinema's releases. It takes `--from`, `--config` and `--no-path`.
-- An install over an existing one replaces `python/` and `app/` and nothing else, and puts the previous `python/` and `app/` back if it fails or is interrupted; if `setup` had already started, the launchers in `bin/` and the vim and template files it may have rewritten stay as the new release wrote them. It works in a folder inside the install folder, and refuses an install folder that belongs to another user, is not an absolute path, has a `.` or `..` part, or is `/` under another spelling. It replaces a `python/` only if it holds the empty marker `.pwn-broker` that the installer writes into its own. If the PATH line cannot be written, the install is kept and one `fail` line says to add `bin/` to PATH by hand.
-- The app's Python and its OpenSSL are fixed when a release is made, not when Kali updates, and the app takes about 100 MB more on disk.
-- Launch checks, a menu to start, import or resume a box, and a lock so only one box is open at a time.
-- New box questions, targets with their own folders, and a note window in vim that saves as you type.
-- A prompt with target, credential, flag, file and status commands.
-- Credentials kept as typed, with the `lists/` folder rebuilt from them for other tools.
-- File records with SHA-256, kept in `files.toml`.
-- `finish` to archive and close a box, `export` for a snapshot, and `import` to unpack one.
-- Tool installs: `tool list`, `search`, `info`, `install`, `remove`, `refresh` and `cache clear`. A package is a zip checked against the size and SHA-256 in the index; a Python tool is installed into its own virtual environment from bundled wheels with no network and hash checking on, after its `wheels.lock` is checked line by line. Nothing from a package runs during install, and Kali's own copies of a tool are never changed.
-- Tools are removed at `finish` unless another unfinished box still uses them. Tool data in the home folder is copied into the box first and deleted only if it did not exist before the install; a path that could not be copied in full is kept, with a warning. `tool remove` by the last box that uses a tool does the same. `finish` refuses while one of the box's tools is running. `export` copies tool data and removes nothing, and `import` and reopening a box offer to install its tools again.
-- Python runtimes: a package of kind `runtime`, such as `python-3.13`, carries one CPython build from python-build-standalone byte for byte, and a Python tool can require it (`requires`, in package and index schema 2). `tool install` installs the runtime first, prints a line for it, and makes the tool's virtual environment with the runtime's interpreter; if the tool then fails, the runtime it brought is removed again and the app says so. Runtimes are shared, never on PATH, never shown by `tool list` or `tool search`, refused by name by `tool install` and `tool remove`, and removed at `finish` or `tool remove` once no installed tool requires them; `finish`'s summary lists them. `tool info` shows what a tool requires and whether it is installed. `import` and reopening a box bring a tool's runtime back and say when its build differs from the one the box recorded. Schema 1 packages and indexes, and Python tools on Kali's own Python, work as before.
-- A runtime's archive is unpacked by the app under strict rules: only regular files, folders and relative links that stay inside the runtime's folder; no backslash, colon or control character in a name; names at most 4,096 bytes; at most 20,000 entries and 1 GiB; every header checked before anything is written, so a damaged or cut-short archive leaves nothing behind.
-- The interpreter and `pip` an install runs are isolated from the caller: `-I`, `pip --isolated`, no `PYTHON*` or `PIP_*` variables, no `pip` configuration file, and the tool's own folder as the working directory.
-- Tool history: `box.toml` keeps a removed tool with the time it was removed, and `tool history` lists every tool the box has had, with the runtime each ran on. `~/pwn-broker/tools.log` gets a line for each tool and runtime a box installs, removes or takes off at `finish`; it is mode 600, only added to and never read back.
-- Recording: `record [target]` records a terminal window into the target's `recordings/` folder under the pinned asciinema, with a `[rec <target>]` prefix on the zsh or bash prompt. An address that is not a target can be added from `record`; the prompt and `record` share a lock, and the prompt reloads the box when it changed on disk.
-- A text copy beside each recording, with the time on every line of text, made by replaying the `.cast` through `pyte`. Full-screen programs are one line; the `.cast` holds them.
-- `replay` lists a target's recordings and plays one, with idle gaps cut to two seconds. `finish` refuses while a window is recording; `export` warns and packs a recording up to its last whole line. `status` gains a `recordings` line and the status bar `rec <n>`.
-- `/etc/hosts`: a line per target, marked with the box ID, offered by `target add` and `target edit` (default yes), kept in step with the target, removed at `finish` and put back when the box opens. `host`, `host add`, `host remove`, `host file on` and `host file off`. Only the app's marked lines are changed; as a normal user the file is copied into place with `sudo`.
-- VPN: a `vpn` launch check, the tunnel's address in the status bar and `status`, and `vpn start`, `stop`, `status` and `log`. `vpn start` copies the `.ovpn` file into the box's `vpn/` folder, which is never archived, and starts OpenVPN in the background. `vpn stop` stops only the process the app started. `finish` asks whether to stop it, default no.
+The first release. pwn-broker keeps a Hack The Box machine in order on Kali Linux: it builds a folder for the box and each target, opens the note in vim, keeps the credentials and the lists made from them, and stays open as a prompt for the whole session. When the box is done, `finish` packs it into one archive and takes its `/etc/hosts` lines and tools off the machine again. This release is one file with its own Python, for x86_64 Linux with glibc. The [guide](https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/guide.md) has every command, and [docs/tested.md](https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/tested.md) what it has run on.
+
+### The organiser
+
+- `pwn-broker new`, `import <file>` and `resume [name]`, a start menu, launch checks, and one box open at a time.
+- A folder per box under `~/pwn-broker/active/` and per target, with `files.toml` recording every file and its SHA-256.
+- The note, `notes.md`, in vim in a window of its own, with the box's details at the top and a fold per target. One note window per box.
+- `finish` archives the box to `~/pwn-broker/wrapped/` and closes it, `export` writes a snapshot and keeps working, and `import` unpacks either.
+
+### Credentials
+
+- Kept exactly as typed, in one list per box, with `cred add`, `edit`, `list`, `show`, `works`, `import`, `clear` and `remove`.
+- `lists/` is rebuilt from them for other tools: usernames, passwords, pairs, hashes, IPs and hostnames.
+
+### Recording
+
+- `record [target]` records a terminal window into the target's `recordings/` folder under a pinned asciinema 3.2.1, with `[rec <target>]` on the zsh or bash prompt.
+- A text copy beside each recording, with the time on every line, for grep. `replay` lists and plays them.
+
+### Hosts and VPN
+
+- One `/etc/hosts` line per target, marked with the box ID, kept in step with the target and removed at `finish`. Other lines are never changed.
+- `vpn start`, `stop`, `status` and `log` for OpenVPN. The `.ovpn` file is copied into the box and never archived, and `vpn stop` stops only the process the app started.
 - Each new target with an IP is pinged once.
-- asciinema 3.2.1 comes in the release file and is checked against a pinned SHA-256. `setup` fails, and so does the installer, if it is missing or does not match; the launch check `asciinema` warns and says to run the installer again, and offers no download. The `record` launcher is put back if it is missing. `pyte` 0.8.2 is a new dependency.
-- `record`, `asciinema`, `openvpn`, `ping` and `ip` join the command names a tool package may not use.
-- Removed: `--no-asciinema`, since asciinema is always in the release file, and `--from <folder>` and `--from <wheel>`, since `--from` takes a release file only. To install from a checkout, build a release file first.
-- Removed: the launch check that Kali's `python3` can make virtual environments. A tool that still runs on Kali's own Python says so if that fails.
-- The launchers, `pwn-broker` and `record`, and `setup` run Python with `-I`.
-- Settings in `config.toml`: `home`, `copy_to`, `default_platform`, `terminal`, `check_updates`, `tools_index`.
-- Both repositories are public, so with no `tools_index` setting the app reads `pwn-shop`'s published index. `tool install` from that address has run on Kali by hand, for kerbrute. Recording, `/etc/hosts`, the VPN commands and the ping have run on Kali only as root, in CI's container and by hand under WSL, not at a full desktop or as a normal user.
-- CI: a `release-file` job builds the release file twice and fails if the two differ; an `installer` job installs it twice, and in a Debian container with no Python and no network; the `recording` and `kali` jobs install it too. The Kali job installs with the container's network off, switches it back on, and runs the whole cycle on the app's bundled Python as well as the unit suite on Kali's own. A `release` workflow checks the tag, builds and installs the release file, runs the suite on its Python, and publishes the three files from a second job that runs none of the repository's code; run by hand it publishes nothing. The `kali` job runs one whole box in the official Kali image as root, with `/etc/hosts`, ping, asciinema, OpenVPN and a note window under a virtual display. Python 3.14 joins the test matrix. The `kali` job also downloads the pinned CPython 3.13 build, checks its size and SHA-256, wraps it in a test runtime package and installs a small Python test tool on it, through `finish` and `import`.
-- A download the server refuses now closes the response that came with the error, including one that arrives after the index fetch has given up waiting.
-- Layout: the launch opens with `pwn-broker <version>`, the start menu and each group of questions get a heading (`Boxes`, `New box`, `Target <n>`, `New target`, `New credential` and the others), everything the app prints is indented two spaces apart from the prompt line, the launch header, headings, `setup`'s lines and output meant to be copied, and there is one blank line around what each command prints and around each yes or no question, never two; a replay's playback has one above and below, like the shell `record` starts. Lists of labels and values pad to their longest label, `help` aligns its columns across its groups, and the summary before `finish` lists one tool and one runtime per row. On a terminal, the one column a table names is cut to fit and ends in `...`; piped output is whole. `cred show`, `path`, `--help`, `--version` and `record --help` print as before, `vpn log` prints OpenVPN's lines flush left and unwrapped as before, and `setup` stays flush left inside the installer's output.
-- A control character in a value the app prints (a hostname or a credential from a target, say, or a line of OpenVPN's log, which carries text the VPN server sends) is shown as `?`, so it cannot move the cursor or change the terminal. A tab in a log line stays a tab. `cred show` and `path` still print the value exactly.
-- One note window per box. While the box's vim is running, opening the box, importing it or `note` prints `ok    the note is already open` and opens no other. When `finish` removes the working folder it closes that vim, and the terminal started only to run it when that terminal has nothing else left running; it keeps the folder, with a `warn` line, when the note has unsaved changes, has changed since the archive was made, or its window did not close. The window is found through `/proc`, so this holds on Linux.
-- A new box whose name, platform and day match a folder in `active/` or an archive in `wrapped/` gets the next free `-<n>` for its folder and its archives, so `replace the existing archive?` is only ever asked about the same box.
-- `import` with no file asks again with `fail  give the path of an exported box`, and a folder gets `fail  <path> is a folder, not an exported box`.
-- `exit` leaves the prompt as `quit` does, and `clear` clears the screen.
-- A yes or no question takes only `y`, `yes`, `n`, `no` or Enter for its default, in any case; anything else gets `fail  answer y or n` and the question again.
-- Every prompt command has a usage line, printed under the `fail` line when an argument is wrong.
-- `setup` and the launch make `~/pwn-broker/active` and `wrapped` without asking; the `folders` check speaks only when it cannot make them.
-- The `kali` job's script in CI now expects the new layout, and expects one note window for the box and neither its vim nor its terminal left after `finish`.
+
+### Tools
+
+- `tool install`, `remove`, `list`, `search`, `info`, `history`, `refresh` and `cache clear`, from the packages in `pwn-shop`: kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng and peass-ng.
+- Every package is checked against the size and SHA-256 in the index, and nothing from it runs during install. Kali's own copies of a tool are never changed.
+- The published Python tools bring their own Python, a shared runtime package such as `python-3.13`, so Kali's is never used or shadowed.
+- `finish` removes the box's tools, unless another unfinished box still uses them, and copies their data from the home folder into the box first.
+
+### Install
+
+- `install.sh` downloads the release file, checks it against `SHA256SUMS.txt` and installs into `/opt/pwn-broker`. With `--from <file>` it contacts nothing. It needs no Python from the machine.
+- Running it again upgrades, and a failed or interrupted upgrade puts the previous install back.
+
+### Known limits
+
+- x86_64 Linux with glibc only. The app's Python and OpenSSL are as new as the release, not as Kali.
+- Every Kali run so far is root, in CI's container and by hand under WSL: not a normal user with `sudo`, not a full Kali desktop, not a real Hack The Box connection.
+- Nothing is signed: `SHA256SUMS.txt` comes from the same release, and the tool index is not signed.
+- Close pwn-broker before you upgrade; the installer does not check.
