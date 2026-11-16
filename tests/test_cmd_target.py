@@ -26,23 +26,23 @@ def _add(session, name, ip, **extra):
 
 
 def test_ask_target_defaults():
-    a = ask_target(FakeConsole(["10.10.10.161", "forest.htb.local", "", ""]), taken=set())
+    a = ask_target(FakeConsole(["10.10.10.161", "forest.htb.local", "", ""]), heading="New target", taken=set())
     assert a == TargetAnswers(["10.10.10.161"], ["forest.htb.local"], "external", "forest.htb.local")
 
 
 def test_ask_target_prefills_an_address_for_a_new_target():
-    a = ask_target(FakeConsole(["", "", "", ""]), taken=set(), ips=["10.10.10.200"])
+    a = ask_target(FakeConsole(["", "", "", ""]), heading="New target", taken=set(), ips=["10.10.10.200"])
     assert a == TargetAnswers(["10.10.10.200"], [], "external", "10.10.10.200")
-    a = ask_target(FakeConsole(["", "", "", ""]), taken=set(), hostnames=["crm.board.htb"])
+    a = ask_target(FakeConsole(["", "", "", ""]), heading="New target", taken=set(), hostnames=["crm.board.htb"])
     assert a == TargetAnswers([], ["crm.board.htb"], "external", "crm.board.htb")
     # a prefilled address can be replaced
-    a = ask_target(FakeConsole(["10.10.10.9", "", "", ""]), taken=set(), ips=["10.10.10.200"])
+    a = ask_target(FakeConsole(["10.10.10.9", "", "", ""]), heading="New target", taken=set(), ips=["10.10.10.200"])
     assert a.ips == ["10.10.10.9"]
 
 
 def test_ask_target_reasks_until_ip_or_hostname():
     console = FakeConsole(["", "", "10.10.10.5", "", "", ""])
-    a = ask_target(console, taken=set())
+    a = ask_target(console, heading="New target", taken=set())
     assert a == TargetAnswers(["10.10.10.5"], [], "external", "10.10.10.5")
     assert len(_fails(console)) == 1
     assert console.asked[:5] == ["ip", "hostname", "ip", "hostname", "scope"]
@@ -50,20 +50,20 @@ def test_ask_target_reasks_until_ip_or_hostname():
 
 def test_ask_target_reasks_bad_ip():
     console = FakeConsole(["10.10.10", "10.10.10.9", "", "", ""])
-    a = ask_target(console, taken=set())
+    a = ask_target(console, heading="New target", taken=set())
     assert a.ips == ["10.10.10.9"]
     assert len(_fails(console)) == 1
 
 
 def test_ask_target_reasks_bad_scope_and_taken_name():
     console = FakeConsole(["10.10.10.5", "", "dmz", "internal", "dc01", "!!!", "web"])
-    a = ask_target(console, taken={"dc01"})
+    a = ask_target(console, heading="New target", taken={"dc01"})
     assert a == TargetAnswers(["10.10.10.5"], [], "internal", "web")
     assert len(_fails(console)) == 3
 
 
 def test_ask_target_takes_several_values():
-    a = ask_target(FakeConsole(["10.10.10.1 10.10.10.2", "a.htb b.htb", "", ""]), taken=set())
+    a = ask_target(FakeConsole(["10.10.10.1 10.10.10.2", "a.htb b.htb", "", ""]), heading="New target", taken=set())
     assert a.ips == ["10.10.10.1", "10.10.10.2"]
     assert a.hostnames == ["a.htb", "b.htb"]
     assert a.name == "a.htb"
@@ -71,7 +71,7 @@ def test_ask_target_takes_several_values():
 
 def test_ask_target_with_defaults_and_no_name(dc01):
     console = FakeConsole(["", "", ""])
-    a = ask_target(console, taken=set(), defaults=dc01, ask_name=False)
+    a = ask_target(console, heading="New target", taken=set(), defaults=dc01, ask_name=False)
     assert a == TargetAnswers(["10.10.10.161"], ["forest.htb.local"], "external", "dc01")
     assert "name" not in console.asked
 
@@ -120,7 +120,7 @@ def test_target_add_refuses_a_hostname_another_target_has(session, system):
     session.console = FakeConsole(["10.10.10.50", "web.htb FOREST.htb.local", "", "web01"])
     dispatch(session, "target add")
     assert _fails(session.console) == ["FOREST.htb.local is already a hostname of dc01"]
-    assert [kind for kind, _ in session.console.lines] == ["fail"]
+    assert [kind for kind, _ in session.console.lines] == ["heading", "fail"]
     assert not (session.box.path / "targets" / "web01").exists()
     assert [t.name for t in load_targets(session.box)] == ["dc01"]
     assert system.pings == []
@@ -133,7 +133,7 @@ def test_target_edit_refuses_a_hostname_another_target_has(session):
     )  # fmt: skip
     session.console = FakeConsole(["", "forest.htb.local web.htb", ""])
     dispatch(session, "target edit dc01")
-    assert [kind for kind, _ in session.console.lines] == ["fail"]
+    assert [kind for kind, _ in session.console.lines] == ["heading", "fail"]
     assert _fails(session.console) == ["web.htb is already a hostname of web"]
     assert session.targets[0].hostnames == ["forest.htb.local"]
     assert load_targets(session.box)[0].hostnames == ["forest.htb.local"]
@@ -509,10 +509,10 @@ def test_target_rename_to_same_name_fails(session):
 
 
 def test_ask_target_dash_clears_a_field_when_editing(dc01):
-    a = ask_target(FakeConsole(["", "-", ""]), taken=set(), defaults=dc01, ask_name=False)
+    a = ask_target(FakeConsole(["", "-", ""]), heading="New target", taken=set(), defaults=dc01, ask_name=False)
     assert a.hostnames == [] and a.ips == ["10.10.10.161"]
     console = FakeConsole(["-", "-", "10.10.10.7", "", ""])
-    a = ask_target(console, taken=set(), defaults=dc01, ask_name=False)
+    a = ask_target(console, heading="New target", taken=set(), defaults=dc01, ask_name=False)
     assert a.ips == ["10.10.10.7"]
     assert len(_fails(console)) == 1
 
@@ -532,7 +532,7 @@ def test_target_add_offers_the_hosts_line_and_pings(session, system):
     assert _hosts_line(session, "10.10.10.50 web.htb") in _hosts_text(session)
     assert load_box(session.box.path).hosts == ["web01"]
     assert system.pings == ["10.10.10.50"]
-    assert session.console.lines[0] == ("ok", "target web01 created")
+    assert session.console.lines[:2] == [("heading", "New target"), ("ok", "target web01 created")]
     assert session.console.lines[-1] == ("ok", "10.10.10.50 answered in 1 ms")
 
 

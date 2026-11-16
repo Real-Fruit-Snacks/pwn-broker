@@ -219,6 +219,9 @@ def import_box(
     archive: Path,
     clock: Callable[[], datetime],
 ) -> Box | None:
+    if archive.is_dir():
+        console.fail(f"{archive} is a folder, not an exported box")
+        return None
     try:
         verify(archive)
         folder = peek_folder(archive)

@@ -49,8 +49,8 @@ def test_ask_box_reasks_empty_name_and_bad_date():
     console = FakeConsole(["", "!!!", "forest", "", "14/11", "2026-11-15", "", ""])
     a = ask_box(console, default_platform="htb", today=date(2026, 11, 14))
     assert a.name == "forest" and a.day == date(2026, 11, 15)
-    assert [k for k, _ in console.lines] == ["fail", "fail", "fail"]
-    assert "YYYY-MM-DD" in console.lines[2][1]
+    assert [k for k, _ in console.lines] == ["heading", "fail", "fail", "fail"]
+    assert "YYYY-MM-DD" in console.lines[3][1]
     assert console.asked == ["box name"] * 3 + ["platform", "date", "date", "os", "difficulty"]
 
 
@@ -238,10 +238,10 @@ def test_box_for_cwd_ignores_finished_and_broken(env):
 
 def test_start_version_and_help(env):
     assert start(env, ["--version"]) == 0
-    assert lines(env, "info") == [f"pwn-broker {__version__}"]
+    assert lines(env, "raw") == [f"pwn-broker {__version__}"]
     env.console = FakeConsole()
     assert start(env, ["-h"]) == 0
-    assert any("import <file>" in t for t in lines(env, "info"))
+    assert any("import <file>" in t for t in lines(env, "raw"))
 
 
 def test_start_unknown_and_import_without_file(env, quiet, ran):

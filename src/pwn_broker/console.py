@@ -30,6 +30,7 @@ class Console(Protocol):
     def fail(self, text: str) -> None: ...
     def info(self, text: str) -> None: ...
     def detail(self, text: str) -> None: ...
+    def header(self, text: str) -> None: ...
     def heading(self, text: str) -> None: ...
     def fields(self, rows: list[tuple[str, str]], *, align_to: Iterable[str] = ()) -> None: ...
     def gap(self) -> None: ...
@@ -133,6 +134,10 @@ class FakeConsole:
 
     def detail(self, text: str) -> None:
         self._line("detail", text)
+
+    def header(self, text: str) -> None:
+        self._line("header", text)
+        self.events.append(("gap", ""))
 
     def heading(self, text: str) -> None:
         self._line("heading", text)
@@ -274,6 +279,11 @@ class TermConsole:
 
     def detail(self, text: str) -> None:
         self._write((DETAIL_INDENT, Style()), (text, self._style(theme.MUTE)))
+
+    def header(self, text: str) -> None:
+        # the first line of the launch: flush left with no blank line above it, and one below
+        self._write((text, self._style(theme.TEXT, bold=True)))
+        self.gap()
 
     def heading(self, text: str) -> None:
         self.gap()

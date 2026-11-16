@@ -69,7 +69,7 @@ def _report_lists(session: Session, summary: ListSummary) -> None:
 @command("cred add", "save a credential")
 def cred_add(session: Session, args: list[str]) -> None:
     take_args(args)
-    answers = ask_cred(session.console, session)
+    answers = ask_cred(session.console, session, heading="New credential")
 
     def change() -> tuple[Cred, ListSummary]:
         cred = creds.add_cred(
@@ -133,7 +133,7 @@ def cred_show(session: Session, args: list[str]) -> None:
 def cred_edit(session: Session, args: list[str]) -> None:
     (text,) = take_args(args, ("cred number",))
     cred = _get(session, text)
-    a = ask_cred(session.console, session, cred)
+    a = ask_cred(session.console, session, cred, heading=f"Edit credential {cred.n}")
 
     def change() -> ListSummary:
         creds.edit_cred(
@@ -239,8 +239,10 @@ def cred_import(session: Session, args: list[str]) -> None:
         raise ArgumentError("missing argument: file")
     lines = _read_names(" ".join(args))
     console = session.console
+    console.heading("Import usernames")
     domain = ask_domain(console, session)
     found_on = ask_found_on(console, session)
+    console.gap()
 
     def change() -> tuple[int, ListSummary | None]:
         added = creds.import_usernames(

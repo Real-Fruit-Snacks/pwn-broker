@@ -86,7 +86,9 @@ def _add(env: Env, folder: Path, box: Box, targets: list[Target], text: str) -> 
         prefill = {"ips": [text]}
     except ValueError:
         prefill = {"hostnames": [text]}
-    answers = questions.ask_target(console, taken={t.name for t in targets}, **prefill)
+    answers = questions.ask_target(
+        console, heading="New target", taken={t.name for t in targets}, **prefill
+    )
     try:
         with boxlock.held(env.paths, wait=LOCK_WAIT):
             try:

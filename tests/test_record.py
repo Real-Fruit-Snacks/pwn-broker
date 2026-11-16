@@ -257,7 +257,7 @@ def test_ctrl_c_at_a_question_creates_nothing(make_env, opened, dc01, asciinema)
     # yes, the IP and the hostname, then Ctrl-C at the scope
     env = make_env(["y", "", ""])
     assert record.run(env, ["10.10.10.200"]) == 1
-    assert env.console.lines == [("info", "cancelled")]
+    assert env.console.lines == [("heading", "New target"), ("info", "cancelled")]
     assert [t.name for t in load_targets(opened)] == ["dc01"]
     assert not (opened.path / "targets" / "10.10.10.200").exists()
     assert asciinema.calls == []

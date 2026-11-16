@@ -47,6 +47,7 @@ def install_data(paths: AppPaths) -> None:
         paths.run, paths.bin, paths.templates, paths.vim_dir,
         paths.tools, paths.upload, paths.cache, paths.run_tools,
         paths.run_recordings, paths.run_vpn, paths.run_shell, paths.run_asciinema,
+        paths.active, paths.wrapped,
     )  # fmt: skip
     for folder in folders:
         folder.mkdir(parents=True, exist_ok=True)

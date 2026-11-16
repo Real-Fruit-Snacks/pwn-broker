@@ -11,7 +11,9 @@ from pwn_broker.targetflow import update_note
 @command("target add", "add a target to this box")
 def target_add(session: Session, args: list[str]) -> None:
     take_args(args)
-    answers = ask_target(session.console, taken={t.name for t in session.targets})
+    answers = ask_target(
+        session.console, heading="New target", taken={t.name for t in session.targets}
+    )
     targetflow.add(session, answers, make_current=True)
 
 
@@ -61,7 +63,13 @@ def target_show(session: Session, args: list[str]) -> None:
 def target_edit(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, ("target name",))
     target = boxes.find_target(session.targets, name)
-    answers = ask_target(session.console, taken=set(), defaults=target, ask_name=False)
+    answers = ask_target(
+        session.console,
+        heading=f"Edit {target.name}",
+        taken=set(),
+        defaults=target,
+        ask_name=False,
+    )
     before = note.title_text(target)
     boxes.edit_target(
         session.box,

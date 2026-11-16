@@ -18,6 +18,7 @@ from pwn_broker.session import Session
 from pwn_broker.shell.app import run_shell
 from pwn_broker.store import StoreError, load_box
 
+NO_ARCHIVE = "give the path of an exported box"
 SUBCOMMANDS = ("new", "import", "resume")
 HELP = (
     "pwn-broker                 open the menu, or the box you are inside",
@@ -77,8 +78,11 @@ def new_box(env: Env) -> Session:
     targets: list[Target] = []
     try:
         adding = console.confirm("add a target?", default=True)
+        console.gap()
         while adding:
-            given = questions.ask_target(console, taken={t.name for t in targets})
+            given = questions.ask_target(
+                console, heading=f"Target {len(targets) + 1}", taken={t.name for t in targets}
+            )
             try:
                 target = boxes.add_target(
                     box,
@@ -93,7 +97,9 @@ def new_box(env: Env) -> Session:
                 console.fail(f"could not add the target: {exc}")
             else:
                 console.ok(f"target {target.name} created")
+            console.gap()
             adding = console.confirm("add another?", default=False)
+            console.gap()
     except Cancelled:
         # the box exists on disk already; keep it and what was added
         pass
@@ -129,6 +135,7 @@ def choose(env: Env) -> Session | None:
         console.warn(problem)
 
     entries: list[tuple[str, Box | None]] = [("new", None), ("import", None)]
+    console.heading("Boxes")
     console.info("1  new box")
     console.info("2  import a box from a file")
     for box in (b for b in found if b.status == "active"):
@@ -143,17 +150,24 @@ def choose(env: Env) -> Session | None:
             f"{len(entries)}  reopen {box.name} ({box.platform}, finished {_date(shown)})"
         )
 
+    console.gap()
     while True:
         answer = console.ask("choice")
         if answer.isdecimal() and 1 <= int(answer) <= len(entries):
             break
         console.fail(f"choose a number from 1 to {len(entries)}")
+    console.gap()
 
     kind, box = entries[int(answer) - 1]
     if kind == "new":
         return new_box(env)
     if kind == "import":
-        return _import(env, Path(console.ask("file")).expanduser())
+        while True:
+            given = console.ask("file")
+            if given != "":
+                break
+            console.fail(NO_ARCHIVE)
+        return _import(env, Path(given).expanduser())
     assert box is not None
     if kind == "reopen":
         lifecycle.reopen_box(box)
@@ -203,6 +217,9 @@ def _pick_session(env: Env, argv: list[str]) -> Session | None:
     if argv[:1] == ["new"]:
         return new_box(env)
     if argv[:1] == ["import"]:
+        if argv[1] == "":
+            env.console.fail(NO_ARCHIVE)
+            return None
         return _import(env, Path(argv[1]).expanduser())
     if argv[:1] == ["resume"]:
         return _resume(env, argv[1] if len(argv) > 1 else None)
@@ -231,11 +248,11 @@ def _asciinema(env: Env) -> None:
 def _usage(env: Env, argv: list[str]) -> int | None:
     console = env.console
     if argv == ["--version"]:
-        console.info(f"pwn-broker {__version__}")
+        console.raw(f"pwn-broker {__version__}")
         return 0
     if argv in (["--help"], ["-h"]):
         for line in HELP:
-            console.info(line)
+            console.raw(line)
         return 0
     if argv[:1] == ["setup"]:
         try:
@@ -305,6 +322,7 @@ def _prepare(env: Env) -> int | None:
     newer = checks.newer_release_within(env.settings)
     if newer is not None:
         console.warn(f"{newer.name}   {newer.message}")
+    console.gap()
     return None
 
 
@@ -321,6 +339,8 @@ def start(env: Env, argv: list[str]) -> int:
     done = _usage(env, argv)
     if done is not None:
         return done
+    if argv[:1] != ["import"]:
+        console.header(f"pwn-broker {__version__}")
     done = _prepare(env)
     if done is not None:
         return done
