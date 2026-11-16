@@ -579,6 +579,7 @@ def _check_entries(infos: list[zipfile.ZipInfo]) -> dict[str, zipfile.ZipInfo]:
             raise ToolError(f"package entry {info.filename!r} is not part of the package layout")
         seen[bare] = info
     folders: set[str] = set()
+    made = len(seen)
     for bare, info in seen.items():
         # a file cannot also be a folder another entry lives in
         parent = bare.rpartition("/")[0]
@@ -586,10 +587,12 @@ def _check_entries(infos: list[zipfile.ZipInfo]) -> dict[str, zipfile.ZipInfo]:
             if parent in seen and not seen[parent].is_dir():
                 raise ToolError(f"package entry {bare!r} sits inside the file {parent!r}")
             folders.add(parent)
+            if parent not in seen:
+                # counted as it is found, so the folders are never gathered beyond the limit
+                made += 1
+                if made > MAX_MEMBERS:
+                    raise ToolError(f"package would make more than {MAX_MEMBERS} files and folders")
             parent = parent.rpartition("/")[0]
-    made = len(seen.keys() | folders)
-    if made > MAX_MEMBERS:
-        raise ToolError(f"package would make {made} files and folders; the limit is {MAX_MEMBERS}")
     return seen
 
 

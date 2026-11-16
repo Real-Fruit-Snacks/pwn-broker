@@ -944,8 +944,8 @@ def test_a_global_extended_header_after_the_last_entry_is_refused(tmp_path, monk
     buf.write(bytes(2 * 512))
     archive = write_gz(tmp_path / "rt.tar.gz", buf.getvalue())
     forbid_writing(monkeypatch)
-    # tarfile itself gives up on a header that nothing follows; either way it is refused
-    with pytest.raises(ToolError, match="global extended header|incomplete or damaged"):
+    # tarfile itself gives up on an extended header that nothing follows
+    with pytest.raises(ToolError, match="incomplete or damaged"):
         unpack(archive, tmp_path / "rt")
     assert leftovers(tmp_path) == ["rt.tar.gz"]
 
@@ -986,3 +986,55 @@ def test_a_member_with_extended_records_of_its_own_still_unpacks(tmp_path):
     archive = make_tar(tmp_path / "rt.tar.gz", [member], {name: b"bytes"})
     unpack(archive, tmp_path / "rt")
     assert (tmp_path / "rt" / "python" / ("n" * 150)).read_bytes() == b"bytes"
+
+
+# ---- round 4
+
+
+def test_a_global_extended_header_is_refused_before_the_entry_after_it_is_looked_at(tmp_path, monkeypatch):
+    # refused at the first, so the table of them never grows
+    archive = write_gz(tmp_path / "rt.tar.gz", with_global_headers(50, 5))
+    looked_at = []
+    real = runtimearchive._check_name
+
+    def watch(member):
+        looked_at.append(member.name)
+        return real(member)
+
+    monkeypatch.setattr(runtimearchive, "_check_name", watch)
+    forbid_writing(monkeypatch)
+    with pytest.raises(ToolError, match="global extended header"):
+        unpack(archive, tmp_path / "rt")
+    assert looked_at == []
+
+
+def test_a_global_extended_header_in_the_middle_is_refused(tmp_path, monkeypatch):
+    buf = io.BytesIO()
+    for number in range(3):
+        buf.write(file(f"python/f{number}").tobuf(tarfile.PAX_FORMAT))
+    buf.write(tarfile.TarInfo.create_pax_global_header({"path": "../../escape", "size": "999"}))
+    buf.write(file("python/last").tobuf(tarfile.PAX_FORMAT))
+    buf.write(bytes(2 * 512))
+    archive = write_gz(tmp_path / "rt.tar.gz", buf.getvalue())
+    forbid_writing(monkeypatch)
+    with pytest.raises(ToolError, match="global extended header"):
+        unpack(archive, tmp_path / "rt")
+    assert leftovers(tmp_path) == ["rt.tar.gz"]
+
+
+def test_a_global_extended_header_with_nothing_in_it_changes_nothing(tmp_path):
+    buf = io.BytesIO()
+    buf.write(tarfile.TarInfo.create_pax_global_header({}))
+    buf.write(file("python/a").tobuf(tarfile.PAX_FORMAT))
+    buf.write(bytes(2 * 512))
+    archive = write_gz(tmp_path / "rt.tar.gz", buf.getvalue())
+    unpack(archive, tmp_path / "rt")
+    assert (tmp_path / "rt" / "python" / "a").is_file()
+
+
+def test_the_folders_a_links_name_would_make_count_too(monkeypatch):
+    # the link, and the folders a, a/b and a/b/c on the way to it: four
+    monkeypatch.setattr(runtimearchive, "MAX_MEMBERS", 4)
+    check([link("a/b/c/l", "x")])
+    monkeypatch.setattr(runtimearchive, "MAX_MEMBERS", 3)
+    refused([link("a/b/c/l", "x")], "more than 3 files, folders and links")

@@ -1292,7 +1292,7 @@ def test_the_folders_names_would_make_count_towards_the_limit(tmp_path, monkeypa
     # manifest.toml, files/kerbrute and files/a/b/c/x, and the folders files, a, b and c: seven
     path = raw_zip(tmp_path, [GOOD, ("files/a/b/c/x", b"", None)])
     monkeypatch.setattr(toolpkg, "MAX_MEMBERS", 6)
-    assert "7 files and folders" in str(assert_clean_failure(tmp_path, path))
+    assert "more than 6 files and folders" in str(assert_clean_failure(tmp_path, path))
     monkeypatch.setattr(toolpkg, "MAX_MEMBERS", 7)
     assert toolpkg.package_manifest(path).name == "kerbrute"
 
@@ -1303,7 +1303,16 @@ def test_a_folder_that_is_also_an_entry_is_counted_once(tmp_path, monkeypatch):
     monkeypatch.setattr(toolpkg, "MAX_MEMBERS", 5)
     assert toolpkg.package_manifest(path).name == "kerbrute"
     monkeypatch.setattr(toolpkg, "MAX_MEMBERS", 4)
-    with pytest.raises(ToolError, match="5 files and folders"):
+    with pytest.raises(ToolError, match="more than 4 files and folders"):
+        toolpkg.package_manifest(path)
+
+
+def test_a_folder_entry_listed_after_what_is_in_it_is_counted_once(tmp_path, monkeypatch):
+    path = raw_zip(tmp_path, [GOOD, ("files/a/x", b"", None), ("files/a/", b"", None)])
+    monkeypatch.setattr(toolpkg, "MAX_MEMBERS", 5)
+    assert toolpkg.package_manifest(path).name == "kerbrute"
+    monkeypatch.setattr(toolpkg, "MAX_MEMBERS", 4)
+    with pytest.raises(ToolError, match="more than 4 files and folders"):
         toolpkg.package_manifest(path)
 
 
@@ -1348,3 +1357,35 @@ def test_make_folders_refuses_a_link_in_the_way(tmp_path, target):
     assert sorted(p.name for p in elsewhere.iterdir()) == (["aim"] if target != "nothing" else [])
     if target == "folder":
         assert list(aim.iterdir()) == []
+
+
+# ---- round 4
+
+
+@pytest.mark.parametrize("order", ["file first", "file last"])
+def test_an_entry_inside_a_file_is_refused(tmp_path, order):
+    members = [("files/a", b"a file", None), ("files/a/b", b"inside it", None)]
+    if order == "file last":
+        members.reverse()
+    path = raw_zip(tmp_path, [GOOD, *members, ("files/a/c/d", b"deeper", None)])
+    assert "sits inside the file 'files/a'" in str(assert_clean_failure(tmp_path, path))
+
+
+def test_the_count_of_folders_stops_at_the_limit(tmp_path, monkeypatch):
+    # names with long parts, each making 62 folders of its own: gathered whole before the limit
+    # was looked at, the names of all those folders took 60 MiB here and 247 MiB at the limits
+    import tracemalloc
+
+    long_parts = "/".join(["p" * 240] * 13)
+    short_parts = "/".join(["a"] * 47)
+    members = [GOOD] + [(f"files/{number:04}/{long_parts}/{short_parts}/f", b"", None) for number in range(300)]
+    path = raw_zip(tmp_path, members)
+    monkeypatch.setattr(toolpkg, "MAX_MEMBERS", 400)
+    tracemalloc.start()
+    try:
+        with pytest.raises(ToolError, match="more than 400 files and folders"):
+            toolpkg.package_manifest(path)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 20 * 1024 * 1024

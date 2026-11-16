@@ -238,7 +238,8 @@ def _no_global_headers(tar: tarfile.TarFile) -> None:
     # tarfile gathers every global extended header into one table for the whole archive, and
     # goes through all of it again for each later entry: one before each of 2,000 entries made
     # an unpack take a minute, and the time grows with the square of the count. A runtime's
-    # archive has none.
+    # archive has none. One with no records in it adds nothing to the table and is let through;
+    # one after the last entry is refused by tarfile itself, as an archive cut short.
     if tar.pax_headers:
         raise ToolError("runtime archive has a global extended header, which a runtime's does not")
 
@@ -257,8 +258,6 @@ def _allowing(tar: tarfile.TarFile, reader: _Bounded) -> Iterator[tarfile.TarInf
 
 def _read_all(tar: tarfile.TarFile, reader: _Bounded) -> dict[str, tarfile.TarInfo]:
     seen = _check_all(_allowing(tar, reader))
-    # one after the last entry is read with the end of the archive
-    _no_global_headers(tar)
     # tarfile ends quietly at a damaged header or at a cut, so the end is checked here: a tar
     # ends with two blocks of zeros, and tarfile stops at the first without looking for the second
     reader.seek(tar.offset)
