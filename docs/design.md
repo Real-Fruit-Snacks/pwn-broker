@@ -982,7 +982,7 @@ to = "files/kerbrute_linux_amd64"
 
 A recipe that changes without its `build` going up fails CI, because the published build cannot be replaced.
 
-CI tests against `pwn-broker`'s `main`. While both repositories are private, it reads `pwn-broker` through a read-only deploy key.
+CI tests against `pwn-broker`'s `main`. While both repositories were private, it read `pwn-broker` through a read-only deploy key; both are public now and the key is gone.
 
 **Withdrawing a build** is deleting its release. The next index leaves it out.
 
@@ -1017,7 +1017,7 @@ sha256 = "..."
 - The app keeps a copy in `/opt/pwn-broker/cache/`. It refreshes the copy when it is more than a day old and the source answers within two seconds; otherwise it uses what it has. `tool refresh` fetches it now.
 - With no index and no cached copy, every `tool` command prints one `fail` line that says where it looked and how to set `tools_index`. It never shows an empty list as if there were no tools.
 
-**While `pwn-shop` is private**, its release files cannot be downloaded without signing in, so the folder form is the only route. A folder is filled in one of two ways: `python build.py build` in a clone, which builds `dist/` (with no subcommand, `build.py` prints its help); or `sh fetch.sh <folder>`, which uses a signed-in `gh` to download the published index and zips.
+**While `pwn-shop` was private**, its release files could not be downloaded without signing in, so the folder form was the only route. It is public now, and the folder form is for working with no network. A folder is filled in one of two ways: `python build.py build` in a clone, which builds `dist/` (with no subcommand, `build.py` prints its help); or `sh fetch.sh <folder>`, which uses a signed-in `gh` to download the published index and zips.
 
 ### 8.4 Commands
 
@@ -1390,7 +1390,7 @@ For the tools phase:
 - Python dependencies are pinned in a lock file I commit to `pwn-shop`; CI resolves nothing.
 - The index is rebuilt by CI from a card published with each release, and published as the one file of a standing release tagged `index`. CI commits nothing.
 - The cached index refreshes after a day, with a two-second limit, and `tool refresh` forces it.
-- While `pwn-shop` is private, a folder filled by `build.py` or `fetch.sh` is the only way to reach the packages.
+- `tool install` from the published index has not been run on Kali; CI installs from a folder.
 - One build of a tool is installed on the machine at a time, shared by the unfinished boxes that use it. A different build is refused until the other box lets go.
 - Every command is a launcher script, so the app can tell when a tool is running. `finish` and `tool remove` stop while one is.
 - A removal that fails after the archive is verified leaves the box finished, and the next launch offers to remove what is left.
@@ -1398,7 +1398,6 @@ For the tools phase:
 - A tool with no version numbers of its own takes its upstream date as its version: `targetedkerberoast` 2024.12.16, `peass-ng` 2026.11.14.
 - ligolo-ng's proxy is installed as the command `ligolo-proxy`, the name Kali's own `ligolo-ng` also uses; mine wins for a bare name, Kali's for a bare `sudo`.
 - `pspy` carries all four upstream binaries. `peass-ng` carries `linpeas.sh`, `winPEASx64.exe`, `winPEASany.exe` and `winPEAS.bat`.
-- While both repositories are private, `pwn-shop`'s CI reads `pwn-broker` through a read-only deploy key.
 - The manifest has no field for system packages until a tool needs one.
 - A tool's data is collected into the box at `export` as well as at `finish`.
 
