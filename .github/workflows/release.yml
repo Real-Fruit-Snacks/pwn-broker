@@ -1,18 +1,24 @@
 name: release
 
 # A vX.Y.Z tag push: check the tag matches pyproject.toml, build the release file with
-# release/build.py, install it into a temporary install folder, run the unit suite on the Python
-# it carries, and publish the release with notes from CHANGELOG.md and exactly three files:
+# release/build.py, record its SHA-256, install it into a temporary install folder, run the unit
+# suite against the release's own wheels on the Python it carries, and publish the release with
+# notes from CHANGELOG.md and exactly three files:
 #   pwn-broker-<version>-linux-x86_64.tar.gz   the release file
 #   SHA256SUMS.txt                             its checksum
 #   install.sh                                 the installer, from the checkout at the tag
 # install.sh downloads the other two from releases/latest/download/.
 #
-# The build job has read access only and runs all of the repository's code. The publish job has
-# write access, runs none of it, and runs only on a tag push.
+# The build job has read access only and runs all of the repository's code. Everything it
+# installs before the release file's SHA-256 is recorded is pinned by hash in this repository,
+# since code that ran there could replace the release file and SHA256SUMS.txt together and
+# sha256sum -c would still accept them. The SHA-256 is recorded right after the build, as a job
+# output, and the publish job refuses a release file that does not have it. The publish job has
+# write access and runs none of the repository's code.
 #
-# Run by hand (workflow_dispatch), whatever ref it is started from, it is a dry run: the build
-# job runs with the version taken from pyproject.toml, and nothing is published.
+# Run by hand (workflow_dispatch), whatever ref it is started from, it is a dry run: the version
+# is taken from pyproject.toml, both jobs run every step, and only the step that publishes is
+# skipped.
 on:
   push:
     tags: ['v*.*.*']
@@ -26,6 +32,9 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha256: ${{ steps.sha256.outputs.sha256 }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -34,26 +43,53 @@ jobs:
         with:
           python-version: '3.13'
       - name: Tag matches pyproject.toml
-        if: github.event_name == 'push' && github.ref_type == 'tag'
+        # v*.*.* also matches a tag such as v0.2.0-rc1, which would be published as latest. A dry
+        # run has no tag, so it checks the tag pyproject.toml's version would need.
         run: |
-          want="${GITHUB_REF_NAME#v}"
           have="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
-          if [ "$want" != "$have" ]; then
-            echo "::error::tag is $GITHUB_REF_NAME but pyproject.toml has version $have"
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="v$have"
+          fi
+          if ! printf '%s\n' "$tag" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::tag $tag is not v followed by three dot-separated numbers, such as v0.2.0"
             exit 1
           fi
+          if [ "${tag#v}" != "$have" ]; then
+            echo "::error::tag is $tag but pyproject.toml has version $have"
+            exit 1
+          fi
+          echo "ok    tag $tag"
       - name: Version
         # pyproject.toml's version; on a tag push it has just been checked against the tag
+        id: version
         run: |
           version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
           test -n "$version"
           echo "VERSION=$version" >>"$GITHUB_ENV"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
           echo "ok    version $version"
-      - name: Install
-        # the build script imports the app
-        run: python -m pip install -e .
+      - name: Install from the locks only
+        # The build script imports the app. The build tools (hatchling and what it needs) and the
+        # app's dependencies come from the two locks, wheels only and every hash required; the app
+        # itself goes in with no dependencies and no build isolation, so pip fetches no build
+        # backend of its own. Nothing unpinned is installed before the SHA-256 is recorded.
+        run: |
+          python -m pip install --require-hashes --only-binary :all: -r release/build-requirements.lock -r release/requirements.lock
+          python -m pip install --no-deps --no-build-isolation -e .
       - name: Build the release file
         run: python release/build.py --out "$RUNNER_TEMP/release-out"
+      - name: Record the release file's SHA-256
+        # taken before anything unpinned is installed; the publish job compares the file it is
+        # given with this value
+        id: sha256
+        run: |
+          file="$RUNNER_TEMP/release-out/pwn-broker-$VERSION-linux-x86_64.tar.gz"
+          test -f "$file"
+          sha256="$(sha256sum "$file" | cut -d ' ' -f 1)"
+          echo "sha256=$sha256" >>"$GITHUB_OUTPUT"
+          echo "ok    pwn-broker-$VERSION-linux-x86_64.tar.gz has SHA-256 $sha256"
       - name: Check the release file and its checksum
         working-directory: ${{ runner.temp }}/release-out
         run: |
@@ -94,19 +130,34 @@ jobs:
       - name: zsh and vim
         # the real recording tests need zsh, and some tests drive a real vim and skip without it
         run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh vim
-      - name: Unit suite on the installed Python
-        # PWN_BROKER_OPT is not in this step's environment: only the path to asciinema is
+      - name: Unit suite against the release's own wheels
+        # The suite tests what is published: the app's wheel and the eight pinned dependencies,
+        # taken from the release file and installed as install.sh installs them, into an
+        # environment made by the Python the release carries. The tests run from the checkout
+        # but import the installed wheel, not src/. pytest is the one unpinned thing, installed
+        # after the SHA-256 was recorded. PWN_BROKER_OPT is not in this step's environment: only
+        # the path to asciinema is.
         run: |
           unset PWN_BROKER_OPT
           opt="$RUNNER_TEMP/installed/opt"
-          python_bin="$opt/python/bin/python3"
-          "$python_bin" --version
           test -f "$opt/app/bin/asciinema"
-          "$python_bin" -m venv "$RUNNER_TEMP/suite-venv"
-          "$RUNNER_TEMP/suite-venv/bin/python" --version
-          "$RUNNER_TEMP/suite-venv/bin/python" -m pip install -e ".[dev]"
+          unpacked="$RUNNER_TEMP/release-unpacked"
+          mkdir -p "$unpacked"
+          tar -xzf "$RUNNER_TEMP/release-out/pwn-broker-$VERSION-linux-x86_64.tar.gz" -C "$unpacked"
+          top="$unpacked/pwn-broker-$VERSION"
+          "$opt/python/bin/python3" --version
+          "$opt/python/bin/python3" -m venv "$RUNNER_TEMP/suite-venv"
+          suite="$RUNNER_TEMP/suite-venv/bin/python"
+          PIP_CONFIG_FILE=/dev/null "$suite" -m pip --isolated install --no-index --find-links "$top/wheels" --only-binary :all: --require-hashes -r "$top/wheels.lock"
+          "$suite" -m pip install pytest
+          imported="$("$suite" -c 'import pwn_broker; print(pwn_broker.__file__)')"
+          echo "pwn_broker is imported from $imported"
+          case "$imported" in
+            "$RUNNER_TEMP/suite-venv/lib/"*/site-packages/pwn_broker/*) ;;
+            *) echo "fail  pwn_broker is not imported from the wheel installed in $RUNNER_TEMP/suite-venv"; exit 1 ;;
+          esac
           export PWN_BROKER_REAL_ASCIINEMA="$opt/app/bin/asciinema"
-          "$RUNNER_TEMP/suite-venv/bin/python" -m pytest -q -W error
+          "$suite" -m pytest -q -W error
       - name: Notes from CHANGELOG.md
         run: |
           # The section headed "## vX.Y.Z", with or without a "(unreleased)" suffix.
@@ -131,13 +182,10 @@ jobs:
         with:
           name: release-files
           path: ${{ runner.temp }}/release-upload/
-      - name: Dry run
-        if: github.event_name != 'push' || github.ref_type != 'tag'
-        run: echo "ok    dry run: nothing was published"
 
   publish:
+    # Runs on a dry run too, so every check below runs; only the Publish step needs a tag push.
     needs: build
-    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -146,18 +194,52 @@ jobs:
         with:
           name: release-files
           path: ${{ runner.temp }}/release-files
+      - name: Check the files against the build
+        # the release file must have the SHA-256 the build job recorded right after building it,
+        # as well as match SHA256SUMS.txt, which travelled with it
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          RECORDED: ${{ needs.build.outputs.sha256 }}
+        run: |
+          cd "$RUNNER_TEMP/release-files"
+          ls -l
+          test -n "$VERSION"
+          file="pwn-broker-$VERSION-linux-x86_64.tar.gz"
+          test -f "$file"
+          test -f install.sh
+          test -f notes.md
+          test "$(wc -l <SHA256SUMS.txt)" = 1
+          named="$(awk '{ sub(/^\*/, "", $2); print $2 }' SHA256SUMS.txt)"
+          if [ "$named" != "$file" ]; then
+            echo "fail  SHA256SUMS.txt names $named, not $file"
+            exit 1
+          fi
+          sha256sum -c SHA256SUMS.txt
+          echo "the build job recorded SHA-256 $RECORDED"
+          found="$(sha256sum "$file" | cut -d ' ' -f 1)"
+          if [ "$found" != "$RECORDED" ]; then
+            echo "fail  $file has SHA-256 $found, not the $RECORDED the build job recorded after building it"
+            exit 1
+          fi
+          echo "ok    $file has the SHA-256 the build job recorded, $found"
       - name: Publish
         # The release is created as a draft with all three files, then made public and latest, so
         # releases/latest/download/ never serves a release with a file missing. If the second
-        # command fails, run it by hand: the draft holds all three files.
+        # command fails, run it by hand: the draft holds all three files. If the first fails
+        # part-way it can leave a draft, and a rerun then refuses the release that exists: delete
+        # the draft first (gh release delete <tag>, which keeps the tag), then rerun.
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
           cd "$RUNNER_TEMP/release-files"
-          file="pwn-broker-${GITHUB_REF_NAME#v}-linux-x86_64.tar.gz"
-          test -f "$file"
-          test "$(wc -l <SHA256SUMS.txt)" = 1
-          sha256sum -c SHA256SUMS.txt
+          file="pwn-broker-$VERSION-linux-x86_64.tar.gz"
           gh release create "$GITHUB_REF_NAME" "$file" SHA256SUMS.txt install.sh \
             --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag --draft
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+      - name: Dry run
+        if: github.event_name != 'push' || github.ref_type != 'tag'
+        env:
+          RECORDED: ${{ needs.build.outputs.sha256 }}
+        run: echo "ok    dry run: the release file has SHA-256 $RECORDED, and nothing was published"

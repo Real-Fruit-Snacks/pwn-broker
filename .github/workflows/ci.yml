@@ -171,7 +171,8 @@ jobs:
   release-file:
     # The release file built twice from this checkout with release/build.py, sharing one cache,
     # and the two compared byte for byte, with their SHA256SUMS.txt; then tar lists and unpacks
-    # it and gzip accepts it. The build fetches only what the repository pins. The file from the
+    # it and gzip accepts it. The build fetches only what the repository pins, and runs in an
+    # environment installed from the locks only, as in the release workflow. The file from the
     # first build is uploaded.
     runs-on: ubuntu-24.04
     steps:
@@ -179,9 +180,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - name: Install
-        # the build script imports the app
-        run: python -m pip install -e .
+      - name: Install from the locks only
+        # The build script imports the app. As in release.yml: the build tools and the app's
+        # dependencies from the two locks, wheels only and every hash required, then the app with
+        # no dependencies and no build isolation, so nothing unpinned is installed before the build.
+        run: |
+          python -m pip install --require-hashes --only-binary :all: -r release/build-requirements.lock -r release/requirements.lock
+          python -m pip install --no-deps --no-build-isolation -e .
       - name: Build twice
         run: |
           python release/build.py --out one

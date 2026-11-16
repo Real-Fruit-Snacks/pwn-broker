@@ -2,7 +2,9 @@
 # keyed by normalised name: python, asciinema, pwn-broker and every name in
 # release/requirements.lock. The build refuses a release if this file and the release disagree.
 #
-# licence: an SPDX identifier, as the project declares it.
+# licence: an SPDX identifier, as the project declares it; for python, which bundles
+#          several projects, a summary of their licences instead, with the texts in
+#          python.txt.
 # source:  the address of the exact source. {version} becomes the version in the release; a
 #          wheel's source must have it.
 
