@@ -15,6 +15,7 @@ Everything pwn-broker 0.1.0 has been run on, with the counts, versions and dates
 - **`installer`**: `sh -n`, `dash -n` and shellcheck pass on `install.sh` and `.github/scripts/kali-cycle.sh`. The release file was installed twice into a temporary install folder and home. `pwn-broker --version` printed `pwn-broker 0.1.0`; `app/bin/python` is Python 3.13.18 and resolves to `python/bin/python3.13` in the install folder; `app/bin/asciinema --version` printed `asciinema 3.2.1`; `bin/record --help` printed `usage: record [target]`; the second run printed `PATH line already in` and left one PATH line.
 - **`installer`, with no Python and no network**: inside `debian:stable-slim` started with `--network none`, where the only network interface was `lo` and no `python` or `python3` was on PATH or in `/usr/bin` or `/usr/local/bin`, `sh install.sh --from <file>` ran to its last line as root, and `pwn-broker --version` and `asciinema --version` worked.
 - **`recording`**, on Ubuntu 24.04: the job installs the release file, and the three real-asciinema tests pass against the installed `app/bin/asciinema`. `record` records a real bash session and a real zsh session through a pseudo-terminal, and the test checks the `[rec dc01]` prefix, the recording marker, the `.cast` header and the text copy. Both sessions are recorded, and both show that asciinema writes the recording to disk as it happens, not at the end.
+- **The release workflow** (`.github/workflows/release.yml`): once by hand on `main` as a dry run that publishes nothing (run 43855237616), then for the tag `v0.1.0` (run 43863175415, commit f63e7a6). Both built the release file from the locks, installed it, and ran the unit suite against the release's own wheels on the installed Python. The tag's run then compared the release file, `install.sh` and the notes with the SHA-256 values the build recorded, and published `pwn-broker-0.1.0-linux-x86_64.tar.gz` (46,657,018 bytes), `SHA256SUMS.txt` and `install.sh`.
 - **`kali`**: one whole box in the official Kali image (`kalilinux/kali-rolling`, Kali 2026.3 at the time, with Python 3.14.10, zsh 5.9.2 and OpenVPN 2.7.8), as root.
   - After the packages were installed with the network on, the container was taken off its only network (`docker inspect` showed none; inside, only `lo`, `github.com` did not resolve, a connection to 1.1.1.1:443 failed). With the network off, `sh install.sh --from` the release file printed every `ok` line: the app's Python was 3.13.18 at `/opt/pwn-broker/python/bin/python3.13` while Kali's was 3.14.10 at `/usr/bin/python3.14`, and root's `.zshrc` was Kali's own plus the one PATH line.
   - The network was connected again, then the unit suite ran on Kali's own Python with the installed asciinema (3062 passed, 2 skipped, warnings treated as errors), and the whole box cycle ran on the app's bundled Python and ended with status 0.
@@ -23,7 +24,7 @@ Everything pwn-broker 0.1.0 has been run on, with the counts, versions and dates
 
 ## By hand on Kali
 
-All three in Kali 2026.2 under WSL 2 on Windows 11, as root, on 2026-11-16, with Kali's own Python 3.14.7.
+All four in Kali 2026.2 under WSL 2 on Windows 11, as root, on 2026-11-16, with Kali's own Python 3.14.7.
 
 ### Every command
 
@@ -59,19 +60,27 @@ At commit cf585e7.
 - With `python/.pwn-broker` removed, the installer printed `fail  /opt/pwn-broker/python exists and is not a pwn-broker Python. move it or choose another folder`, and the install still worked.
 - `PWN_BROKER_OPT=relative/path` printed `fail  PWN_BROKER_OPT must be an absolute path, not relative/path`, and `PWN_BROKER_OPT=//` printed `fail  the install folder must not be empty or /`.
 
+### The published release
+
+`v0.1.0`, with `/opt/pwn-broker` and `~/pwn-broker` removed first.
+
+- `curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/download/install.sh | sh` printed every `ok` line, from `checksum verified for pwn-broker-0.1.0-linux-x86_64.tar.gz` to the last, and left no work folder. `pwn-broker --version` printed `pwn-broker 0.1.0`; the app's Python was 3.13.18 at `/opt/pwn-broker/python/bin/python3.13` while Kali's was 3.14.7; `asciinema --version` printed `asciinema 3.2.1`. The same line run again succeeded, with one PATH line in `.zshrc` and one in `.bashrc`.
+- On that install a new box was made and `tool install` ran for `kerbrute`, `pspy`, `certipy`, `targetedkerberoast`, `ligolo-ng` and `peass-ng`, each from the published index. `certipy` brought the `python-3.13` runtime; `status` showed 6 tools.
+- `kerbrute version`, `certipy -h`, `targetedKerberoast -h` and `ligolo-proxy -h` each started and printed their own first lines, and the ten upload files were in `/opt/pwn-broker/upload`. Kali's `python3` was still `/usr/bin/python3`, 3.14.7.
+- `finish` listed the six tools and the runtime as to be removed, wrote the archive and removed the folder. Afterwards `bin/` held only `pwn-broker` and `record`, `upload/` was empty, `tools.log` had an install and a finish line for each of the seven packages, and neither the note's vim nor its qterminal window was left.
+
 ## pwn-shop's packages
 
 - The seven packages in `pwn-shop`, in its CI on `main` (run 43772170454): the six tools and the `python-3.13` runtime. Its `packages` job, on Ubuntu 24.04, built the runtime and build 3 of `certipy` and `targetedkerberoast`, downloaded the four packages already published and rebuilt each to the same bytes, and installed all seven through this app's own code under Python 3.12, 3.13 and 3.14, then started each tool's commands. Its `kali` job, in the official Kali image (Kali 2026.3, Python 3.14.8) with the container's network confirmed off, installed the runtime and all six tools through this app's own code and started each tool. The run then published the runtime and build 3 of `certipy` and `targetedkerberoast`. Builds 1 and 2 of those two were withdrawn afterwards, so every package has exactly one published build.
 - The published index, on Windows 11 on 2026-11-15, the day both repositories became public: with no `tools_index` setting, the app's own code loaded the index from `pwn-shop`'s release and downloaded `certipy` 5.1.0 build 3 and the `python-3.13` runtime, and each matched the size and SHA-256 the index gives. Nothing was installed there.
-- `tool install` from the published index has run on Kali by hand, for kerbrute and for certipy with its runtime ([above](#by-hand-on-kali)). CI installs every package from a folder, with the network off.
+- `tool install` from the published index has run on Kali by hand for all six tools, with the runtime that two of them require ([above](#the-published-release)). CI installs every package from a folder, with the network off.
 
 ## Not tested
 
-- The release workflow (`.github/workflows/release.yml`). It has run once, by hand on `main` as a dry run that publishes nothing (GitHub Actions run 43855237616): it built the release file, installed it, ran the unit suite against the release's own wheels on the installed Python, and stopped before publishing. It has not published a release, so the installer's download path (`curl ... | sh` with no `--from`) has never run against a real release; only against a stand-in in the unit tests.
 - A full Kali desktop session. CI's Kali run used a virtual display and `xterm`, and the run by hand used Kali's own qterminal under WSL, so Xfce, its window manager and focus have not been tried. Nor has your own VM.
 - A normal user. Both Kali runs are root, so `sudo` for `/etc/hosts` and OpenVPN has not run, and neither has the installer's own `sudo` step. The recording, `/etc/hosts`, VPN and ping part has run on Kali only as root: in a container, with a virtual display and an OpenVPN file with no server, and by hand under WSL.
 - A real Hack The Box connection. The OpenVPN file in the Kali run has no server behind it.
-- A real tool package against a real target. `pwn-shop`'s CI installed and started each one on Kali, in a container, and kerbrute was installed from the published index and removed by `finish` in the run by hand. None has been run on a full Kali desktop, against a real target, or by a normal user with `sudo`.
+- A real tool package against a real target. `pwn-shop`'s CI installed and started each one on Kali, in a container, and all six were installed from the published index, started once and removed by `finish` in the run by hand under WSL. None has been run on a full Kali desktop, against a real target, or by a normal user with `sudo`.
 - On a terminal that hosts all its windows in one server process, such as gnome-terminal, `finish` closes the note's vim but cannot close its window. Whether that terminal then closes the window by itself has not been tried.
 
 ## Known limits
