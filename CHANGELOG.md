@@ -7,7 +7,7 @@ The first release. pwn-broker keeps a Hack The Box machine in order on Kali Linu
 ### The organiser
 
 - `pwn-broker new`, `import <file>` and `resume [name]`, a start menu, launch checks, and one box open at a time.
-- A folder per box under `~/pwn-broker/active/` and per target, with `files.toml` recording every file and its SHA-256.
+- A folder per box under `~/pwn-broker/active/` and per target, with `files.toml` recording every file and its SHA-256. Each new target with an IP is pinged once.
 - The note, `notes.md`, in vim in a window of its own, with the box's details at the top and a fold per target. One note window per box.
 - `finish` archives the box to `~/pwn-broker/wrapped/` and closes it, `export` writes a snapshot and keeps working, and `import` unpacks either.
 
@@ -25,7 +25,6 @@ The first release. pwn-broker keeps a Hack The Box machine in order on Kali Linu
 
 - One `/etc/hosts` line per target, marked with the box ID, kept in step with the target and removed at `finish`. Other lines are never changed.
 - `vpn start`, `stop`, `status` and `log` for OpenVPN. The `.ovpn` file is copied into the box and never archived, and `vpn stop` stops only the process the app started.
-- Each new target with an IP is pinged once.
 
 ### Tools
 
@@ -45,3 +44,4 @@ The first release. pwn-broker keeps a Hack The Box machine in order on Kali Linu
 - Every Kali run so far is root, in CI's container and by hand under WSL: not a normal user with `sudo`, not a full Kali desktop, not a real Hack The Box connection.
 - Nothing is signed: `SHA256SUMS.txt` comes from the same release, and the tool index is not signed.
 - Close pwn-broker before you upgrade; the installer does not check.
+- The installer's download from a release and the release workflow's publish step run for the first time with this release. Before it, the download had run only against a stand-in in the unit tests.

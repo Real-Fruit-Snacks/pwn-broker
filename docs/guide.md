@@ -14,7 +14,7 @@ For a release file already on the machine:
 sh install.sh --from pwn-broker-0.1.0-linux-x86_64.tar.gz
 ```
 
-Run the installer as the user who will use pwn-broker, not with `sudo`. It asks no questions. It creates `/opt/pwn-broker` (using `sudo` once if it has to) and gives it to you, unpacks the release's own Python into `python/`, makes a virtual environment in `app/` with that Python, and installs the app and its dependencies there from the wheels in the release file. It copies asciinema into `app/bin/`, runs the app's `setup`, and adds `/opt/pwn-broker/bin` to PATH in `~/.zshrc` and, if it exists, `~/.bashrc`. Nothing goes into the system Python. If the PATH line cannot be written, the install is kept and one `fail` line says to add `bin/` to PATH yourself.
+Run the installer as the user who will use pwn-broker, not with `sudo`. It asks no questions. It creates `/opt/pwn-broker` and gives it to you, using `sudo` for that only, and only when it cannot create the folder itself. It then unpacks the release's own Python into `python/`, makes a virtual environment in `app/` with that Python, and installs the app and its dependencies there from the wheels in the release file. It copies asciinema into `app/bin/`, runs the app's `setup`, and adds `/opt/pwn-broker/bin` to PATH in `~/.zshrc` and, if it exists, `~/.bashrc`. Nothing goes into the system Python. If the PATH line cannot be written, the install is kept and one `fail` line says to add `bin/` to PATH yourself.
 
 | Option | Does |
 |---|---|
@@ -38,7 +38,7 @@ The app's Python and its OpenSSL are fixed when a release is made, not when Kali
 Run the installer again. An install over an existing one replaces `python/` and `app/` and nothing else; `config.toml`, `tools/`, `run/` and your boxes stay. If it fails or is interrupted, the previous `python/` and `app/` are put back. If the app's `setup` had already started, the launchers in `bin/` and the vim and template files it may have rewritten stay as the new release wrote them.
 
 - Close pwn-broker before you run the installer. It replaces `app/` and `python/` under a running prompt, and does not check whether one is open.
-- It replaces a `python/` only if it holds the empty marker `.pwn-broker` that the installer writes into its own, and an `app/` only if it holds `pyvenv.cfg`. Otherwise it stops with `fail  /opt/pwn-broker/python exists and is not a pwn-broker Python. move it or choose another folder`.
+- It replaces a `python/` only if it holds the empty marker `.pwn-broker` that the installer writes into its own, and an `app/` only if it holds `pyvenv.cfg`. Otherwise it stops with `fail  /opt/pwn-broker/python exists and is not a pwn-broker Python. move it or choose another folder`, or for `app/` with `fail  /opt/pwn-broker/app exists and is not a pwn-broker environment. move it or choose another folder`.
 - It refuses an `/opt/pwn-broker` that belongs to another user, for example one made as `kali` when you now run it as root. Move that folder aside (`mv /opt/pwn-broker /opt/pwn-broker.old`) or run the installer as that user.
 - It works in `/opt/pwn-broker/.install.<random>` and removes it at the end. After a kill or a power cut that folder can be left behind, and it may hold the previous install.
 
@@ -77,7 +77,7 @@ python3 -m venv .venv && .venv/bin/pip install -e . && .venv/bin/python release/
 sh install.sh --from dist/pwn-broker-0.1.0-linux-x86_64.tar.gz
 ```
 
-The first two commands need `git` and `python3-venv` (`apt install python3-venv git`); installing the app does not. That `.venv` is the build machine's own environment and its dependencies are not pinned; what goes into the release file is. `release/build.py` makes its own build environment with the Python it packs. [CONTRIBUTING.md](../CONTRIBUTING.md#building-a-release-file) has the build's options.
+The `git clone` line needs `git` and the `python3 -m venv` line needs `python3-venv` (`apt install python3-venv git`); installing the app needs neither. That `.venv` is the build machine's own environment and its dependencies are not pinned; what goes into the release file is. `release/build.py` makes its own build environment with the Python it packs. [CONTRIBUTING.md](../CONTRIBUTING.md#building-a-release-file) has the build's options.
 
 ## The launch and the prompt
 
@@ -91,6 +91,8 @@ record [target]            record this terminal window for a target of the open 
 
 Launch prints `pwn-broker <version>` and runs its checks: vim, the terminal, tar, a desktop session, PATH, the box folders, asciinema and the VPN, and whether a newer release exists unless `check_updates` is off. Then it offers a new box, an import, any active box to resume, or a finished box that is still on disk to reopen. Started inside an active box's folder, it opens that box. Only one box is open at a time.
 
+pwn-broker is for Kali Linux with a desktop session, run by the user who installed it. Started as anyone else, it prints `fail  pwn-broker was installed by <user>; run it as <user>` and exits with status 1. `record` refuses the same way, with `fail  record must run as <user>, the user who installed pwn-broker. run record first, then sudo inside it`.
+
 `setup` and the launch make `~/pwn-broker/active` and `wrapped` without asking; the `folders` check speaks only when it cannot make them.
 
 Everything the app prints is indented two spaces, apart from the prompt line, the launch header, headings, `setup`'s lines and output meant to be copied. What each command prints has one blank line above it and one below. Every status line starts with `ok`, `warn` or `fail`, so it reads without colour.
@@ -98,7 +100,7 @@ Everything the app prints is indented two spaces, apart from the prompt line, th
 - A yes or no question takes `y`, `yes`, `n`, `no`, or Enter for its default, in any case. Anything else gets `fail  answer y or n` and the question again.
 - A wrong argument gets the command's usage under the `fail` line, such as `usage: target rename <target>`.
 - On a terminal, the one column a table names is cut to fit and ends in `...`; piped output is whole.
-- A control character in a value the app prints (a hostname, a credential, a line of OpenVPN's log) is shown as `?`, so it cannot move the cursor or change the terminal. `cred show` and `path` print the value exactly.
+- A control character in a value the app prints (a hostname, a credential, a line of OpenVPN's log) is shown as `?`, so it cannot move the cursor or change the terminal. A tab stays a tab, except in a table cell, where it is a space. `cred show` and `path` print the value exactly.
 
 ## Every command
 
@@ -334,7 +336,7 @@ A package is one zip for one build of one tool: a manifest, the upstream licence
 - Every download and every cached zip is checked against the size and SHA-256 in the index before it is used. The index itself is not signed, so the check catches corruption and a swapped zip, not who published the index.
 - A Python tool gets its own virtual environment, built from the bundled wheels with no network access, wheels only and hash checking on. Its `wheels.lock` is checked line by line before pip reads it.
 - The first set of packages is x86_64 only, and a package built for another architecture is refused at install.
-- `record`, `asciinema`, `openvpn`, `ping` and `ip` are names a package's commands may not use.
+- A package's commands may not take a name the app or the system already uses: `sh`, `bash`, `dash`, `zsh`, `fish`, `sudo`, `su`, `doas`, `env`, `python`, `python3`, `pip`, `pip3`, `sed`, `cut`, `mkdir`, `kill`, `cat`, `rm`, `ls`, `cp`, `mv`, `ln`, `tar`, `vim`, `vi`, `pwn-broker`, `record`, `asciinema`, `openvpn`, `ping` and `ip`.
 
 ### Runtimes
 
@@ -407,7 +409,7 @@ It refuses while a window is recording for the box or one of the box's tools is 
 
 Links and special files (named pipes, sockets, devices) in a box are not archived. `export` and `finish` list them, and `finish` says how many will go when the folder is removed. Unpacking refuses any entry that would land outside the box folder.
 
-`pwn-broker import <file>` unpacks an exported or finished box into `active/`. With no file it asks again with `fail  give the path of an exported box`, and a folder gets `fail  <path> is a folder, not an exported box`. `import`, and reopening a finished box from the menu, offer to install the box's tools again, at the same builds and checked against the SHA-256 the box recorded. A tool that requires a runtime comes back with it: the one already on the machine, at any build, or the latest in the index; when that is not the build the box recorded, a line says so. The `/etc/hosts` lines come back when the box opens.
+`pwn-broker import <file>` unpacks an exported or finished box into `active/`. `pwn-broker import` with no file prints `fail  import needs a file: pwn-broker import <file>` and exits with status 2, and `pwn-broker import ""` prints `fail  give the path of an exported box` once and stops. The start menu's `import a box from a file` asks for the file again after that line until it gets one. A folder gets `fail  <path> is a folder, not an exported box`. `import`, and reopening a finished box from the menu, offer to install the box's tools again, at the same builds and checked against the SHA-256 the box recorded. A tool that requires a runtime comes back with it: the one already on the machine, at any build, or the latest in the index; when that is not the build the box recorded, a line says so. The `/etc/hosts` lines come back when the box opens.
 
 ## Settings
 

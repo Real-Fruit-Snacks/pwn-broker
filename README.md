@@ -13,15 +13,15 @@ Keeps a box's targets, notes, creds and tools in order
 curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/download/install.sh | sh
 ```
 
-Run it as the user who will use pwn-broker, not with `sudo`; it asks for `sudo` once if it has to create `/opt/pwn-broker`. It downloads one release file from this repository and checks it against its SHA-256 in `SHA256SUMS.txt`. Then it puts the app and its own Python in `/opt/pwn-broker` and adds one PATH line to `~/.zshrc`, and to `~/.bashrc` if you have one. It needs `sh`, `tar`, `gzip`, `sha256sum` and `curl`, and no Python from the machine. x86_64 Linux with glibc only. Run it again to upgrade.
+Run it as the user who will use pwn-broker, not with `sudo`; it uses `sudo` only to create `/opt/pwn-broker`, when it has to. It downloads one release file from this repository and checks it against its SHA-256 in `SHA256SUMS.txt`. Then it puts the app and its own Python in `/opt/pwn-broker` and adds one PATH line to `~/.zshrc`, and to `~/.bashrc` if you have one. It needs `sh`, `tar`, `gzip`, `sha256sum` and `curl`, and no Python from the machine. x86_64 Linux with glibc only. Run it again to upgrade.
 
 No network on the Kali machine: copy `pwn-broker-<version>-linux-x86_64.tar.gz` and `install.sh` from the [latest release](https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest) across and run `sh install.sh --from pwn-broker-<version>-linux-x86_64.tar.gz`. It prints the file's SHA-256 for you to compare with the release page, and contacts nothing. The [guide](docs/guide.md#install-and-upgrade) has the options, how to build a release file from a checkout, and what the install trusts.
 
-I solve Hack The Box machines and want each one kept in order the way an engagement would be. Without that, a box leaves scan output, notes, credentials and downloaded tools scattered across the machine, and nothing records which box any of it belonged to. So I launch `pwn-broker` when I start a box. It asks a few questions, builds the workspace, opens my notes in vim, and stays open as a prompt for the whole session. When the box is done it packs everything into one archive and takes its tools off again.
+I solve Hack The Box machines and want each one kept in order the way an engagement would be. Without that, a box leaves scan output, notes, credentials and downloaded tools scattered across the machine, and nothing records which box any of it belonged to. So I launch `pwn-broker` when I start a box: it asks a few questions, builds the workspace, opens my notes in vim, and stays open as a prompt for the whole session. When the box is done it packs everything into one archive and takes its tools off again. It is for Kali Linux with a desktop session, run by the user who installed it.
 
 ## What a box looks like
 
-`pwn-broker new`, then `cred add` and `finish` at the prompt, as root:
+`pwn-broker new`, then `cred add` and `finish` at the prompt:
 
 ```text
 $ pwn-broker new
@@ -70,7 +70,7 @@ forest/dc01 > finish
   ok    removed 1 line from /etc/hosts
 ```
 
-Left out: the version line and the launch checks above `New box`, the six questions `cred add` asks, and finish's last question, whether to remove the working folder. The lines are what the app's code printed, run with stand-ins for the ping, `/etc/hosts` and the note's terminal, and with the paths a user called kali would see.
+Left out: the version line and the launch checks above `New box`, the `New credential` heading and the six questions `cred add` asks, and finish's last question, whether to remove the working folder, with the `ok    removed <folder>` line that follows it. The lines are what the app's code printed, run with stand-ins for the ping, `/etc/hosts` and the note's terminal, and with the paths a user called kali would see.
 
 ## What's in it
 
