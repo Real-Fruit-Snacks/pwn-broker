@@ -389,14 +389,17 @@ One record for the whole box, in `creds.toml`. A password found on one machine o
 
 ```
 forest/dc01 > cred add
-  username   > svc-alfresco
-  domain     [htb.local] >
-  secret     > p@ss "word" with spaces\
-  kind       [password] >
-  found on   [dc01] >
-  note       >
-ok  cred 3 saved, found on dc01
-ok  lists updated: 3 usernames, 2 passwords, 2 pairs
+
+New credential
+  username     > svc-alfresco
+  domain       [htb.local] >
+  secret       > p@ss "word" with spaces\
+  kind         [password] >
+  found on     [dc01] >
+  note         >
+
+  ok    cred 3 saved, found on dc01
+  ok    lists updated: 3 usernames, 2 passwords, 2 pairs
 ```
 
 - One field at a time. Each answer is taken exactly as typed: no quotes needed, no escaping, nothing interpreted.
@@ -491,9 +494,11 @@ A finished box whose working folder I kept shows in the launch menu as a box to 
 
 ```
 # pwn-broker import /mnt/share/2026-11-14_htb_forest.exported.tar.gz
-ok     unpacked to ~/pwn-broker/active/2026-11-14_htb_forest
-ok     2 targets
-ok     note opened
+  ok    9 checks passed
+
+  ok    unpacked to ~/pwn-broker/active/2026-11-14_htb_forest
+  ok    2 targets
+
 forest/dc01 >
 ```
 
@@ -745,7 +750,7 @@ The sketch shortens `status`; it keeps every row it has now. It is what the app 
 
 **Left to the builder.** How the console tracks whether the last thing printed was a blank line; the exact names of the new console methods; how a command declares its usage line; where each existing hand-padded list moves to the shared function.
 
-**Checked by hand afterwards.** On 2026-11-16, the whole flow in the Kali under WSL (2026.2, as root, Kali's qterminal), every command, as in the test that found the above: the layout matched the sketch, and each row of the table of fixes behaved as written. On qterminal a program ended by a signal leaves its window open, which is why the app also signals a terminal started only for the note's vim.
+**Checked by hand afterwards.** On 2026-11-16, the whole flow in the Kali under WSL (2026.2, as root, Kali's qterminal), every command, as in the test that found the above. Seen: the layout as the sketch shows it; one note window, with `ok    the note is already open`, and neither the vim nor its terminal left after `finish` removed the folder; the `-2` folder and archive for a second box of the same name on the same day; both `import` messages; `exit` and `clear`; `fail  answer y or n` at a yes or no question; the usage line under a wrong argument; a first launch that asked nothing about folders; a long hash cut with `...` in `cred list`. Not seen by hand: `vpn log`'s lines, the tools rows before `finish` with several tools, and a note that gained unsaved changes or changed on disk between `finish`'s two questions. On qterminal a program ended by a signal leaves its window open, which is why the app also signals a terminal started only for the note's vim.
 
 **Known, and left.** After Ctrl-C at a yes or no question, the next line follows directly under the question. `--help` and `--version` are printed without colour. On a terminal that hosts all its windows in one server process (gnome-terminal), the app closes the note's vim and cannot close the window; whether that terminal then closes the window by itself has not been tried.
 
@@ -769,14 +774,17 @@ Ships in the first release, with phases 1 and 3. It adds `record` and `replay`, 
 
 ```
 # record 10.10.10.161
-ok  recording this window for dc01 (forest)
-    targets/dc01/recordings/2026-11-14_1432.cast
-    exit this shell to stop
+
+  ok    recording this window for dc01 (forest)
+        targets/dc01/recordings/2026-11-14_1432.cast
+        exit this shell to stop
+
 [rec dc01] ┌──(root㉿kali)-[~]
 └─# exit
-ok  recording saved, 14 min
-    targets/dc01/recordings/2026-11-14_1432.cast
-    targets/dc01/recordings/2026-11-14_1432.txt
+
+  ok    recording saved, 14 min
+        targets/dc01/recordings/2026-11-14_1432.cast
+        targets/dc01/recordings/2026-11-14_1432.txt
 ```
 
 - The target can be given as an IP, a hostname or a name, matched the way `target use` matches. With no target, it records for the box's last-used target and says which.
@@ -800,7 +808,8 @@ ok  recording saved, 14 min
 
 ```
 # record 10.10.10.200
-10.10.10.200 is not a target of forest. add it? [y/N]
+
+  10.10.10.200 is not a target of forest. add it? [y/N] >
 ```
 
 On yes, `record` asks the same questions as `target add`, with the address filled in, and creates the target exactly as `target add` does: folders, note section, lists, the `/etc/hosts` offer and the ping. Then it records. The prompt's current target does not change.
@@ -848,9 +857,11 @@ cast     2026-11-14_1432.cast
 
 ```
 forest/dc01 > replay
- n  started            length   size
- 1  2026-11-14 14:32   14 min   212 KB
- 2  2026-11-14 15:10   recording now
+
+  n  started           length         size
+  1  2026-11-14 14:32  14 min         212 KB
+  2  2026-11-14 15:10  recording now
+
 forest/dc01 > replay 1
 ```
 
@@ -894,9 +905,10 @@ A target with an IP and a hostname can have one line in `/etc/hosts`:
 
 ```
 forest/web01 > host add crm.board.htb dev.board.htb
-ok  web01 now answers to 3 names
-ok  /etc/hosts updated
-    10.10.11.5 board.htb crm.board.htb dev.board.htb
+
+  ok    web01 now answers to 3 names
+  ok    /etc/hosts updated
+        10.10.11.5 board.htb crm.board.htb dev.board.htb
 ```
 
 | Command | Does |
@@ -936,9 +948,10 @@ ok  /etc/hosts updated
 
 ```
 forest > vpn start
-vpn file     [/root/Downloads/lab_user.ovpn] >
-ok  copied to vpn/lab_user.ovpn
-ok  vpn up, 10.10.14.7 on tun0
+
+  vpn file     [/root/Downloads/lab_user.ovpn] >
+  ok    copied to vpn/lab_user.ovpn
+  ok    vpn up, 10.10.14.7 on tun0
 ```
 
 | Command | Does |
@@ -1196,14 +1209,16 @@ sha256 = "..."
 
 ```
 forest/dc01 > tool install kerbrute
-ok    kerbrute 1.0.3 installed
-run   kerbrute              from any terminal
+
+  ok    kerbrute 1.0.3 installed
+  run   kerbrute   from any terminal
 
 forest/dc01 > tool install ligolo-ng
-ok    ligolo-ng 0.9.2 installed
-run   ligolo-proxy          from any terminal
-      sudo /opt/pwn-broker/bin/ligolo-proxy
-files /opt/pwn-broker/upload/ligolo-ng/   agent  agent.exe
+
+  ok    ligolo-ng 0.9.2 installed
+  run   ligolo-proxy   from any terminal
+        sudo /opt/pwn-broker/bin/ligolo-proxy
+  files /opt/pwn-broker/upload/ligolo-ng   agent  agent.exe
 ```
 
 `list`, `search` and `info` work without a network, from the cached index.
@@ -1355,9 +1370,10 @@ wheels = "wheels"
 
 ```
 forest/dc01 > tool install certipy
-ok    python-3.13 3.13.18 installed (runtime, 34 MB)
-ok    certipy 5.1.0 installed
-run   certipy   from any terminal
+
+  ok    python-3.13 3.13.18 installed (runtime, 34 MB)
+  ok    certipy 5.1.0 installed
+  run   certipy   from any terminal
 ```
 
 The size is the runtime's zip in mebibytes, rounded to a whole number: 34 for this build.
