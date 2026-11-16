@@ -1,3 +1,4 @@
+import os
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from typing import Protocol, TextIO
@@ -73,6 +74,15 @@ _CELL_CONTROLS = {**_CONTROLS, 0x09: " "}
 def shown(text: str, *, cell: bool = False) -> str:
     """The text as the console writes it: each control character as "?" (and in a cell, a tab as a space)."""
     return text.translate(_CELL_CONTROLS if cell else _CONTROLS)
+
+
+def terminal_width(stream: TextIO) -> int | None:
+    """The width of the terminal this stream writes to; None when it has none, or the width is not known."""
+    # its own file descriptor: not another standard stream, not COLUMNS, and whatever TERM says
+    try:
+        return os.get_terminal_size(stream.fileno()).columns or None
+    except (AttributeError, ValueError, OSError):
+        return None
 
 
 def _cut_column(columns: list[str], cut: str | None) -> int | None:
@@ -190,7 +200,8 @@ class TermConsole:
         # indent: what every line but a heading and raw text starts with; setup passes none
         self._indent = indent
         self._color = theme.color_enabled(env)
-        options: dict = {"highlight": False, "markup": False, "emoji": False}
+        # legacy_windows off: every line is written to the stream as text with escape codes, tables too
+        options: dict = {"highlight": False, "markup": False, "emoji": False, "legacy_windows": False}
         if not self._color:
             options["color_system"] = None
         if out is not None:
@@ -315,8 +326,12 @@ class TermConsole:
         index = _cut_column(columns, cut)
         columns = [shown(name, cell=True) for name in columns]
         rows = [[shown(cell, cell=True) for cell in row] for row in rows]
-        if index is not None and self._rich.is_terminal:
-            rows = self._fit(columns, rows, index)
+        width = terminal_width(self._rich.file) if self._rich.is_terminal else None
+        if width is not None:
+            # rich would measure the standard streams, prefer COLUMNS and take 80 for TERM=dumb or unknown
+            self._rich.size = (width, self._rich.height)
+            if index is not None:
+                rows = self._fit(columns, rows, index, width)
         mute = self._style(theme.MUTE)
         table = Table(box=None, show_edge=False, pad_edge=False)
         for name in columns:
@@ -327,11 +342,11 @@ class TermConsole:
         self._rich.print(Padding(table, (0, 0, 0, len(self._indent)), expand=False))
         self._last = _LINE
 
-    def _fit(self, columns: list[str], rows: list[list[str]], index: int) -> list[list[str]]:
+    def _fit(self, columns: list[str], rows: list[list[str]], index: int, width: int) -> list[list[str]]:
         # shorten the one named column just enough for the table to fit the terminal
         widths = [max([cell_len(name), *(cell_len(row[i]) for row in rows)]) for i, name in enumerate(columns)]
         # columns are two spaces apart
-        over = len(self._indent) + sum(widths) + 2 * (len(columns) - 1) - self._rich.width
+        over = len(self._indent) + sum(widths) + 2 * (len(columns) - 1) - width
         if over <= 0:
             return rows
         keep = max(widths[index] - over, cell_len(columns[index]), CUT_KEEP + 3)

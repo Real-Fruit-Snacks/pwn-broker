@@ -164,10 +164,8 @@ def test_wide_table_not_cut_off_terminal(monkeypatch):
     assert "x" * 70 in out.getvalue() and "y" * 40 in out.getvalue()
 
 
-def test_table_cells_fold_on_narrow_terminal():
-    out = io.StringIO()
-    c = TermConsole({"NO_COLOR": "1"}, out=out)
-    c._rich = RichConsole(file=out, force_terminal=True, width=40, color_system=None)
+def test_table_cells_fold_on_narrow_terminal(monkeypatch):
+    c, out = screen(monkeypatch, width=40)
     c.table(["a", "b"], [["x" * 70, "y" * 40]])
     text = out.getvalue()
     assert "\u2026" not in text
@@ -236,13 +234,18 @@ def screen(monkeypatch, *answers, env=None, width=None, color=None):
     monkeypatch.setattr("prompt_toolkit.prompt", fake_prompt)
     console = TermConsole({"NO_COLOR": "1"} if env is None else env, out=out)
     if width is not None:
-        on_terminal(console, out, width, color)
+        on_terminal(monkeypatch, console, out, width, color)
     return console, out
 
 
-def on_terminal(console, out, width, color=None):
+def on_terminal(monkeypatch, console, out, width, color=None):
+    # the two things the console reads: whether its stream is a terminal, and that terminal's width
     console._rich = RichConsole(
-        file=out, force_terminal=True, width=width, color_system=color, highlight=False, markup=False, emoji=False
+        file=out, force_terminal=True, color_system=color, highlight=False, markup=False, emoji=False,
+        legacy_windows=False,
+    )  # fmt: skip
+    monkeypatch.setattr(
+        "pwn_broker.console.terminal_width", lambda stream: width if stream is out else None
     )
 
 
@@ -619,6 +622,78 @@ def test_a_table_without_cut_wraps_as_before_with_every_row_indented(monkeypatch
     assert "..." not in text and text.count("x") == 70 and text.count("y") == 40
     lines = text.splitlines()
     assert len(lines) > 2 and all(line.startswith("  ") for line in lines)
+
+
+TERMINAL_ENVIRONMENTS = [
+    {},
+    {"TERM": "unknown"},
+    {"TERM": "dumb"},
+    {"COLUMNS": "200", "LINES": "50"},
+    {"TERM": "unknown", "COLUMNS": "200"},
+]
+
+
+@pytest.mark.parametrize("environ", TERMINAL_ENVIRONMENTS)
+def test_the_cut_follows_the_width_of_the_stream_whatever_the_environment(monkeypatch, environ):
+    for name in ("TERM", "COLUMNS", "LINES"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environ.items():
+        monkeypatch.setenv(name, value)
+    c, out = screen(monkeypatch, width=40)
+    c.table(["n", "secret"], [["1", "s" * 60]], cut="secret")
+    [_, row] = _table_lines(out)
+    assert len(row) == 40 and row.endswith("...")
+
+
+class TerminalStream(io.StringIO):
+    """A stream on a terminal of its own: file descriptor 7, not one of the standard streams."""
+
+    def fileno(self):
+        return 7
+
+    def isatty(self):
+        return True
+
+
+@pytest.mark.parametrize("environ", TERMINAL_ENVIRONMENTS)
+def test_a_table_is_measured_against_the_terminal_it_is_written_to(monkeypatch, environ):
+    import os
+
+    for name in ("TERM", "COLUMNS", "LINES"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environ.items():
+        monkeypatch.setenv(name, value)
+    real = os.get_terminal_size
+
+    def size(fd=1):
+        # the standard streams are a wide terminal; the console's own stream is 40 wide
+        if fd == 7:
+            return os.terminal_size((40, 24))
+        if fd in (0, 1, 2):
+            return os.terminal_size((120, 30))
+        return real(fd)
+
+    monkeypatch.setattr(os, "get_terminal_size", size)
+    out = TerminalStream()
+    c = TermConsole({"NO_COLOR": "1"}, out=out)
+    c.table(["n", "secret"], [["1", "s" * 60]], cut="secret")
+    [_, row] = out.getvalue().splitlines()
+    assert len(row) == 40 and row.endswith("...")
+    # a table with nothing to cut wraps at that width too
+    c.table(["a", "b"], [["x" * 30, "y" * 30]])
+    assert all(len(line.rstrip()) <= 40 for line in out.getvalue().splitlines())
+
+
+def test_a_terminal_of_unknown_width_is_not_cut(monkeypatch):
+    import os
+
+    def size(fd=1):
+        raise OSError("not a terminal")
+
+    monkeypatch.setattr(os, "get_terminal_size", size)
+    out = TerminalStream()
+    TermConsole({"NO_COLOR": "1"}, out=out).table(["n", "secret"], [["1", "s" * 60]], cut="secret")
+    assert "s" * 60 in out.getvalue() and "..." not in out.getvalue()
 
 
 def test_cutting_a_column_that_is_not_there_is_an_error(monkeypatch):
