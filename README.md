@@ -92,7 +92,8 @@ Left out: the version line and the launch checks above `New box`, the `New crede
 - An install in a bare `debian:stable-slim` container with no Python and no network
 - Every command by hand in Kali 2026.2 under WSL 2, as root, with Kali's own qterminal, including building the release file there and upgrading an install made by the old installer
 - The published `v0.1.0` there too: the install line above, then a box with all six tools installed from the published index, each started once, and taken off again by `finish`
-- *Not* tested: a normal user with `sudo` (every Kali run so far is root); a full Kali desktop session; a real Hack The Box connection
+- And once more there as a normal user whose `sudo` asks for a password: the install line, then a box with `/etc/hosts`, the VPN, three tools, a recording, files made with `sudo` and `finish`
+- *Not* tested: a full Kali desktop session; a real Hack The Box connection
 
 [docs/tested.md](docs/tested.md) is the full record: counts, versions, dates and what each run checked.
 

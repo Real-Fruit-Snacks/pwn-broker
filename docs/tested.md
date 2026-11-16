@@ -24,7 +24,7 @@ Everything pwn-broker 0.1.0 has been run on, with the counts, versions and dates
 
 ## By hand on Kali
 
-All four in Kali 2026.2 under WSL 2 on Windows 11, as root, on 2026-11-16, with Kali's own Python 3.14.7.
+All five in Kali 2026.2 under WSL 2 on Windows 11, on 2026-11-16, with Kali's own Python 3.14.7: the first four as root, the last as a normal user.
 
 ### Every command
 
@@ -69,6 +69,21 @@ At commit cf585e7.
 - `kerbrute version`, `certipy -h`, `targetedKerberoast -h` and `ligolo-proxy -h` each started and printed their own first lines, and the ten upload files were in `/opt/pwn-broker/upload`. Kali's `python3` was still `/usr/bin/python3`, 3.14.7.
 - `finish` listed the six tools and the runtime as to be removed, wrote the archive and removed the folder. Afterwards `bin/` held only `pwn-broker` and `record`, `upload/` was empty, `tools.log` had an install and a finish line for each of the seven packages, and neither the note's vim nor its qterminal window was left.
 
+### A normal user with `sudo`
+
+`v0.1.0`, as a user named `kali` made with `useradd`: in the `sudo` group, with zsh and Kali's own `.zshrc`, and a `sudo` that asks for a password. `sudo -K` was run before each step below that needs `sudo`, so every prompt showed.
+
+- With root's `/opt/pwn-broker` still in place, the install line printed `fail  /opt/pwn-broker belongs to root. run the installer as that user` and changed nothing. After `sudo mv /opt/pwn-broker /opt/pwn-broker.old`, the same line asked for the `sudo` password once, on the terminal though the script arrives on a pipe, printed every `ok` line, and left `/opt/pwn-broker` and everything in it owned by `kali`. Run again over itself it asked for no password.
+- A new box with a target: `add web01's hostnames to /etc/hosts? [Y/n]` asked for the password and wrote the line, and `host add` rewrote it. `/etc/hosts` stayed root's, mode 644. The note opened in one vim, in a terminal window of its own.
+- `vpn start` copied the file, asked for the password and printed `ok    vpn up, 10.10.14.7 on tun0`. OpenVPN ran as root; its settings copy, log, process ID file and marker in `/opt/pwn-broker/run/vpn` belonged to `kali`. `vpn status`, `vpn log` and `status` showed the tunnel.
+- `tool install` ran for `kerbrute`, `ligolo-ng` and `certipy` from the published index, and `certipy` brought the runtime. `kerbrute version`, `certipy -h` and `ligolo-proxy -h` each started, and `sudo /opt/pwn-broker/bin/ligolo-proxy -h` ran the installed one.
+- `sudo /opt/pwn-broker/bin/pwn-broker` printed `fail  pwn-broker was installed by kali; run it as kali`, and `sudo /opt/pwn-broker/bin/record` printed `fail  record must run as kali, the user who installed pwn-broker. run record first, then sudo inside it`. Each exited with status 1.
+- `record` in a second window recorded as `kali`, and `sudo id` inside it worked. Two wrong passwords and the right one were typed at `sudo`'s prompt; none of the three is in the `.cast` or the `.txt`.
+- `finish` asked for the password to take the line out of `/etc/hosts` and again to stop the VPN, printed `warn  root's home could not be checked for ligolo-ng's data`, and removed the three tools and the runtime. Afterwards `/etc/hosts` was byte for byte what it was before the box, nothing under `/opt/pwn-broker` or the home folder belonged to root, and no OpenVPN, `tun0`, note vim or terminal window was left.
+- In another box, Ctrl-C at `sudo`'s prompt for `/etc/hosts` printed `warn  /etc/hosts was not changed: sudo was cancelled` and the line to add by hand. Three wrong passwords at `host file on` printed `warn  /etc/hosts was not changed: cp exited 1` and the same line. Ctrl-C at `sudo`'s prompt in `vpn start` printed `cancelled`, and `vpn status` then said `not up`.
+- In another, `sudo` made two files and a folder with a file in it under a target's `scans/`, all root's, and one more file only root could read. `finish` asked for the password once, wrote and verified the archive with all four files in it, and removed the working folder.
+- With `tools_index` set to a folder filled by `pwn-shop`'s `fetch.sh`, and the shell in a network namespace whose only interface was `lo`, down: the launch ran its checks, a box was made, `tool install` ran for `certipy` with the runtime, `ligolo-ng` and `pspy`, and `finish` removed them.
+
 ## pwn-shop's packages
 
 - The seven packages in `pwn-shop`, in its CI on `main` (run 43772170454): the six tools and the `python-3.13` runtime. Its `packages` job, on Ubuntu 24.04, built the runtime and build 3 of `certipy` and `targetedkerberoast`, downloaded the four packages already published and rebuilt each to the same bytes, and installed all seven through this app's own code under Python 3.12, 3.13 and 3.14, then started each tool's commands. Its `kali` job, in the official Kali image (Kali 2026.3, Python 3.14.8) with the container's network confirmed off, installed the runtime and all six tools through this app's own code and started each tool. The run then published the runtime and build 3 of `certipy` and `targetedkerberoast`. Builds 1 and 2 of those two were withdrawn afterwards, so every package has exactly one published build.
@@ -78,9 +93,9 @@ At commit cf585e7.
 ## Not tested
 
 - A full Kali desktop session. CI's Kali run used a virtual display and `xterm`, and the run by hand used Kali's own qterminal under WSL, so Xfce, its window manager and focus have not been tried. Nor has your own VM.
-- A normal user. Both Kali runs are root, so `sudo` for `/etc/hosts` and OpenVPN has not run, and neither has the installer's own `sudo` step. The recording, `/etc/hosts`, VPN and ping part has run on Kali only as root: in a container, with a virtual display and an OpenVPN file with no server, and by hand under WSL.
+- A normal user anywhere but that one run by hand under WSL. CI's Kali run is root. A `sudo` that needs no password, as `kali-grant-root` sets up, has not been tried.
 - A real Hack The Box connection. The OpenVPN file in the Kali run has no server behind it.
-- A real tool package against a real target. `pwn-shop`'s CI installed and started each one on Kali, in a container, and all six were installed from the published index, started once and removed by `finish` in the run by hand under WSL. None has been run on a full Kali desktop, against a real target, or by a normal user with `sudo`.
+- A real tool package against a real target. `pwn-shop`'s CI installed and started each one on Kali, in a container, and all six were installed from the published index, started once and removed by `finish` in the run by hand under WSL. Three were installed and started by a normal user there. None has been run on a full Kali desktop or against a real target.
 - On a terminal that hosts all its windows in one server process, such as gnome-terminal, `finish` closes the note's vim but cannot close its window. Whether that terminal then closes the window by itself has not been tried.
 
 ## Known limits
