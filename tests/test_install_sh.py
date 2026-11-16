@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "install.sh"
 needs_sh = pytest.mark.skipif(shutil.which("sh") is None, reason="needs sh")
 not_on_windows = pytest.mark.skipif(sys.platform == "win32", reason="file modes need a POSIX file system")
+needs_links = pytest.mark.skipif(sys.platform == "win32", reason="symbolic links need a POSIX file system")
 
 SHELLS = [s for s in ("sh", "dash") if shutil.which(s)]
 shells = pytest.mark.parametrize("shell", SHELLS)
@@ -198,33 +199,56 @@ def add_folder(tar, name):
     tar.addfile(info)
 
 
-def python_archive():
+class Link(str):
+    """A symbolic link member, pointing at this target."""
+
+
+def add_link(tar, name, target):
+    info = tarfile.TarInfo(name)
+    info.type = tarfile.SYMTYPE
+    info.linkname = target
+    tar.addfile(info)
+
+
+def python_archive(bin_is_a_link=False):
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
         add_folder(tar, "python")
-        add_folder(tar, "python/bin")
-        add_file(tar, "python/bin/python3", FAKE_PYTHON.encode(), 0o755)
+        if bin_is_a_link:
+            add_folder(tar, "python/real-bin")
+            add_file(tar, "python/real-bin/python3", FAKE_PYTHON.encode(), 0o755)
+            add_link(tar, "python/bin", "real-bin")
+        else:
+            add_folder(tar, "python/bin")
+            add_file(tar, "python/bin/python3", FAKE_PYTHON.encode(), 0o755)
         add_file(tar, "python/lib/README", b"stand-in\n")
     return buffer.getvalue()
 
 
+def release_members():
+    return {
+        "python.tar.gz": python_archive(),
+        "wheels": None,
+        f"wheels/pwn_broker-{VERSION}-py3-none-any.whl": b"wheel\n",
+        "wheels.lock": b"pwn-broker==" + VERSION.encode() + b" --hash=sha256:" + b"0" * 64 + b"\n",
+        "asciinema": b"asciinema stand-in\n",
+        "licences": None,
+    }
+
+
 def write_release(path, top=f"pwn-broker-{VERSION}", members=None, extra_tops=()):
-    """A stand-in release file. members maps names inside the top folder to bytes (None: a folder)."""
+    """A stand-in release file. members maps names inside the top folder to bytes, None for a
+    folder, or a Link."""
     if members is None:
-        members = {
-            "python.tar.gz": python_archive(),
-            "wheels": None,
-            f"wheels/pwn_broker-{VERSION}-py3-none-any.whl": b"wheel\n",
-            "wheels.lock": b"pwn-broker==" + VERSION.encode() + b" --hash=sha256:" + b"0" * 64 + b"\n",
-            "asciinema": b"asciinema stand-in\n",
-            "licences": None,
-        }
+        members = release_members()
     with tarfile.open(path, mode="w:gz") as tar:
         for name in (top, *extra_tops):
             add_folder(tar, name)
         for name, data in members.items():
             if data is None:
                 add_folder(tar, f"{top}/{name}")
+            elif isinstance(data, Link):
+                add_link(tar, f"{top}/{name}", data)
             else:
                 add_file(tar, f"{top}/{name}", data, 0o755 if name == "asciinema" else 0o644)
     return path
@@ -455,6 +479,39 @@ def test_a_file_that_is_not_a_release_changes_nothing(rig):
     assert rig.calls() == []
 
 
+def linked_releases(tmp):
+    file_link = release_members()
+    file_link["asciinema"] = Link("wheels.lock")
+    folder_link = release_members()
+    del folder_link[f"wheels/pwn_broker-{VERSION}-py3-none-any.whl"]
+    folder_link["wheels"] = Link("licences")
+    python_bin_link = release_members()
+    python_bin_link["python.tar.gz"] = python_archive(bin_is_a_link=True)
+    found = {}
+    for case, members in (
+        ("asciinema is a link", file_link),
+        ("wheels is a link", folder_link),
+        ("python/bin is a link", python_bin_link),
+    ):
+        folder = tmp / case.replace(" ", "-").replace("/", "-")
+        folder.mkdir()
+        found[case] = write_release(folder / RELEASE_NAME, members=members)
+    return found
+
+
+@needs_links
+def test_a_link_inside_a_release_file_changes_nothing(rig):
+    previous_install(rig)
+    before = snapshot(rig.opt)
+    for case, release in linked_releases(rig.tmp).items():
+        result = rig.run("--from", sh_path(release), "--no-path")
+        assert result.returncode == 1, case
+        assert result.stderr.splitlines() == [f"fail  {RELEASE_NAME} is not a pwn-broker release file"], case
+        assert snapshot(rig.opt) == before, case
+    # the Python never ran: python/bin was refused before it was used
+    assert rig.calls() == []
+
+
 def test_a_wheel_or_a_folder_is_refused_before_anything_happens(rig):
     wheel = rig.tmp / f"pwn_broker-{VERSION}-py3-none-any.whl"
     wheel.write_bytes(b"PK\x03\x04")
@@ -496,6 +553,43 @@ def test_an_app_folder_that_is_not_ours_is_refused_and_python_is_kept(rig):
         f"fail  {rig.opt.as_posix()}/app exists and is not a pwn-broker environment. move it or choose another folder"
     ]
     assert snapshot(rig.opt) == before
+
+
+def link_to_elsewhere(rig, name, make):
+    target = rig.tmp / f"elsewhere-{name}"
+    make(target)
+    (rig.opt / name).symlink_to(target, target_is_directory=True)
+    return target
+
+
+@needs_links
+@pytest.mark.parametrize(
+    ("name", "line"),
+    [
+        ("python", "fail  {opt}/python exists and is not a pwn-broker Python. move it or choose another folder"),
+        ("app", "fail  {opt}/app exists and is not a pwn-broker environment. move it or choose another folder"),
+    ],
+)
+def test_a_python_or_app_that_is_a_link_is_refused(rig, name, line):
+    rig.opt.mkdir()
+
+    def make(target):
+        # a real Python or environment, reached through a link
+        if name == "python":
+            (target / "bin").mkdir(parents=True)
+            (target / "bin/python3").write_text("python\n")
+        else:
+            target.mkdir()
+            (target / "pyvenv.cfg").write_text("home = elsewhere\n")
+
+    target = link_to_elsewhere(rig, name, make)
+    before, before_target = snapshot(rig.opt), snapshot(target)
+    result = rig.install("--no-path")
+    assert result.returncode == 1
+    assert result.stderr.splitlines() == [line.format(opt=rig.opt.as_posix())]
+    assert (rig.opt / name).is_symlink() and os.readlink(rig.opt / name) == str(target)
+    assert snapshot(rig.opt) == before
+    assert snapshot(target) == before_target
 
 
 def test_a_python_that_does_not_run_changes_nothing(rig):

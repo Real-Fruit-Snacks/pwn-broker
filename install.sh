@@ -242,9 +242,20 @@ main() {
     if [ ! -f "$top/python.tar.gz" ] || [ ! -f "$top/wheels.lock" ] || [ ! -d "$top/wheels" ] || [ ! -f "$top/asciinema" ]; then
         fail "$not_release"
     fi
+    for part in python.tar.gz wheels.lock wheels asciinema; do
+        if [ -L "$top/$part" ]; then
+            fail "$not_release"
+        fi
+    done
 
     mkdir "$WORK/py" || fail "cannot create a folder in $WORK"
     tar -xzf - --no-same-owner -C "$WORK/py" <"$top/python.tar.gz" >/dev/null 2>&1 || fail "$not_release"
+    # python/bin/python3 is a link upstream; the folders above it must be real
+    for part in python python/bin; do
+        if [ -L "$WORK/py/$part" ] || [ ! -d "$WORK/py/$part" ]; then
+            fail "$not_release"
+        fi
+    done
     no_python="the Python in this release does not run on this machine. pwn-broker needs x86_64 Linux with glibc"
     "$WORK/py/python/bin/python3" -I -c 'import sys' >/dev/null 2>&1 || fail "$no_python"
     PY_VERSION="$("$WORK/py/python/bin/python3" -I -c 'import platform; print(platform.python_version())' 2>/dev/null)" || fail "$no_python"
