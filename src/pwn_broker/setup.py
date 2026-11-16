@@ -60,11 +60,13 @@ def install_data(paths: AppPaths) -> None:
 
 
 def write_launcher(paths: AppPaths, python: Path) -> Path:
+    # -I: with -m, python puts the current folder first on its path, and the app is started from
+    # box folders that hold files taken from targets
     launcher = paths.bin / "pwn-broker"
-    write_text(launcher, f'#!/bin/sh\nexec "{python.as_posix()}" -m pwn_broker "$@"\n')
+    write_text(launcher, f'#!/bin/sh\nexec "{python.as_posix()}" -I -m pwn_broker "$@"\n')
     os.chmod(launcher, 0o755)
     record = paths.record_launcher
-    write_text(record, f'#!/bin/sh\nexec "{python.as_posix()}" -m pwn_broker.record "$@"\n')
+    write_text(record, f'#!/bin/sh\nexec "{python.as_posix()}" -I -m pwn_broker.record "$@"\n')
     os.chmod(record, 0o755)
     return launcher
 

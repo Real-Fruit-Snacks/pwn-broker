@@ -810,7 +810,11 @@ def test_prepare_restores_a_missing_record_launcher(env, quiet):
     setup.write_launcher(env.paths, Path("/old/python"))
     env.paths.record_launcher.unlink()
     assert cli._prepare(env) is None
-    assert env.paths.record_launcher.read_bytes().startswith(b"#!/bin/sh\nexec ")
+    # the same text setup writes: python runs isolated from the folder it is started in
+    python = Path(sys.executable).as_posix()
+    assert env.paths.record_launcher.read_bytes() == (
+        f'#!/bin/sh\nexec "{python}" -I -m pwn_broker.record "$@"\n'.encode()
+    )
     assert not any(k in ("warn", "fail") for k, _ in env.console.lines)
 
 

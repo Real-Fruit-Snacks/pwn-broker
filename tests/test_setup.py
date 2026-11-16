@@ -105,7 +105,7 @@ def test_install_data_on_partly_installed_folder(paths):
 def test_launcher_content(paths):
     p = write_launcher(paths, Path("/opt/pwn-broker/app/bin/python"))
     assert p == paths.bin / "pwn-broker"
-    assert p.read_bytes() == b'#!/bin/sh\nexec "/opt/pwn-broker/app/bin/python" -m pwn_broker "$@"\n'
+    assert p.read_bytes() == b'#!/bin/sh\nexec "/opt/pwn-broker/app/bin/python" -I -m pwn_broker "$@"\n'
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="no file modes on Windows")
@@ -270,7 +270,7 @@ def test_install_data_creates_recording_folders_and_can_run_twice(paths):
 def test_record_launcher_content(paths):
     write_launcher(paths, Path("/opt/pwn-broker/app/bin/python"))
     assert paths.record_launcher.read_bytes() == (
-        b'#!/bin/sh\nexec "/opt/pwn-broker/app/bin/python" -m pwn_broker.record "$@"\n'
+        b'#!/bin/sh\nexec "/opt/pwn-broker/app/bin/python" -I -m pwn_broker.record "$@"\n'
     )
 
 
@@ -278,3 +278,24 @@ def test_record_launcher_content(paths):
 def test_record_launcher_is_executable(paths):
     write_launcher(paths, Path("/x/python"))
     assert os.stat(paths.record_launcher).st_mode & 0o777 == 0o755
+
+
+def test_the_working_folder_cannot_stand_in_for_a_module_the_app_imports(tmp_path):
+    # a box folder holds files taken from targets; with -m, python would put it first on its path
+    here = tmp_path / "box"
+    here.mkdir()
+    planted = 'raise RuntimeError("planted module imported")\n'
+    (here / "tomllib.py").write_text(planted, encoding="utf-8")
+    shown = f"pwn-broker {__import__('pwn_broker').__version__}"
+
+    def start(*flags):
+        return subprocess.run(
+            [sys.executable, *flags, "-m", "pwn_broker", "--version"],
+            cwd=here, capture_output=True, text=True, timeout=60,
+        )  # fmt: skip
+
+    isolated = start("-I")
+    assert (isolated.returncode, isolated.stdout.strip(), isolated.stderr) == (0, shown, "")
+    # without the flag the planted file is the one imported, so the flag is what protects it
+    plain = start()
+    assert plain.returncode != 0 and "planted module imported" in plain.stderr
