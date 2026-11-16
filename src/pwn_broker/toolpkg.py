@@ -26,6 +26,11 @@ MAX_DIRECTORY_BYTES = 4 * 1024 * 1024
 # the Linux limits on a path and on one part of it
 MAX_PATH_BYTES = 4096
 MAX_PART_BYTES = 255
+# how many parts a name in a package may have. Every folder on the way to a file is looked at
+# again for each file, and each look walks the whole path, so a name 1,900 parts deep made 20
+# files take six seconds; and a tree that deep cannot always be removed again. The Python
+# runtime's deepest name has 11 parts.
+MAX_DEPTH = 64
 # a dot only between other characters, so a name is never ".", "..", hidden or ends with a dot
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*")
 _SERIES = re.compile(r"[0-9]+\.[0-9]+")
@@ -44,19 +49,23 @@ RESERVED_COMMANDS = frozenset(
     # shells, and what starts a program for one
     "sh bash dash zsh fish env "
     # what asks for a password or changes who you are
-    "sudo sudoedit su doas pkexec run0 passwd login ssh scp sftp gpg "
-    # Python and pip; their versioned names are refused by _VERSIONED_PYTHON
+    "sudo sudoedit su doas pkexec run0 passwd login newgrp visudo "
+    "ssh scp sftp ssh-agent ssh-add ssh-keygen gpg "
+    # Python and pip; python3.13, python3.13t, pip3.13 and the like are refused by _VERSIONED_PYTHON
     "python python3 pip pip3 "
     # what the app runs by name, which a test checks against the app's own code
     "chown cp rm kill ip ping tar vim openvpn x-terminal-emulator pwn-broker record asciinema "
     # what a shell's start-up files, its prompt and everyday lines run
     "sed cut mkdir cat ls mv ln vi grep awk find head tail chmod id uname test "
+    "whoami hostname sleep touch tee which ps tput dircolors xargs timeout nohup "
+    # what other programs start by name to show or edit something
+    "less more pager man nano editor "
     # what installs and manages the system
     "apt apt-get dpkg systemctl mount umount "
     # what fetches something to run
     "curl wget git".split()
 )
-_VERSIONED_PYTHON = re.compile(r"(?:python|pip)[0-9.]*")
+_VERSIONED_PYTHON = re.compile(r"(?:python|pip)[0-9][A-Za-z0-9._-]*")
 LOCK_LIMIT = 1024 * 1024
 # pip obeys options, URLs and markers in a requirements file; only exact pins with hashes pass
 _LOCK_LINE = re.compile(
@@ -156,10 +165,14 @@ def _byte_length(text: str) -> int:
 
 
 def too_long(text: str) -> str | None:
+    """What is wrong with the length of a name, to follow "has a name" or "has a target"."""
     if _byte_length(text) > MAX_PATH_BYTES:
         return f"longer than {MAX_PATH_BYTES} bytes"
-    if any(_byte_length(part) > MAX_PART_BYTES for part in text.split("/")):
-        return f"a part longer than {MAX_PART_BYTES} bytes"
+    parts = text.split("/")
+    if any(_byte_length(part) > MAX_PART_BYTES for part in parts):
+        return f"with a part longer than {MAX_PART_BYTES} bytes"
+    if len(parts) > MAX_DEPTH:
+        return f"with more than {MAX_DEPTH} parts"
     return None
 
 
@@ -189,13 +202,16 @@ def machine_arch() -> str:
 # _PRIVATE_HOME is refused with everything under it, _SHARED_HOME by its exact name.
 _PRIVATE_HOME = (
     ".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".password-store", ".mozilla", ".pki",
-    ".config/gcloud", ".config/gh", ".config/autostart", ".config/systemd", ".local/bin",
-    ".local/share/keyrings", ".local/share/applications",
+    ".vim", ".bashrc.d", ".config/gcloud", ".config/gh", ".config/git", ".config/fish",
+    ".config/chromium", ".config/autostart", ".config/systemd", ".config/environment.d",
+    ".local/bin", ".local/share/keyrings", ".local/share/applications",
 )  # fmt: skip
 _SHARED_HOME = frozenset(
-    ".config .local .local/share .cache .bashrc .zshrc .profile .bash_profile .bash_login "
-    ".bash_logout .zshenv .zprofile .zlogin .zlogout .bash_history .zsh_history .vimrc "
-    ".gitconfig .netrc .pgpass Desktop Documents Downloads".split()
+    ".config .local .local/share .local/state .cache .bashrc .zshrc .profile .bash_profile "
+    ".bash_login .bash_logout .bash_aliases .zshenv .zprofile .zlogin .zlogout .bash_history "
+    ".zsh_history .inputrc .xprofile .xinitrc .xsession .Xauthority .vimrc .tmux.conf "
+    ".gitconfig .git-credentials .netrc .pgpass "
+    "Desktop Documents Downloads Music Pictures Public Templates Videos".split()
 )
 
 
@@ -538,6 +554,9 @@ def _check_entries(infos: list[zipfile.ZipInfo]) -> dict[str, zipfile.ZipInfo]:
         if info.compress_type != zipfile.ZIP_STORED:
             # packages are stored, so there is nothing to decompress and no bomb to fear
             raise ToolError(f"package entry {info.filename!r} is compressed")
+        if info.compress_size != info.file_size:
+            # a stored entry holds exactly its bytes; zipfile reads as many as the first says
+            raise ToolError(f"package entry {info.filename!r} does not hold the bytes it declares")
         bare = _check_name(info.filename)
         if bare in seen:
             raise ToolError(f"package entry {info.filename!r} appears twice")
@@ -591,14 +610,24 @@ def _check_named_files(manifest: Manifest, seen: dict[str, zipfile.ZipInfo]) -> 
             raise ToolError(f"{manifest.python.wheels}: the package holds no wheels")
 
 
-def _make_folders(root: Path, parts: list[str]) -> Path:
+def make_folder(folder: Path) -> None:
+    """Makes one folder, mode 755 whatever the umask, and at no moment looser than that."""
+    folder.mkdir(mode=0o700)
+    folder.chmod(0o755)
+
+
+def make_folders(root: Path, parts: list[str], what: str) -> Path:
+    """The folder `parts` below root, making what is missing; a link is never taken for a folder."""
     folder = root
     for part in parts:
         folder = folder / part
-        if not folder.is_dir():
-            folder.mkdir()
-            # set after making, so the umask has no say
-            folder.chmod(0o755)
+        try:
+            found = os.lstat(folder)
+        except FileNotFoundError:
+            make_folder(folder)
+            continue
+        if not stat.S_ISDIR(found.st_mode):
+            raise ToolError(f"cannot unpack {what}: {folder} is in the way and is not a folder")
     return folder
 
 
@@ -624,7 +653,7 @@ def _make_dest(dest: Path, created: list[Path]) -> None:
             break
         missing.append(folder)
     for folder in reversed(missing):
-        folder.mkdir()
+        folder.mkdir(mode=0o700)
         created.append(folder)
         folder.chmod(0o755)
 
@@ -718,7 +747,7 @@ def _extract(zf: zipfile.ZipFile, seen: dict[str, zipfile.ZipInfo], dest: Path) 
     for bare, info in seen.items():
         parts = bare.split("/")
         if info.is_dir():
-            _make_folders(dest, parts)
+            make_folders(dest, parts, "the package")
             continue
         mode = 0o755 if parts[0] == "files" else 0o644
-        _write_member(zf, info, _make_folders(dest, parts[:-1]) / parts[-1], mode)
+        _write_member(zf, info, make_folders(dest, parts[:-1], "the package") / parts[-1], mode)

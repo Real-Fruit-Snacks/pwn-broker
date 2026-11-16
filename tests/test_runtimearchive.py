@@ -774,12 +774,14 @@ def test_a_target_part_of_255_bytes_passes_and_one_more_is_refused():
     refused([link("python/x", "a" * 256)], "longer than 255 bytes")
 
 
-def test_long_targets_through_a_chain_are_resolved_quickly():
-    # targets of 2,000 short parts, followed through a chain of 40 links
-    chain = [link(f"python/l{i}", "/".join(["."] * 2000) + f"/l{i + 1}") for i in range(39)]
-    deep = "/".join(["d"] * 800) + "/" + "/".join([".."] * 800)
+def test_the_longest_targets_through_a_chain_are_resolved_quickly():
+    # targets with as many parts as a name may have, followed through a chain of 40 links, for
+    # thousands of links: the most work the limits leave a crafted archive to ask for
+    depth = runtimearchive.MAX_DEPTH
+    chain = [link(f"python/l{i}", "/".join(["."] * (depth - 1)) + f"/l{i + 1}") for i in range(39)]
+    deep = "/".join(["d"] * (depth // 2)) + "/" + "/".join([".."] * (depth // 2))
     started = time.perf_counter()
-    check(chain + [link(f"python/x{i}", deep) for i in range(200)])
+    check(chain + [link(f"python/x{i}", deep) for i in range(5000)])
     assert time.perf_counter() - started < 5
 
 
@@ -848,3 +850,54 @@ def test_a_tar_that_ends_after_its_two_zero_blocks_unpacks(tmp_path):
     archive = write_gz(tmp_path / "rt.tar.gz", raw[: 3 * 1024 + 1024])
     unpack(archive, tmp_path / "rt")
     assert sorted(p.name for p in (tmp_path / "rt/python").iterdir()) == ["a", "b", "c"]
+
+
+# ---- round 2: depth, what is kept of each member, folders made closed
+
+
+def test_a_name_as_deep_as_a_name_may_be_passes():
+    check([file("/".join(["d"] * runtimearchive.MAX_DEPTH))])
+
+
+def test_a_name_deeper_than_a_name_may_be_is_refused():
+    refused([file("/".join(["d"] * (runtimearchive.MAX_DEPTH + 1)))], "more than 64 parts")
+
+
+def test_a_link_target_deeper_than_a_name_may_be_is_refused():
+    target = "/".join(["d"] * (runtimearchive.MAX_DEPTH + 1))
+    refused([link("python/l", target)], "more than 64 parts")
+
+
+def test_a_members_extended_headers_are_dropped_once_it_has_passed(tmp_path, monkeypatch):
+    # tarfile keeps every member; with a 15 KiB record on each of 20,000 that was 300 MiB
+    members = []
+    for number in range(5):
+        member = file(f"python/f{number}", 1)
+        member.pax_headers = {"comment": "x" * 1000}
+        members.append(member)
+    archive = make_tar(tmp_path / "rt.tar.gz", members)
+    kept = []
+    monkeypatch.setattr(runtimearchive, "_extract", lambda tar, seen, root: kept.extend(seen.values()))
+    unpack(archive, tmp_path / "rt")
+    assert len(kept) == 5
+    assert [member.pax_headers for member in kept] == [{}] * 5
+
+
+@posix_only
+def test_no_folder_of_a_runtime_is_ever_looser_than_it_ends_up(tmp_path, monkeypatch):
+    archive = make_tar(tmp_path / "rt.tar.gz", sample_members(), SAMPLE_DATA)
+    made = []
+    real = Path.mkdir
+
+    def watch(self, *args, **kwargs):
+        real(self, *args, **kwargs)
+        made.append((self.name, stat.S_IMODE(os.stat(self).st_mode)))
+
+    monkeypatch.setattr(Path, "mkdir", watch)
+    old = os.umask(0)
+    try:
+        unpack(archive, tmp_path / "python-3.13")
+    finally:
+        os.umask(old)
+    assert made
+    assert [entry for entry in made if entry[1] & 0o077] == []

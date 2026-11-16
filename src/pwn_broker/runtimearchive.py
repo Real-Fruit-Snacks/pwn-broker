@@ -16,7 +16,7 @@ from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
-from pwn_broker.toolpkg import MAX_PART_BYTES, MAX_PATH_BYTES, ToolError
+from pwn_broker.toolpkg import MAX_DEPTH, MAX_PART_BYTES, MAX_PATH_BYTES, ToolError, make_folders
 from pwn_broker.toolpkg import bad_characters as _bad_characters
 from pwn_broker.toolpkg import shown as _shown
 from pwn_broker.toolpkg import too_long as _too_long
@@ -223,7 +223,10 @@ class _Bounded:
 def _allowing(tar: tarfile.TarFile, reader: _Bounded) -> Iterator[tarfile.TarInfo]:
     for member in tar:
         yield member
-        # the member passed the checks: its data, and the next header, may now be read
+        # the member passed the checks. tarfile keeps every member it has read, and with it the
+        # extended header records it came with, which nothing here reads again
+        member.pax_headers = {}
+        # its data, and the next header, may now be read
         data = -(-member.size // _BLOCK) * _BLOCK if _is_file(member) else 0
         reader.limit = member.offset_data + data + _HEADER_ALLOWANCE
 
@@ -243,14 +246,7 @@ def _read_all(tar: tarfile.TarFile, reader: _Bounded) -> dict[str, tarfile.TarIn
 
 
 def _make_folder(root: Path, parts: list[str]) -> Path:
-    folder = root
-    for part in parts:
-        folder = folder / part
-        if not folder.is_dir():
-            folder.mkdir()
-            # set after making, so the umask has no say
-            folder.chmod(0o755)
-    return folder
+    return make_folders(root, parts, "the runtime")
 
 
 def _write_file(tar: tarfile.TarFile, member: tarfile.TarInfo, target: Path) -> None:

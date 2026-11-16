@@ -4,12 +4,13 @@
 
 What a tool package is checked for, made stricter. No published package is affected.
 
-- A package's commands may not take the name of a program the app runs itself: `chown` and `x-terminal-emulator` were missing, so with `/opt/pwn-broker/bin` first on PATH the app would have run a package's copy, as root when the app is. More names that ask for a password, manage the system or fetch something to run are reserved too, and so are Python and pip under a versioned name such as `python3.13`.
+- A package's commands may not take the name of a program the app runs itself: `chown` and `x-terminal-emulator` were missing, so with `/opt/pwn-broker/bin` first on PATH the app would have run a package's copy, as root when the app is. More names that ask for a password, manage the system, fetch something to run, or that other programs start to show or edit something (`less`, `pager`, `editor`) are reserved too, and so are Python and pip under a versioned name such as `python3.13` or `python3.13t`.
 - A zip whose list of entries is larger than 4 MiB is refused before the list is read. A zip of nothing but two million entries cost 800 MiB of memory before the limit of 10,000 entries was applied.
-- A tool's files and folders get their modes set at unpack (755, and 644 for what is not run), as a runtime's do. They used to follow the umask, so under a loose one a file a launcher runs was writable by anyone on the machine.
+- A tool's files and folders get their modes set at unpack (755, and 644 for what is not run), as a runtime's do. They used to follow the umask, so under a loose one a file a launcher runs was writable by anyone on the machine. A folder is made closed and then opened, so it is at no moment looser than it ends up, and a link that turns up where a folder goes is not followed.
 - A package or index version has to start with a letter or digit and hold only letters, digits and `. _ + ~ -`, 100 characters at most. It used to be refused only for a slash, a backslash or a space.
-- A zip entry's name may not hold a colon or a control character, or be longer than a path may be, as a runtime archive's may not.
-- A manifest may not claim more of the home folder: places that hold keys or sign-ins (`.aws`, `.kube`, `.docker`, `.netrc` and others), places that run something at login, and anything under `.local/bin`.
+- A zip entry's name may not hold a colon or a control character, or be longer than a path may be, as a runtime archive's may not. No name or link target in a package may have more than 64 parts: 20 files under a name 1,900 parts deep took six seconds to unpack, and a tree that deep could not always be removed again. A stored zip entry whose two sizes differ is refused.
+- A runtime archive's extended header records are dropped as each entry passes its checks. Kept, a 15 KiB record on each of 20,000 entries held 300 MiB.
+- A manifest may not claim more of the home folder: places that hold keys or sign-ins (`.aws`, `.kube`, `.docker`, `.netrc`, `.git-credentials` and others), places that run something at login or in every shell (`.bash_aliases`, `.xprofile`, `.config/fish` and others), the folders a desktop makes (`Pictures`, `Music` and the rest), and anything under `.local/bin`.
 - A runtime archive that ends after one block of zeros is refused; a tar ends with two.
 - A manifest on disk that is nested too deeply, or holds a number too long to read, is refused with a message, not a Python error.
 
