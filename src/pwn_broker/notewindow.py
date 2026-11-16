@@ -1,5 +1,8 @@
+import os
+import signal
 import subprocess
-from collections.abc import Callable, Mapping
+import time
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 
 from pwn_broker.config import Settings
@@ -49,3 +52,79 @@ def note_unsaved(box: Box) -> bool:
         return (box.path / ".note-state").read_text(encoding="utf-8").strip() == "1"
     except (OSError, UnicodeDecodeError):
         return False
+
+
+# a running process of the current user: its pid and its command line, one argument each
+Process = tuple[int, list[str]]
+
+
+def _own_processes() -> Iterator[Process]:
+    # Linux only; elsewhere there is no /proc and nothing is found
+    try:
+        me = os.getuid()
+        entries = list(Path("/proc").iterdir())
+    except (AttributeError, OSError):
+        return
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            if entry.stat().st_uid != me:
+                continue
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if raw:
+            yield int(entry.name), raw.rstrip(b"\0").decode("utf-8", "replace").split("\0")
+
+
+def _same_path(a: str, b: Path) -> bool:
+    try:
+        return Path(a).resolve() == b.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _is_note_vim(argv: list[str], paths: AppPaths, box: Box) -> bool:
+    if len(argv) != 4 or argv[1] != "-u":
+        return False
+    if argv[0] != "vim" and not argv[0].endswith("/vim"):
+        return False
+    return _same_path(argv[2], paths.vim_dir / "vimrc") and _same_path(argv[3], box.path / NOTE_NAME)
+
+
+def find_note(
+    paths: AppPaths,
+    box: Box,
+    *,
+    processes: Callable[[], Iterable[Process]] | None = None,
+) -> int | None:
+    # the vim itself, never the terminal around it: its command line is exactly the vim command
+    for pid, argv in (processes or _own_processes)():
+        if _is_note_vim(argv, paths, box):
+            return pid
+    return None
+
+
+def close_note(
+    paths: AppPaths,
+    box: Box,
+    *,
+    kill: Callable[[int, int], None] = os.kill,
+    processes: Callable[[], Iterable[Process]] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    wait: float = 1.0,
+) -> bool:
+    pid = find_note(paths, box, processes=processes)
+    if pid is None:
+        return False
+    try:
+        kill(pid, signal.SIGTERM)
+    except OSError:
+        return False
+    # a short, bounded wait: a window that stays is reported by the caller
+    waited = 0.0
+    while waited < wait and find_note(paths, box, processes=processes) is not None:
+        sleep(0.1)
+        waited += 0.1
+    return True

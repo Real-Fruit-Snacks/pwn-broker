@@ -399,3 +399,43 @@ def test_remove_target_drops_its_hosts_entry(box, dc01):
     save_box(box)
     remove_target(box, [dc01], "dc01")
     assert box.hosts == ["web"] and load_box(box.path).hosts == ["web"]
+
+
+def archive(paths, folder, kind):
+    paths.wrapped.mkdir(parents=True, exist_ok=True)
+    (paths.wrapped / f"{folder}.{kind}.tar.gz").write_bytes(b"old")
+
+
+@pytest.mark.parametrize("kind", ["finished", "exported"])
+def test_create_box_skips_a_name_whose_archive_exists(paths, kind):
+    archive(paths, "2026-11-14_htb_forest", kind)
+    assert make(paths).path == paths.active / "2026-11-14_htb_forest-2"
+
+
+def test_create_box_skips_to_the_next_free_number(paths):
+    archive(paths, "2026-11-14_htb_forest", "finished")
+    archive(paths, "2026-11-14_htb_forest-2", "exported")
+    (paths.active / "2026-11-14_htb_forest-3").mkdir(parents=True)
+    assert make(paths).path == paths.active / "2026-11-14_htb_forest-4"
+
+
+def test_create_box_ignores_other_files_in_wrapped(paths):
+    archive(paths, "2026-11-14_htb_forest", "other")
+    (paths.wrapped / "2026-11-14_htb_forest.txt").write_text("x")
+    (paths.wrapped / "2026-11-14_htb_forest.finished.tar.gz.part").write_text("x")
+    assert make(paths).path == paths.active / "2026-11-14_htb_forest"
+
+
+def test_create_box_without_wrapped_folder(paths):
+    assert not paths.wrapped.exists()
+    assert make(paths).path == paths.active / "2026-11-14_htb_forest"
+
+
+def test_second_box_of_a_finished_name_gets_its_own_archives(paths):
+    from pwn_broker.archive import archive_path
+
+    first = make(paths)
+    archive(paths, first.path.name, "finished")
+    second = make(paths, new_id=lambda: "id-2")
+    assert archive_path(paths, second, "finished") != archive_path(paths, first, "finished")
+    assert archive_path(paths, second, "finished").name == "2026-11-14_htb_forest-2.finished.tar.gz"

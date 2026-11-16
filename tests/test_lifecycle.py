@@ -682,3 +682,90 @@ def test_export_packs_a_live_cast_up_to_its_last_whole_line(session, system, mon
     with tarfile.open(path) as tar:
         assert tar.extractfile(f"2026-11-14_htb_forest/{rel}").read() == whole
     assert cast.stat().st_size > len(whole)
+
+
+def window(open_now=True, signalled=None):
+    """Stand-ins for the note window: close_note sends nothing, find_note reports it."""
+    signalled = [] if signalled is None else signalled
+
+    def close(paths, box):
+        signalled.append(box.path)
+        return True
+
+    return dict(close=close, find=lambda paths, box: 1 if open_now else None), signalled
+
+
+def test_finish_closes_the_note_window_before_removing_the_folder(session):
+    stand_in, signalled = window(open_now=False)
+    answers(session, "y", "y")
+    folder = session.box.path
+    seen = []
+
+    def close(paths, box):
+        seen.append(folder.exists())
+        return True
+
+    assert finish_box(session, **SAVED, close=close, find=stand_in["find"]) is not None
+    assert seen == [True] and not folder.exists()
+    assert "the note window did not close" not in kinds(session, "warn")
+
+
+def test_finish_says_once_when_the_window_stays(session):
+    stand_in, signalled = window(open_now=True)
+    answers(session, "y", "y")
+    finish_box(session, **SAVED, **stand_in)
+    assert kinds(session, "warn").count("the note window did not close") == 1
+    assert not session.box.path.exists()
+
+
+def test_finish_keeps_the_folder_when_the_note_became_unsaved(session):
+    stand_in, signalled = window()
+    answers(session, "y", "y")
+    states = iter([False, True])
+    assert finish_box(session, fix=lambda p: 0, unsaved=lambda b: next(states), **stand_in) is not None
+    assert session.box.path.exists() and signalled == []
+    assert kinds(session, "warn") == ["the note has unsaved changes; the folder was kept"]
+
+
+def test_finish_leaves_the_window_when_the_folder_is_kept(session):
+    stand_in, signalled = window()
+    answers(session, "y", "n")
+    finish_box(session, **SAVED, **stand_in)
+    assert session.box.path.exists() and signalled == []
+
+
+def test_import_closes_the_window_of_the_box_it_replaces(session):
+    archive = export_box(session, **NOFIX)
+    stand_in, signalled = window(open_now=False)
+    box = import_box(
+        session.paths, Settings(), FakeConsole(["y"]), archive, lambda: NOW,
+        unsaved=lambda b: False, **stand_in,
+    )  # fmt: skip
+    assert box is not None and signalled == [session.box.path]
+
+
+def test_import_with_an_unsaved_note_stops_and_replaces_nothing(session):
+    archive = export_box(session, **NOFIX)
+    marker = session.box.path / "marker.txt"
+    marker.write_text("keep")
+    stand_in, signalled = window()
+    console = FakeConsole(["y"])
+    result = import_box(
+        session.paths, Settings(), console, archive, lambda: NOW, unsaved=lambda b: True, **stand_in
+    )  # fmt: skip
+    assert result is None and marker.read_text() == "keep" and signalled == []
+    assert [k for k, _ in console.lines] == ["fail"]
+
+
+def test_import_does_not_close_anything_when_nothing_is_replaced(session, tmp_path):
+    archive = export_box(session, **NOFIX)
+    stand_in, signalled = window()
+    box = import_box(fresh_home(tmp_path), Settings(), FakeConsole(), archive, lambda: NOW, **stand_in)
+    assert box is not None and signalled == []
+
+
+def test_import_declined_closes_nothing(session):
+    archive = export_box(session, **NOFIX)
+    stand_in, signalled = window()
+    assert import_box(session.paths, Settings(), FakeConsole(["n"]), archive, lambda: NOW, **stand_in) is None
+    assert signalled == []

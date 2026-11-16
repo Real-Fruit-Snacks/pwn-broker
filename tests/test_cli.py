@@ -825,3 +825,12 @@ def test_prepare_passes_its_fetch_to_the_checks(env, monkeypatch):
     setup.install_data(env.paths)
     assert cli._prepare(env) is None
     assert seen["fetch"] == env.fetch
+
+
+def test_start_does_not_open_a_second_note_window(env, quiet, box, monkeypatch, ran):
+    monkeypatch.setattr(notewindow, "find_note", lambda paths, b: 99)
+    env.cwd = box.path
+    assert start(env, []) == 0
+    assert quiet == [] and len(ran) == 1
+    assert lines(env, "ok").count("the note is already open") == 1
+    assert lines(env, "warn") == []

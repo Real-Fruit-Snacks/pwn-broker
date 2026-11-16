@@ -35,6 +35,20 @@ def _new_id() -> str:
     return str(uuid.uuid4())
 
 
+def _archived_names(paths: AppPaths) -> set[str]:
+    # a folder name is also the name of its archives, so one that has an archive is taken
+    names: set[str] = set()
+    try:
+        entries = [entry.name for entry in paths.wrapped.iterdir()]
+    except OSError:
+        return names
+    for entry in entries:
+        for kind in (".finished.tar.gz", ".exported.tar.gz"):
+            if entry.endswith(kind):
+                names.add(entry[: -len(kind)])
+    return names
+
+
 def create_box(
     paths: AppPaths,
     *,
@@ -52,7 +66,8 @@ def create_box(
         raise BoxError(str(exc)) from exc
     folder = paths.active / base
     suffix = 2
-    while folder.exists():
+    taken = _archived_names(paths)
+    while folder.exists() or folder.name in taken:
         folder = paths.active / f"{base}-{suffix}"
         suffix += 1
     started = now if day == now.date() else now.replace(year=day.year, month=day.month, day=day.day)

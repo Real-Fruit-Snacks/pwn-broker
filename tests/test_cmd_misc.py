@@ -369,3 +369,13 @@ def test_status_counts_recordings_and_those_recording_now(session, system):
     session.console = FakeConsole()
     dispatch(session, "status")
     assert "recordings  3 (1 recording now)" in _fields(session.console)
+
+
+def test_note_command_does_not_open_a_second_window(session, monkeypatch):
+    opened = []
+    monkeypatch.setattr(notewindow, "find_note", lambda paths, box: 99)
+    monkeypatch.setattr(notewindow, "open_note", lambda *a: opened.append(a) or True)
+    dispatch(session, "note")
+    assert opened == []
+    assert session.console.lines[-1] == ("ok", "the note is already open")
+    assert ("ok", "note opened") not in session.console.lines

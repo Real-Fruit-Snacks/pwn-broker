@@ -94,6 +94,9 @@ def note(session: Session, args: list[str]) -> None:
             session.console.fail(f"could not write the note: {exc}")
             return
         session.console.ok("note created")
+    if notewindow.find_note(session.paths, session.box) is not None:
+        session.console.ok("the note is already open")
+        return
     if notewindow.open_note(session.paths, session.settings, session.box, os.environ):
         session.console.ok("note opened")
         return

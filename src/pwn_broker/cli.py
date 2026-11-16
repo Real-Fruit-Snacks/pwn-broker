@@ -364,7 +364,9 @@ def start(env: Env, argv: list[str]) -> int:
         return 1
     try:
         hostflow.on_open(session)
-        if not notewindow.open_note(env.paths, env.settings, session.box, env.environ):
+        if notewindow.find_note(env.paths, session.box) is not None:
+            console.ok("the note is already open")
+        elif not notewindow.open_note(env.paths, env.settings, session.box, env.environ):
             command = notewindow.vim_command(env.paths, session.box.path / note.NOTE_NAME)
             console.warn("no note window opened, run: " + " ".join(command))
         env.run(session)

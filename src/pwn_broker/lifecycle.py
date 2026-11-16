@@ -18,7 +18,7 @@ from pwn_broker.archive import (
 from pwn_broker.config import Settings
 from pwn_broker.console import Cancelled, Console
 from pwn_broker.model import Box
-from pwn_broker.notewindow import note_unsaved
+from pwn_broker.notewindow import close_note, find_note, note_unsaved
 from pwn_broker.paths import AppPaths
 from pwn_broker.privilege import fix_ownership
 from pwn_broker.session import Session, load_session, process_checks, refresh, rescan
@@ -118,10 +118,25 @@ def _remove_folder(session: Session) -> None:
     session.console.ok(f"removed {folder}")
 
 
+def close_window(
+    console: Console,
+    paths: AppPaths,
+    box: Box,
+    *,
+    close: Callable[[AppPaths, Box], bool] = close_note,
+    find: Callable[[AppPaths, Box], int | None] = find_note,
+) -> None:
+    # the window of a note whose folder is about to go; one that stays is said once
+    if close(paths, box) and find(paths, box) is not None:
+        console.warn("the note window did not close")
+
+
 def finish_box(
     session: Session,
     *,
     unsaved: Callable[[Box], bool] = note_unsaved,
+    close: Callable[[AppPaths, Box], bool] = close_note,
+    find: Callable[[AppPaths, Box], int | None] = find_note,
     fix: Callable[[Path], int] = fix_ownership,
 ) -> Path | None:
     box = session.box
@@ -207,9 +222,30 @@ def finish_box(
         remove = console.confirm("remove working folder?")
     except Cancelled:
         remove = False
-    if remove:
+    if remove and unsaved(box):
+        console.warn("the note has unsaved changes; the folder was kept")
+    elif remove:
+        close_window(console, session.paths, box, close=close, find=find)
         _remove_folder(session)
     return dest
+
+
+def _close_replaced(
+    paths: AppPaths,
+    console: Console,
+    folder: str,
+    unsaved: Callable[[Box], bool],
+    close: Callable[[AppPaths, Box], bool],
+    find: Callable[[AppPaths, Box], int | None],
+) -> None:
+    try:
+        old = load_box(paths.active / folder)
+    except StoreError:
+        # not a box of ours: it has no note window
+        return
+    if unsaved(old):
+        raise ArchiveError(f"the note of {folder} has unsaved changes; save it and import again")
+    close_window(console, paths, old, close=close, find=find)
 
 
 def import_box(
@@ -218,6 +254,10 @@ def import_box(
     console: Console,
     archive: Path,
     clock: Callable[[], datetime],
+    *,
+    unsaved: Callable[[Box], bool] = note_unsaved,
+    close: Callable[[AppPaths, Box], bool] = close_note,
+    find: Callable[[AppPaths, Box], int | None] = find_note,
 ) -> Box | None:
     if archive.is_dir():
         console.fail(f"{archive} is a folder, not an exported box")
@@ -230,6 +270,7 @@ def import_box(
             replace = console.confirm(f"a box named {folder} is already here. replace it?")
             if not replace:
                 return None
+            _close_replaced(paths, console, folder, unsaved, close, find)
         box = load_box(unpack(archive, paths.active, replace=replace))
         if box.status == "finished":
             reopen_box(box)
