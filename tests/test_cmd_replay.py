@@ -1,3 +1,4 @@
+import io
 import os
 import subprocess
 
@@ -8,7 +9,7 @@ from helpers import NOW
 from pwn_broker import recorder
 from pwn_broker import shell  # noqa: F401  (fills the command registry)
 from pwn_broker.boxes import add_target
-from pwn_broker.console import FakeConsole
+from pwn_broker.console import FakeConsole, TermConsole
 from pwn_broker.shell import cmd_replay
 from pwn_broker.shell.cmd_misc import human_size
 from pwn_broker.shell.commands import dispatch
@@ -204,6 +205,60 @@ def test_asciinema_that_cannot_start_is_a_failure(session, played):
     status[0] = PermissionError(13, "Permission denied")
     [(kind, text)] = _run(session, "replay 1").lines
     assert kind == "fail" and text.startswith("asciinema could not be started: ")
+
+
+PROMPT_LINE = "forest/dc01 > replay 1\n"
+FRAMES = "$ whoami\nroot\n$ exit\n"
+
+
+def _on_screen(session, line=PROMPT_LINE):
+    """Run the command as the prompt does, into one stream that the player writes to as well."""
+    out = io.StringIO()
+    session.console = TermConsole({"NO_COLOR": "1"}, out=out)
+    play = session.play
+
+    def drawn(argv, *, env):
+        out.write(FRAMES)
+        return play(argv, env=env)
+
+    session.play = drawn
+    out.write(line)
+    session.console.typed()
+    with session.console.block():
+        dispatch(session, line.split(" > ", 1)[1].strip())
+    return out.getvalue()
+
+
+def test_the_playback_has_a_blank_line_above_and_below(session, played):
+    _cast(session, "dc01", "2026-11-14_1432")
+    assert _on_screen(session) == f"{PROMPT_LINE}\n{FRAMES}\n"
+
+
+def test_a_status_warning_follows_the_playback_below_a_blank_line(session, played):
+    calls, status = played
+    _cast(session, "dc01", "2026-11-14_1432")
+    status[0] = 2
+    assert _on_screen(session) == f"{PROMPT_LINE}\n{FRAMES}\n  warn  asciinema ended with status 2\n\n"
+
+
+def test_a_playback_stopped_with_ctrl_c_has_a_blank_line_below(session, played):
+    calls, status = played
+    _cast(session, "dc01", "2026-11-14_1432")
+    status[0] = KeyboardInterrupt()
+    assert _on_screen(session) == f"{PROMPT_LINE}\n{FRAMES}\n"
+
+
+def test_asciinema_that_cannot_start_leaves_one_blank_line_above_the_failure(session, played):
+    calls, status = played
+    _cast(session, "dc01", "2026-11-14_1432")
+    status[0] = PermissionError(13, "Permission denied")
+    out = io.StringIO()
+    session.console = TermConsole({"NO_COLOR": "1"}, out=out)
+    out.write(PROMPT_LINE)
+    session.console.typed()
+    with session.console.block():
+        dispatch(session, "replay 1")
+    assert out.getvalue() == f"{PROMPT_LINE}\n  fail  asciinema could not be started: [Errno 13] Permission denied\n\n"
 
 
 def test_a_cast_that_cannot_be_read_can_still_be_played(session, played):

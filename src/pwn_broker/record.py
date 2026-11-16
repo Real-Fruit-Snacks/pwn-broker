@@ -236,7 +236,7 @@ def _record(env: Env, box: Box, target: Target) -> int:
         console.detail(shown(cast))
         console.detail("exit this shell to stop")
         # the recorded shell starts below a blank line
-        console.gap()
+        console.handover()
         try:
             with _interrupts_ignored():
                 status = env.run(argv, env=environment).returncode

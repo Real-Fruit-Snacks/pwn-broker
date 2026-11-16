@@ -245,8 +245,10 @@ def finish_box(
         console.warn("the note has unsaved changes; the folder was kept")
     elif remove and not _note_is_archived(box, archived_note):
         console.warn("the note changed after the archive was made; the folder was kept")
+    elif remove and close(session.paths, box):
+        # the vim, or the terminal made for it, is still there: the window would show a folder that is gone
+        console.warn("the note window did not close; the folder was kept")
     elif remove:
-        close_window(console, session.paths, box, close=close)
         _remove_folder(session)
     return dest
 

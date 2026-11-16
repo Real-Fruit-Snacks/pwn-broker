@@ -396,6 +396,31 @@ def test_raw_ending_in_a_blank_line_counts_as_one(monkeypatch, text):
     assert out.getvalue() == f"  ok    a\n{text}\n  ok    b\n"
 
 
+def test_a_handover_first_in_a_block_writes_the_blocks_blank_line(monkeypatch):
+    c, out = screen(monkeypatch)
+    c.typed()  # the command line, drawn by the prompt loop
+    with c.block():
+        c.handover()
+        out.write("frames\n")  # the program's own output
+        c.typed()
+    assert out.getvalue() == "\nframes\n\n"
+
+
+def test_a_handover_after_a_line_or_a_gap_leaves_one_blank_line(monkeypatch):
+    c, out = screen(monkeypatch)
+    c.ok("a")
+    c.handover()
+    c.gap()
+    c.handover()
+    assert out.getvalue() == "  ok    a\n\n"
+
+
+def test_fake_records_a_handover_in_events_only():
+    c = FakeConsole()
+    c.handover()
+    assert c.events == [("handover", "")] and c.lines == []
+
+
 def test_fake_records_typed_in_events_only():
     c = FakeConsole()
     c.typed()

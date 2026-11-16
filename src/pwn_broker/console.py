@@ -37,6 +37,7 @@ class Console(Protocol):
     def gap(self) -> None: ...
     def clear(self) -> None: ...
     def typed(self) -> None: ...
+    def handover(self) -> None: ...
     def block(self) -> AbstractContextManager[None]: ...
     def raw(self, text: str) -> None: ...
     def log(self, text: str) -> None: ...
@@ -169,6 +170,9 @@ class FakeConsole:
     def typed(self) -> None:
         self.events.append(("typed", ""))
 
+    def handover(self) -> None:
+        self.events.append(("handover", ""))
+
     @contextmanager
     def block(self) -> Iterator[None]:
         self._depth += 1
@@ -243,6 +247,12 @@ class TermConsole:
     def typed(self) -> None:
         # something else wrote a line to the terminal, such as the command line at the prompt
         self._last = _LINE
+
+    def handover(self) -> None:
+        # another program is about to write to the terminal: it starts below a blank line, the block's
+        # own when the block has printed nothing yet (a gap there would wait for a line of the console's)
+        self._start_line()
+        self._blank()
 
     def clear(self) -> None:
         # the terminal's own clear sequence; off a terminal there is no screen to clear

@@ -707,7 +707,7 @@ def one_note_window(s: State, what: str) -> Proc:
 
 
 def window_closed(s: State, what: str) -> None:
-    """lifecycle.close_window at finish: the note's vim and its terminal have both ended, not even a zombie left."""
+    """lifecycle.finish_box: the note's vim and its terminal have both ended, not even a zombie left."""
     vim, terminal = s.window
 
     def gone() -> bool:
@@ -1310,8 +1310,8 @@ RUNTIMES_SUMMARY = whole_line(field_row("runtimes", f"{RUNTIME} {RUNTIME_VERSION
 HOSTS_SUMMARY = whole_line(field_row("hosts", "1 line to remove from /etc/hosts", SUMMARY_LONGEST))
 # toolhooks.remove_idle_runtimes
 RUNTIME_REMOVED = ok(f"{RUNTIME} {RUNTIME_VERSION} removed (runtime)")
-# lifecycle.close_window: the only line it prints, when the window is left
-WINDOW_LEFT = warn("the note window did not close")
+# lifecycle.finish_box: the line in place of the folder removed line, when the window is left
+WINDOW_LEFT = warn("the note window did not close; the folder was kept")
 
 
 def summary(t: Terminal, s: State | None = None) -> None:

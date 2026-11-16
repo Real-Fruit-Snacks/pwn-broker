@@ -711,12 +711,13 @@ def test_finish_closes_the_note_window_before_removing_the_folder(session):
     assert "the note window did not close" not in kinds(session, "warn")
 
 
-def test_finish_says_once_when_the_window_stays(session):
+def test_finish_keeps_the_folder_when_the_window_stays(session):
     stand_in, signalled = window(open_now=True)
     answers(session, "y", "y")
-    finish_box(session, **SAVED, **stand_in)
-    assert kinds(session, "warn").count("the note window did not close") == 1
-    assert not session.box.path.exists()
+    assert finish_box(session, **SAVED, **stand_in) is not None
+    assert signalled == [session.box.path] and session.box.path.exists()
+    assert kinds(session, "warn") == ["the note window did not close; the folder was kept"]
+    assert not any(text.startswith("removed ") for text in kinds(session, "ok"))
 
 
 def test_finish_keeps_the_folder_when_the_note_became_unsaved(session):
@@ -818,4 +819,5 @@ def test_finish_keeps_the_folder_when_the_note_cannot_be_read_after_the_archive(
 def test_finish_says_so_when_the_signal_could_not_be_sent(session):
     answers(session, "y", "y")
     finish_box(session, **SAVED, close=lambda paths, box: True)
-    assert kinds(session, "warn").count("the note window did not close") == 1
+    assert kinds(session, "warn") == ["the note window did not close; the folder was kept"]
+    assert session.box.path.exists()

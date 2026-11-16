@@ -480,7 +480,7 @@ Nothing happens before a yes. Then, in order:
 5. Write the archive under a temporary name, read it back, and compare it with the manifest. Only then give it its final name.
 6. Copy it to the `copy_to` folder, if one is set, and verify the copy.
 7. Undo what the box changed on Kali (phases 2 and 3).
-8. Ask whether to remove the working folder. The default is no. On yes, the folder is kept, with a `warn` line, when the note has unsaved changes or when the note on disk is no longer the file that was archived (`warn  the note changed after the archive was made; the folder was kept`). Otherwise the note window is closed (section 6.6) and the folder removed.
+8. Ask whether to remove the working folder. The default is no. On yes, the folder is kept, with a `warn` line, when the note has unsaved changes or when the note on disk is no longer the file that was archived (`warn  the note changed after the archive was made; the folder was kept`). Otherwise the note window is closed (section 6.6) and the folder removed. If the window does not close (its vim, or the terminal started for it, is still running), the folder is kept: `warn  the note window did not close; the folder was kept`.
 
 If any step fails, nothing after it runs, nothing is removed, and the box goes back to active. A finished archive is never overwritten without asking.
 
@@ -717,7 +717,7 @@ The sketch shortens `status`; it keeps every row it has now. It is what the app 
 
 - At the prompt it is automatic: whatever a command prints becomes one block, with the blank line above written before its first line and the one below after its last. A command that prints nothing gets neither.
 - Outside the prompt (launch, the menu, a new box, an import) the flow asks the console for a gap or a heading where the sketch shows one. No code prints an empty line by hand.
-- The console knows whether the last thing on screen was a blank line, a question included, so two never follow each other. Besides the gaps and headings it has `header`, for the launch's first line; `typed`, which the prompt calls once a command line is on screen, since the console did not write it; and `clear`.
+- The console knows whether the last thing on screen was a blank line, a question included, so two never follow each other. Besides the gaps and headings it has `header`, for the launch's first line; `typed`, which the prompt calls once a command line is on screen, since the console did not write it; `handover`, called just before another program writes to the window (the shell `record` starts, a replay's playback), so that program starts below a blank line even when nothing came before it; and `clear`.
 
 **Cutting long values.**
 
@@ -732,7 +732,7 @@ The sketch shortens `status`; it keeps every row it has now. It is what the app 
 
 | Seen | Fix |
 |---|---|
-| Every `note`, every box opened and every import opened another vim on the same note; windows of a finished box stayed open. Four windows on one file, no swap file, so the last one to save wins | One note window per box. The app finds a box's note window by looking for the vim it starts: a running `vim -u <the app's vimrc> <that box's notes.md>`. That works whichever terminal program opened it; the app reads `/proc` for it, so on any other system nothing is found and a window opens as before. While one is running, opening the box, importing it or `note` says `ok    the note is already open` and opens nothing. `finish` already refuses to start while the note has unsaved changes. When the working folder is then removed, the app sends TERM to that vim, then to the vim's parent only when that parent's command line ends with `-e` and the note's vim command and it has no other child left, so the terminal started for it goes too and a terminal that still holds other windows stays. If the note gained unsaved changes in between, or the note on disk is no longer the file that was archived, it says so, closes nothing and keeps the folder |
+| Every `note`, every box opened and every import opened another vim on the same note; windows of a finished box stayed open. Four windows on one file, no swap file, so the last one to save wins | One note window per box. The app finds a box's note window by looking for the vim it starts: a running `vim -u <the app's vimrc> <that box's notes.md>`. That works whichever terminal program opened it; the app reads `/proc` for it, so on any other system nothing is found and a window opens as before. While one is running, opening the box, importing it or `note` says `ok    the note is already open` and opens nothing. `finish` already refuses to start while the note has unsaved changes. When the working folder is then removed, the app sends TERM to that vim, then to the vim's parent only when that parent's command line ends with `-e` and the note's vim command and it has no other child left, so the terminal started for it goes too and a terminal that still holds other windows stays. If the note gained unsaved changes in between, or the note on disk is no longer the file that was archived, it says so, closes nothing and keeps the folder. If the window does not close, it says so and keeps the folder too |
 | Two boxes with the same name on the same day got the same archive name; `finish` asked `replace the existing archive?` and yes destroyed the earlier box's archive | A new box's folder name is checked against the archives in `wrapped/` as well as the folders in `active/`, so the second box is `..._abc-2` and its archives are too. `replace the existing archive?` is then only ever asked about the same box |
 | `import` with no file given: `import failed: .: cannot open as a gzip tar ([Errno 21] Is a directory: '.')` | An empty answer asks again, with `fail  give the path of an exported box`. A folder gets `fail  <path> is a folder, not an exported box` |
 | `exit` answered `did you mean: export`; `clear` answered `did you mean: cred clear` | `exit` does what `quit` does. `clear` clears the screen |
@@ -863,6 +863,10 @@ forest/dc01 > replay
   2  2026-11-14 15:10  recording now
 
 forest/dc01 > replay 1
+
+<the recording plays here>
+
+forest/dc01 >
 ```
 
 | Command | Does |
@@ -870,7 +874,7 @@ forest/dc01 > replay 1
 | `replay [target]` | Lists the recordings of the current target, or the named one, oldest first |
 | `replay [target] <n>` | Plays one in the prompt window. Idle gaps longer than two seconds are cut to two. Space pauses, Ctrl-C stops and returns to the prompt |
 
-Playing needs `asciinema`. Listing does not. A recording whose window is still recording is listed as `recording now` and is not played until that window exits.
+The playback starts below a blank line and the prompt comes back below another, as around the shell `record` starts; a `warn` line about asciinema's status goes under the second. Playing needs `asciinema`. Listing does not. A recording whose window is still recording is listed as `recording now` and is not played until that window exits.
 
 ### 7.6 Finish, export, import, status
 
