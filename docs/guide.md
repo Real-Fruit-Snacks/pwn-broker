@@ -421,3 +421,5 @@ Links and special files (named pipes, sockets, devices) in a box are not archive
 | `terminal` | `x-terminal-emulator` | What opens the note window |
 | `check_updates` | `true` | Look for a newer release at launch |
 | `tools_index` | the published index in `pwn-shop` | A URL, or a folder that holds `index.toml` and the zips it names |
+
+Two environment variables are read as well. `PWN_BROKER_OPT` is the install folder, for the installer and the app alike (default `/opt/pwn-broker`). `PWN_BROKER_HOME` is where the boxes live when `home` is not set in `config.toml`.
