@@ -1032,6 +1032,7 @@ def test_kali_cycle_carries_the_same_python_pin():
         return found
 
     pin = build.load_pins(REPO / "release" / "pins.toml")
+    assert value("RUNTIME_VERSION") == pin.version
     assert value("RUNTIME_URL") == pin.url
     assert int(value("RUNTIME_SIZE")) == pin.size
     assert value("RUNTIME_SHA256") == pin.sha256

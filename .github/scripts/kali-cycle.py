@@ -2,10 +2,11 @@
 """The Kali cycle: one whole box, from the launch to the import, through the real programs.
 
 Runs inside the kalilinux/kali-rolling container as root, after kali-cycle.sh has installed
-pwn-broker with the real installer, under the app's own Python. Each numbered step drives the
-app through a pseudo-terminal, then checks the result on disk or in the system. steps.txt in
-the evidence folder gets one ok or fail line per step; the run stops at the first failed step,
-and the transcripts are written whatever happens.
+pwn-broker from the release file with the real installer and the network off, and runs under
+the app's bundled Python. Each numbered step drives the app through a pseudo-terminal, then
+checks the result on disk or in the system. steps.txt in the evidence folder gets one ok or
+fail line per step; the run stops at the first failed step, and the transcripts are written
+whatever happens.
 
 The pseudo-terminal helper here is a small one of its own rather than the one in
 tests/test_record_real.py: that one reports through pytest, which the app's environment does

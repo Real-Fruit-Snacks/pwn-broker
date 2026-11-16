@@ -52,9 +52,11 @@ jobs:
 
   recording:
     # record under the real pinned asciinema: a zsh and a bash session recorded through a
-    # pseudo-terminal, their casts written as they record, and their text copies checked.
-    # This job fetches asciinema itself; tests/test_record_real.py runs here and in the kali job,
-    # and skips in the others.
+    # pseudo-terminal, their casts written as they record, and their text copies checked. The
+    # asciinema is the one in the release-file job's file, installed with install.sh --from into
+    # a temporary install folder; tests/test_record_real.py runs here and in the kali job, and
+    # skips in the others.
+    needs: release-file
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -65,63 +67,96 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
       - name: Install
         run: python -m pip install -e ".[dev]"
-      - name: Fetch the pinned asciinema
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-file
+          path: ${{ runner.temp }}/release-file
+      - name: Install the release file
         run: |
-          python -c '
-          import os
-          from pathlib import Path
-          from pwn_broker import recorder
-          from pwn_broker.paths import AppPaths
-          root = Path(os.environ["RUNNER_TEMP"]) / "asciinema"
-          paths = AppPaths(opt=root / "opt", home=root / "home")
-          recorder.fetch(paths)
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
-              env.write(f"PWN_BROKER_REAL_ASCIINEMA={paths.asciinema}\n")
-          print(paths.asciinema)
-          '
+          release="$(ls "$RUNNER_TEMP"/release-file/pwn-broker-*-linux-x86_64.tar.gz)"
+          work="$RUNNER_TEMP/installed"
+          export PWN_BROKER_OPT="$work/opt"
+          export HOME="$work/home"
+          mkdir -p "$HOME"
+          sh install.sh --from "$release"
+          echo "PWN_BROKER_REAL_ASCIINEMA=$PWN_BROKER_OPT/app/bin/asciinema" >>"$GITHUB_ENV"
       - name: Real recordings
         run: |
           test -f "$PWN_BROKER_REAL_ASCIINEMA"
           python -m pytest -q -W error tests/test_record_real.py
-      - name: The installer's asciinema download
-        # the installer job passes --no-asciinema; this is the one run of the installer's own download
-        run: |
-          work="$RUNNER_TEMP/installer"
-          export PWN_BROKER_OPT="$work/opt"
-          export HOME="$work/home"
-          mkdir -p "$HOME"
-          sh install.sh --from .
-          test -x "$PWN_BROKER_OPT/app/bin/asciinema"
-          "$PWN_BROKER_OPT/app/bin/asciinema" --version | tee "$work/asciinema-version.txt"
-          grep -qF "3.2.1" "$work/asciinema-version.txt"
-          "$PWN_BROKER_OPT/bin/record" --help | tee "$work/record-help.txt"
-          grep -qxF "usage: record [target]" "$work/record-help.txt"
 
   installer:
-    # install.sh: syntax under sh and dash, shellcheck, then a real install from this checkout
-    # into a temporary install folder and home, run twice.
+    # install.sh and kali-cycle.sh: syntax under sh and dash, and shellcheck. Then the
+    # release-file job's file installed with install.sh --from into a temporary install folder
+    # and home, twice, each time checked: the app's version, app/bin/python is the pinned Python
+    # and resolves under python/, asciinema is the pinned version, record starts, and .zshrc holds
+    # the PATH line once. Then the same file installed in debian:stable-slim with no network and
+    # no python3, which shows that an install needs neither.
+    needs: release-file
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-file
+          path: ${{ runner.temp }}/release-file
       - name: Syntax
         run: |
-          sh -n install.sh
-          dash -n install.sh
+          for script in install.sh .github/scripts/kali-cycle.sh; do
+            sh -n "$script"
+            dash -n "$script"
+          done
       - name: shellcheck
-        run: shellcheck install.sh
-      - name: Install from the checkout
+        run: shellcheck install.sh .github/scripts/kali-cycle.sh
+      - name: Install the release file twice
         run: |
+          (cd "$RUNNER_TEMP/release-file" && sha256sum -c SHA256SUMS.txt)
+          release="$(ls "$RUNNER_TEMP"/release-file/pwn-broker-*-linux-x86_64.tar.gz)"
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
+          python_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' release/pins.toml)"
           work="$(mktemp -d)"
           export PWN_BROKER_OPT="$work/opt"
           export HOME="$work/home"
           mkdir -p "$HOME"
-          sh install.sh --from . --no-asciinema
-          test -x "$PWN_BROKER_OPT/bin/pwn-broker"
+          checks() {
+            "$PWN_BROKER_OPT/bin/pwn-broker" --version | tee "$work/version.txt"
+            grep -qF "$version" "$work/version.txt"
+            "$PWN_BROKER_OPT/app/bin/python" -I -c 'import platform; print(platform.python_version())' | tee "$work/python-version.txt"
+            grep -qxF "$python_version" "$work/python-version.txt"
+            real="$(readlink -f "$PWN_BROKER_OPT/app/bin/python")"
+            echo "$PWN_BROKER_OPT/app/bin/python resolves to $real"
+            case "$real" in
+              "$(readlink -f "$PWN_BROKER_OPT/python")"/*) ;;
+              *) echo "fail  app/bin/python does not resolve under $PWN_BROKER_OPT/python/"; exit 1 ;;
+            esac
+            "$PWN_BROKER_OPT/app/bin/asciinema" --version | tee "$work/asciinema-version.txt"
+            grep -qF "3.2.1" "$work/asciinema-version.txt"
+            "$PWN_BROKER_OPT/bin/record" --help | tee "$work/record-help.txt"
+            grep -qxF "usage: record [target]" "$work/record-help.txt"
+            test "$(grep -c '# pwn-broker' "$HOME/.zshrc")" = 1
+          }
+          sh install.sh --from "$release"
+          checks
+          sh install.sh --from "$release"
+          checks
+      - name: Install with no Python and no network
+        # debian:stable-slim has no python3, and --network none leaves the container only loopback
+        run: |
+          release="$(cd "$RUNNER_TEMP/release-file" && ls pwn-broker-*-linux-x86_64.tar.gz)"
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
-          "$PWN_BROKER_OPT/bin/pwn-broker" --version | tee "$work/version.txt"
-          grep -qF "$version" "$work/version.txt"
-          sh install.sh --from . --no-asciinema
-          test "$(grep -c '# pwn-broker' "$HOME/.zshrc")" = 1
+          docker run --rm --network none \
+            -v "$PWD/install.sh:/src/install.sh:ro" -v "$RUNNER_TEMP/release-file:/release:ro" \
+            -e "RELEASE=/release/$release" -e "VERSION=$version" \
+            debian:stable-slim sh -euc '
+              echo "network interfaces: $(ls /sys/class/net | tr "\n" " ")"
+              if [ "$(ls /sys/class/net)" != lo ]; then echo "fail  the container has a network"; exit 1; fi
+              if command -v python3; then echo "fail  python3 is on PATH"; exit 1; fi
+              echo "ok    no network and no python3"
+              sh /src/install.sh --from "$RELEASE"
+              /opt/pwn-broker/bin/pwn-broker --version | tee /tmp/version.txt
+              grep -qF "$VERSION" /tmp/version.txt
+              /opt/pwn-broker/app/bin/asciinema --version
+            '
 
   release-file:
     # The release file built twice from this checkout with release/build.py, sharing one cache,
@@ -166,34 +201,77 @@ jobs:
   kali:
     # One whole box in the official Kali image, as root, with the real programs: the installer,
     # /etc/hosts, a ping, the pinned asciinema under Kali's zsh settings, OpenVPN bringing up
-    # tun0, and the note window under a virtual display; the unit suite runs there too. Not a
-    # container job, because the tunnel module is loaded on the host first. --init gives the
+    # tun0, and the note window under a virtual display; the unit suite runs there too, on Kali's
+    # own Python. Not a container job, because the tunnel module is loaded on the host first.
+    # The container is started detached and kali-cycle.sh runs in it three times: prepare does
+    # everything that needs the network; then the container is taken off its only network, and
+    # install shows that nothing resolves or answers before it installs the release-file job's
+    # file with install.sh --from and checks that the app runs on its bundled Python; then the
+    # network is connected again and cycle runs the unit suite and the box, the box on the app's
+    # bundled Python. So every push shows that an install reaches nothing. --init gives the
     # container a PID 1 that reaps orphaned processes, as a real system's does, so a stopped
-    # daemon does not linger as a zombie. The container downloads the pinned upstream Python build
-    # for the test runtime package and checks its size and SHA-256 first; a Python test tool is
-    # installed on it. The evidence folder is uploaded whatever the result.
+    # daemon does not linger as a zombie. prepare downloads the pinned upstream Python build for
+    # the test runtime package and checks its size and SHA-256; a Python test tool is installed
+    # on it. The evidence folder is uploaded whatever the result.
     # The image is not pinned on purpose: the job is there to notice when Kali changes under the
     # app, as it did when Kali moved to Python 3.14.
+    needs: release-file
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-file
+          path: ${{ runner.temp }}/release-file
       - name: Tunnel module
         run: |
           sudo modprobe tun || echo "modprobe tun failed"
           if [ -e /dev/net/tun ]; then echo "/dev/net/tun exists"; else echo "/dev/net/tun is missing"; fi
-      - name: The cycle in Kali
+      - name: Start Kali
         run: |
           mkdir -p "$RUNNER_TEMP/kali-evidence"
-          docker run --rm --init --hostname kali --cap-add NET_ADMIN --device /dev/net/tun \
-            -v "$PWD:/src:ro" -v "$RUNNER_TEMP/kali-evidence:/evidence" \
-            kalilinux/kali-rolling sh /src/.github/scripts/kali-cycle.sh
+          docker run -d --init --name kali --hostname kali --cap-add NET_ADMIN --device /dev/net/tun \
+            -v "$PWD:/src:ro" -v "$RUNNER_TEMP/release-file:/release:ro" \
+            -v "$RUNNER_TEMP/kali-evidence:/evidence" \
+            kalilinux/kali-rolling sleep infinity
+      - name: Prepare Kali, with the network on
+        run: docker exec kali sh /src/.github/scripts/kali-cycle.sh prepare
+      - name: Switch the network off
+        # the container's only network is the default bridge; without it there is only loopback
+        run: |
+          docker network disconnect bridge kali
+          networks="$(docker inspect --format '{{json .NetworkSettings.Networks}}' kali)"
+          echo "$networks" | tee "$RUNNER_TEMP/kali-evidence/networks-off.txt"
+          if [ "$networks" != "{}" ]; then
+            echo "fail  the container is still on a network"
+            exit 1
+          fi
+          echo "ok    the container is on no network"
+      - name: Install the release file, with the network off
+        # kali-cycle.sh install first shows that github.com does not resolve and 1.1.1.1:443 does not answer
+        run: docker exec kali sh /src/.github/scripts/kali-cycle.sh install
+      - name: Switch the network on
+        run: |
+          docker network connect bridge kali
+          networks="$(docker inspect --format '{{json .NetworkSettings.Networks}}' kali)"
+          echo "$networks" | tee "$RUNNER_TEMP/kali-evidence/networks-on.txt"
+          if [ "$networks" = "{}" ]; then
+            echo "fail  the container is on no network"
+            exit 1
+          fi
+          echo "ok    the container is on the bridge again"
+      - name: The cycle in Kali
+        run: docker exec kali sh /src/.github/scripts/kali-cycle.sh cycle
       - name: Evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kali-evidence
           path: ${{ runner.temp }}/kali-evidence
+      - name: Remove the container
+        if: always()
+        run: docker rm -f kali
 
   art:
     # The README panel is generated; fail if docs/assets/panel-*.svg no longer match docs/art/make-panel.py.

@@ -1,7 +1,8 @@
 """Real recordings: `record` runs the pinned asciinema over a real zsh and bash in a pseudo-terminal.
 
-These run only on Linux with PWN_BROKER_REAL_ASCIINEMA naming the pinned asciinema binary, which
-the CI job `recording` fetches once. Everywhere else they skip. The record process is a child
+These run only on Linux with PWN_BROKER_REAL_ASCIINEMA naming the pinned asciinema binary: the
+`app/bin/asciinema` of a release file installed with `install.sh --from`, as the CI jobs
+`recording` and `kali` do. Everywhere else they skip. The record process is a child
 process, so it runs the real code with its real defaults; it is kept to a temporary install
 root, home folder and box, and records for a target that already exists.
 """
@@ -183,7 +184,8 @@ def installed(paths):
     shutil.copyfile(REAL, paths.asciinema)
     os.chmod(paths.asciinema, 0o755)
     assert recorder.present(paths), (
-        f"{REAL} does not match the pinned asciinema {recorder.VERSION}; fetch the pinned asciinema again"
+        f"{REAL} does not match the pinned asciinema {recorder.VERSION}; install a release file with "
+        "install.sh --from and point PWN_BROKER_REAL_ASCIINEMA at its app/bin/asciinema"
     )
     return paths
 
@@ -300,7 +302,7 @@ def test_a_real_session_is_recorded(tmp_path, installed, opened, shell_name, sta
     assert markers == [], f"markers left in {installed.run_recordings}: {markers}"
 
 
-def test_the_fetched_asciinema_is_the_pinned_version():
+def test_the_installed_asciinema_is_the_pinned_version():
     done = subprocess.run([REAL, "--version"], capture_output=True, text=True, timeout=WAIT)
     assert done.returncode == 0, f"{REAL} --version ended with {done.returncode}: {done.stderr}"
     assert recorder.VERSION in done.stdout, f"{REAL} --version printed {done.stdout!r}"
