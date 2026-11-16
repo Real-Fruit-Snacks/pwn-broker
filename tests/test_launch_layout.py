@@ -88,6 +88,7 @@ Target 2
   ok    10.10.10.161 answered in 1 ms
   ok    10.10.10.162 answered in 1 ms
   ok    box forest created
+
 """
 
 
@@ -341,3 +342,23 @@ def test_a_launch_as_the_wrong_user_prints_the_header_a_gap_and_the_fail_line(en
         ("gap", ""),
         ("fail", "pwn-broker was installed by kali; run it as kali"),
     ]
+
+
+def test_a_blank_line_stands_between_a_reopened_box_and_the_first_prompt(env, quiet, box, monkeypatch):
+    monkeypatch.setattr(notewindow, "find_note", lambda paths, b: 99)
+    env.cwd = box.path
+    env.console, out = term(monkeypatch)
+    assert start(env, []) == 0
+    assert out.getvalue().endswith("  ok    the note is already open\n\n")
+
+
+def test_setup_prints_flush_left_as_it_did_before_the_layout(env, monkeypatch):
+    monkeypatch.setenv("PWN_BROKER_SKIP_ASCIINEMA", "1")
+    env.environ = {**env.environ, "PWN_BROKER_SKIP_ASCIINEMA": "1"}
+    env.console, out = term(monkeypatch)
+    env.console = TermConsole({"NO_COLOR": "1"}, out=out, indent="")
+    assert start(env, ["setup"]) == 0
+    assert out.getvalue() == (
+        f"ok    data installed in {env.paths.opt}\n"
+        f"ok    launcher {env.paths.opt / 'bin' / 'pwn-broker'}\n"
+    )

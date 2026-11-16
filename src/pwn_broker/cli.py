@@ -10,7 +10,7 @@ from pwn_broker import hostflow, hosts, kalihooks, questions, recorder, session 
 from pwn_broker import targetflow, toolhooks, vpn
 from pwn_broker.boxes import BoxError
 from pwn_broker.config import ConfigError, Settings
-from pwn_broker.console import Cancelled, Console, TermConsole
+from pwn_broker.console import INDENT, Cancelled, Console, TermConsole
 from pwn_broker.model import Box, Target
 from pwn_broker.note import NoteError
 from pwn_broker.paths import AppPaths
@@ -369,6 +369,8 @@ def start(env: Env, argv: list[str]) -> int:
         elif not notewindow.open_note(env.paths, env.settings, session.box, env.environ):
             command = notewindow.vim_command(env.paths, session.box.path / note.NOTE_NAME)
             console.warn("no note window opened, run: " + " ".join(command))
+        # one blank line between whatever the launch printed last and the first prompt
+        console.gap()
         env.run(session)
     finally:
         boxes.release_open(env.paths, pid=env.pid)
@@ -394,7 +396,8 @@ def main(argv: list[str] | None = None) -> int:
     env = Env(
         paths=paths,
         settings=settings,
-        console=TermConsole(os.environ),
+        # setup runs inside the installer's output, which is flush left
+        console=TermConsole(os.environ, indent="" if args[:1] == ["setup"] else INDENT),
         clock=lambda: datetime.now().astimezone(),
         environ=os.environ,
         cwd=cwd,

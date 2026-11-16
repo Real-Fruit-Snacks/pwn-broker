@@ -186,7 +186,9 @@ _NOTHING, _BLANK, _LINE = "nothing", "blank", "line"
 
 
 class TermConsole:
-    def __init__(self, env: Mapping[str, str], out: TextIO | None = None) -> None:
+    def __init__(self, env: Mapping[str, str], out: TextIO | None = None, indent: str = INDENT) -> None:
+        # indent: what every line but a heading and raw text starts with; setup passes none
+        self._indent = indent
         self._color = theme.color_enabled(env)
         options: dict = {"highlight": False, "markup": False, "emoji": False}
         if not self._color:
@@ -265,7 +267,7 @@ class TermConsole:
     def _status(self, kind: str, text: str) -> None:
         full = status_line(kind, text)
         self._write(
-            (INDENT, Style()), (full[:4], self._style(_KIND_COLOR[kind])), (full[4:], self._style(theme.TEXT))
+            (self._indent, Style()), (full[:4], self._style(_KIND_COLOR[kind])), (full[4:], self._style(theme.TEXT))
         )
 
     def ok(self, text: str) -> None:
@@ -278,10 +280,10 @@ class TermConsole:
         self._status("fail", text)
 
     def info(self, text: str) -> None:
-        self._write((INDENT, Style()), (text, self._style(theme.MUTE)))
+        self._write((self._indent, Style()), (text, self._style(theme.MUTE)))
 
     def detail(self, text: str) -> None:
-        self._write((DETAIL_INDENT, Style()), (text, self._style(theme.MUTE)))
+        self._write((self._indent + DETAIL_INDENT[len(INDENT) :], Style()), (text, self._style(theme.MUTE)))
 
     def header(self, text: str) -> None:
         # the first line of the launch: flush left with no blank line above it, and one below
@@ -297,7 +299,7 @@ class TermConsole:
         width = max((len(label) for label in [*(label for label, _ in rows), *align_to]), default=0) + 2
         for label, value in rows:
             self._write(
-                (INDENT, Style()), (f"{label:<{width}}", self._style(theme.MUTE)), (value, self._style(theme.TEXT))
+                (self._indent, Style()), (f"{label:<{width}}", self._style(theme.MUTE)), (value, self._style(theme.TEXT))
             )
 
     def raw(self, text: str) -> None:
@@ -322,14 +324,14 @@ class TermConsole:
         for row in rows:
             table.add_row(*(Text(cell, style=mute) for cell in row))
         self._start_line()
-        self._rich.print(Padding(table, (0, 0, 0, len(INDENT)), expand=False))
+        self._rich.print(Padding(table, (0, 0, 0, len(self._indent)), expand=False))
         self._last = _LINE
 
     def _fit(self, columns: list[str], rows: list[list[str]], index: int) -> list[list[str]]:
         # shorten the one named column just enough for the table to fit the terminal
         widths = [max([cell_len(name), *(cell_len(row[i]) for row in rows)]) for i, name in enumerate(columns)]
         # columns are two spaces apart
-        over = len(INDENT) + sum(widths) + 2 * (len(columns) - 1) - self._rich.width
+        over = len(self._indent) + sum(widths) + 2 * (len(columns) - 1) - self._rich.width
         if over <= 0:
             return rows
         keep = max(widths[index] - over, cell_len(columns[index]), CUT_KEEP + 3)
@@ -351,7 +353,7 @@ class TermConsole:
 
     def _ask(self, label: str, default: str | None, completer=None) -> str:
         suffix = f" [{default}]" if default is not None else ""
-        answer = self._prompt(f"{INDENT}{label:<12}{suffix} > ", completer=completer)
+        answer = self._prompt(f"{self._indent}{label:<12}{suffix} > ", completer=completer)
         if answer == "" and default is not None:
             return default
         return answer
@@ -361,7 +363,7 @@ class TermConsole:
         # a yes or no question stands on its own: a gap above and below
         self.gap()
         while True:
-            answer = _yes_no(self._prompt(f"{INDENT}{question} {hint} > "), default)
+            answer = _yes_no(self._prompt(f"{self._indent}{question} {hint} > "), default)
             if answer is not None:
                 self.gap()
                 return answer
