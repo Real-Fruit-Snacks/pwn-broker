@@ -26,6 +26,8 @@ python3 -m venv .venv && .venv/bin/pip install -e . && .venv/bin/python release/
 sh install.sh --from dist/pwn-broker-0.1.0-linux-x86_64.tar.gz
 ```
 
+The first command needs `python3-venv` and `git` (`apt install python3-venv git`); installing the app does not. That first step is the build machine's own environment and its dependencies are not pinned; what goes into the release file is. `release/build.py` makes its own build environment with the Python it packs.
+
 Run the installer as the user who will use pwn-broker, not with `sudo`; it asks for `sudo` itself when it needs to create the folder. It asks no questions otherwise. It creates `/opt/pwn-broker` (using `sudo` once if it has to) and gives it to you, unpacks the release's own Python into `python/`, makes a virtual environment in `app/` with that Python, installs the app and its dependencies there from the wheels in the release file, copies asciinema into `app/bin/`, runs the app's `setup`, and adds `/opt/pwn-broker/bin` to PATH in `~/.zshrc` and, if it exists, `~/.bashrc`. Nothing goes into the system Python. Run it again to upgrade: an install over an existing one replaces `python/` and `app/` and nothing else, and if it fails or is interrupted the previous install is put back. It refuses an `/opt/pwn-broker` that belongs to another user, for example one made as `kali` when you now run it as root: move that folder aside (`mv /opt/pwn-broker /opt/pwn-broker.old`) or run the installer as that user.
 
 | Option | Does |

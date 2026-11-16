@@ -507,14 +507,14 @@ Built. This section is the design, with what was built where it differs; the dif
 
 **The rule.** The Kali machine only ever downloads files I built and pinned, and nothing inside them fetches anything else. Section 8.12 does this for the tools. This section does it for the app.
 
-**Why.** The first installer downloaded a small wheel and let `pip` fetch the app's four dependencies from PyPI, at whatever version is newest and with no checksum. It then fetches asciinema from asciinema's own release. The app also runs on Kali's `python3`, so a new Kali Python can break it: the Kali image moved to 3.14 and one of the app's own tests failed there.
+**Why.** The first installer downloaded a small wheel and let `pip` fetch the app's four dependencies from PyPI, at whatever version is newest and with no checksum. It then fetched asciinema from asciinema's own release. The app also ran on Kali's `python3`, so a new Kali Python could break it: the Kali image moved to 3.14 and one of the app's own tests failed there.
 
 **Approaches.**
 
 | Decision | Options | Chosen | Why |
 |---|---|---|---|
 | What a release is | A wheel, with dependencies from PyPI · one file holding everything | One file | No third-party site is contacted at install, every byte is pinned, and a fresh VM installs the same thing every time |
-| The app's Python | Kali's own · its own, inside the release | Its own | A Kali upgrade cannot break the app, and the app needs only `sh`, `tar` and `curl` from Kali. The cost is a larger file and that Python fixes are mine to ship |
+| The app's Python | Kali's own · its own, inside the release | Its own | A Kali upgrade cannot break the app, and the app needs only `sh`, `tar`, `gzip` and `sha256sum` from Kali, and `curl` only without `--from`. The cost is a larger file and that Python fixes are mine to ship |
 | The app's Python and the tools' runtime | One shared copy · separate copies | Separate | Sharing would make the app need pwn-shop to be reachable, and the two repositories were split so neither shares the other's fate. The cost is a second 100 MB once a Python tool is installed |
 
 **The release file.** One file per release, `pwn-broker-<version>-linux-x86_64.tar.gz`, about 47 MB:
@@ -570,7 +570,7 @@ The installer comes from the release it installs, not from `main`, so the two al
 | `tool install` | Packages and the index | pwn-shop's releases, or a folder on disk |
 | Launch | Whether a newer release exists | This repository's releases; can be turned off |
 
-Nothing else. With `--from` and a folder index, nothing at all.
+Nothing else. With `--from` and a folder index, the install and the tool commands contact nothing; the check for a newer release is the one thing left, and `check_updates = false` turns it off.
 
 **Building it.**
 
