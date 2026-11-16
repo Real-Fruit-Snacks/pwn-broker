@@ -44,4 +44,4 @@ The first release. pwn-broker keeps a Hack The Box machine in order on Kali Linu
 - Every Kali run so far is root, in CI's container and by hand under WSL: not a normal user with `sudo`, not a full Kali desktop, not a real Hack The Box connection.
 - Nothing is signed: `SHA256SUMS.txt` comes from the same release, and the tool index is not signed.
 - Close pwn-broker before you upgrade; the installer does not check.
-- The installer's download from a release and the release workflow's publish step run for the first time with this release. Before it, the download had run only against a stand-in in the unit tests.
+- The installer's download from a release and the release workflow's publish step run for the first time with this release. Before it, the download had run only against a stand-in in the unit tests, and the workflow only as a dry run that publishes nothing.

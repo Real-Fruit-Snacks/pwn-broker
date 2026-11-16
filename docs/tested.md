@@ -67,7 +67,7 @@ At commit cf585e7.
 
 ## Not tested
 
-- The release workflow (`.github/workflows/release.yml`). It had never run when this was written, so the installer's download path (`curl ... | sh` with no `--from`) has never run against a real release; only against a stand-in in the unit tests.
+- The release workflow (`.github/workflows/release.yml`). It has run once, by hand on `main` as a dry run that publishes nothing (GitHub Actions run 43855237616): it built the release file, installed it, ran the unit suite against the release's own wheels on the installed Python, and stopped before publishing. It has not published a release, so the installer's download path (`curl ... | sh` with no `--from`) has never run against a real release; only against a stand-in in the unit tests.
 - A full Kali desktop session. CI's Kali run used a virtual display and `xterm`, and the run by hand used Kali's own qterminal under WSL, so Xfce, its window manager and focus have not been tried. Nor has your own VM.
 - A normal user. Both Kali runs are root, so `sudo` for `/etc/hosts` and OpenVPN has not run, and neither has the installer's own `sudo` step. The recording, `/etc/hosts`, VPN and ping part has run on Kali only as root: in a container, with a virtual display and an OpenVPN file with no server, and by hand under WSL.
 - A real Hack The Box connection. The OpenVPN file in the Kali run has no server behind it.
