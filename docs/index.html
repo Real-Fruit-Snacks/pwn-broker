@@ -75,44 +75,66 @@ sh install.sh --from .">Copy</button></div>
             <div class="term">
                 <div class="bar" aria-hidden="true"><i></i><i></i><i></i><span>zsh</span></div>
 <pre class="screen" id="screen" data-type="view" tabindex="0" aria-label="A pwn-broker session"><code><span class="ln"><span class="p">$</span> <span class="t">pwn-broker new</span></span>
-<span class="ln s">ok    9 checks passed</span>
-<span class="ln"><span class="q">box name     &gt; </span>forest</span>
-<span class="ln"><span class="q">platform     [htb] &gt; </span></span>
-<span class="ln"><span class="q">date         [2026-11-14] &gt; </span></span>
-<span class="ln"><span class="q">os           &gt; </span>windows</span>
-<span class="ln"><span class="q">difficulty   &gt; </span>easy</span>
-<span class="ln"><span class="q">add a target? [Y/n] &gt; </span></span>
-<span class="ln"><span class="q">ip           &gt; </span>10.10.10.161</span>
-<span class="ln"><span class="q">hostname     &gt; </span>forest.htb.local</span>
-<span class="ln"><span class="q">scope        [external] &gt; </span></span>
-<span class="ln"><span class="q">name         [forest.htb.local] &gt; </span>dc01</span>
-<span class="ln s">ok    target dc01 created</span>
-<span class="ln"><span class="q">add another? [y/N] &gt; </span></span>
-<span class="ln"><span class="q">add dc01's hostnames to /etc/hosts? [Y/n] &gt; </span></span>
-<span class="ln s">ok    /etc/hosts updated</span>
-<span class="ln o">    10.10.10.161 forest.htb.local</span>
-<span class="ln s">ok    10.10.10.161 answered in 43 ms</span>
-<span class="ln s">ok    box forest created</span>
+<span class="ln">pwn-broker 0.1.0</span>
+
+<span class="ln s">  ok    9 checks passed</span>
+
+<span class="ln">New box</span>
+<span class="ln"><span class="q">  box name     &gt; </span>forest</span>
+<span class="ln"><span class="q">  platform     [htb] &gt; </span></span>
+<span class="ln"><span class="q">  date         [2026-11-14] &gt; </span></span>
+<span class="ln"><span class="q">  os           &gt; </span>windows</span>
+<span class="ln"><span class="q">  difficulty   &gt; </span>easy</span>
+
+<span class="ln"><span class="q">  add a target? [Y/n] &gt; </span></span>
+
+<span class="ln">Target 1</span>
+<span class="ln"><span class="q">  ip           &gt; </span>10.10.10.161</span>
+<span class="ln"><span class="q">  hostname     &gt; </span>forest.htb.local</span>
+<span class="ln"><span class="q">  scope        [external] &gt; </span></span>
+<span class="ln"><span class="q">  name         [forest.htb.local] &gt; </span>dc01</span>
+
+<span class="ln s">  ok    target dc01 created</span>
+
+<span class="ln"><span class="q">  add another? [y/N] &gt; </span></span>
+
+<span class="ln"><span class="q">  add dc01's hostnames to /etc/hosts? [Y/n] &gt; </span></span>
+
+<span class="ln s">  ok    /etc/hosts updated</span>
+<span class="ln o">        10.10.10.161 forest.htb.local</span>
+<span class="ln s">  ok    10.10.10.161 answered in 43 ms</span>
+<span class="ln s">  ok    box forest created</span>
+
 <span class="ln"><span class="p">forest/dc01 &gt;</span> <span class="t">cred add</span></span>
-<span class="ln"><span class="q">username     &gt; </span>svc-alfresco</span>
-<span class="ln"><span class="q">domain       &gt; </span>htb.local</span>
-<span class="ln"><span class="q">secret       &gt; </span>s3rvice</span>
-<span class="ln"><span class="q">kind         [password] &gt; </span></span>
-<span class="ln"><span class="q">found on     [dc01] &gt; </span></span>
-<span class="ln"><span class="q">note         &gt; </span></span>
-<span class="ln s">ok    cred 1 saved, found on dc01</span>
-<span class="ln s">ok    lists updated: 1 username, 1 password, 1 pair</span>
+
+<span class="ln">New credential</span>
+<span class="ln"><span class="q">  username     &gt; </span>svc-alfresco</span>
+<span class="ln"><span class="q">  domain       &gt; </span>htb.local</span>
+<span class="ln"><span class="q">  secret       &gt; </span>s3rvice</span>
+<span class="ln"><span class="q">  kind         [password] &gt; </span></span>
+<span class="ln"><span class="q">  found on     [dc01] &gt; </span></span>
+<span class="ln"><span class="q">  note         &gt; </span></span>
+
+<span class="ln s">  ok    cred 1 saved, found on dc01</span>
+<span class="ln s">  ok    lists updated: 1 username, 1 password, 1 pair</span>
+
 <span class="ln"><span class="p">forest/dc01 &gt;</span> <span class="t">finish</span></span>
-<span class="ln o">box       forest (htb), started 2026-11-14</span>
-<span class="ln o">targets   1</span>
-<span class="ln o">files     14</span>
-<span class="ln o">archive   /home/kali/pwn-broker/wrapped/2026-11-14_htb_forest.finished.tar.gz</span>
-<span class="ln o">hosts     1 line to remove from /etc/hosts</span>
-<span class="ln"><span class="q">finish this box? [y/N] &gt; </span>y</span>
-<span class="ln s">ok    archive /home/kali/pwn-broker/wrapped/2026-11-14_htb_forest.finished.tar.gz</span>
-<span class="ln s">ok    removed 1 line from /etc/hosts</span>
-<span class="ln"><span class="q">remove working folder? [y/N] &gt; </span>y</span>
-<span class="ln s">ok    removed /home/kali/pwn-broker/active/2026-11-14_htb_forest</span>
+
+<span class="ln o">  box      forest (htb), started 2026-11-14</span>
+<span class="ln o">  targets  1</span>
+<span class="ln o">  files    14</span>
+<span class="ln o">  archive  /home/kali/pwn-broker/wrapped/2026-11-14_htb_forest.finished.tar.gz</span>
+<span class="ln o">  hosts    1 line to remove from /etc/hosts</span>
+
+<span class="ln"><span class="q">  finish this box? [y/N] &gt; </span>y</span>
+
+<span class="ln s">  ok    archive /home/kali/pwn-broker/wrapped/2026-11-14_htb_forest.finished.tar.gz</span>
+<span class="ln s">  ok    removed 1 line from /etc/hosts</span>
+
+<span class="ln"><span class="q">  remove working folder? [y/N] &gt; </span>y</span>
+
+<span class="ln s">  ok    removed /home/kali/pwn-broker/active/2026-11-14_htb_forest</span>
+
 <span class="ln end"><span class="p">$</span> <span class="cursor"></span></span></code></pre>
             </div>
             <figcaption id="session-cap">
@@ -129,11 +151,11 @@ sh install.sh --from .">Copy</button></div>
         <div class="blocks">
             <div class="block">
                 <h3>A folder per box, and per target</h3>
-                <p>A box lives in <code>~/pwn-broker/active/&lt;date&gt;_&lt;platform&gt;_&lt;name&gt;/</code>. Each target gets its own folder with <code>creds/</code>, <code>files/</code>, <code>loot/</code>, <code>scans/</code>, <code>exploits/</code>, <code>screenshots/</code> and <code>recordings/</code>.</p>
+                <p>A box lives in <code>~/pwn-broker/active/&lt;date&gt;_&lt;platform&gt;_&lt;name&gt;/</code>. Each target gets its own folder with <code>creds/</code>, <code>files/</code>, <code>loot/</code>, <code>scans/</code>, <code>exploits/</code>, <code>screenshots/</code> and <code>recordings/</code>. A second box with the same name and platform on the same day gets <code>-2</code> on its folder and its archives, so one box's archive is never offered to another for replacing.</p>
             </div>
             <div class="block">
                 <h3>A prompt for the whole session</h3>
-                <p>It stays open as <code>forest/dc01 &gt;</code>, with commands for targets, hostnames, credentials, flags, files, recordings, the VPN and status. <code>help</code> lists them. Only one box is open at a time.</p>
+                <p>It stays open as <code>forest/dc01 &gt;</code>, with commands for targets, hostnames, credentials, flags, files, recordings, the VPN and status. <code>help</code> lists them; <code>exit</code> leaves as <code>quit</code> does, and <code>clear</code> clears the screen. A yes or no question takes <code>y</code>, <code>yes</code>, <code>n</code>, <code>no</code>, or Enter for its default, and asks again after anything else; a wrong argument gets the command's usage under the <code>fail</code> line. Only one box is open at a time.</p>
             </div>
             <div class="block">
                 <h3>Credentials kept as typed</h3>
@@ -141,7 +163,7 @@ sh install.sh --from .">Copy</button></div>
             </div>
             <div class="block">
                 <h3>The note window</h3>
-                <p>A second terminal runs vim on <code>notes.md</code> with its own vimrc; your <code>~/.vimrc</code> is never read. It saves when you leave the window and reloads when you come back.</p>
+                <p>A second terminal runs vim on <code>notes.md</code> with its own vimrc; your <code>~/.vimrc</code> is never read. It saves when you leave the window and reloads when you come back. A box has one note window: opening the box again while it is open says <code>ok    the note is already open</code>, and <code>finish</code> closes it when it removes the working folder. It keeps the folder, with a <code>warn</code> line, when the note has unsaved changes or has changed since the archive was made.</p>
             </div>
             <div class="block">
                 <h3>Finish, export, import</h3>
@@ -214,10 +236,10 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
         <h2 id="tested-h">Tested on</h2>
         <div class="tested-grid">
             <ul class="untested" aria-label="Not tested">
-                <li><b>Not tested: a real Kali desktop session and its terminal.</b> The Kali run used a virtual display and <code>xterm</code>, so the window manager, focus and the terminal Kali opens by default have not been tried. Nor has your own VM.</li>
-                <li><b>Not tested: a normal user.</b> The Kali run is root, so <code>sudo</code> for <code>/etc/hosts</code> and OpenVPN has not run.</li>
+                <li><b>Not tested: a full Kali desktop session.</b> CI's Kali run used a virtual display and <code>xterm</code>, and the run by hand used Kali's own qterminal under WSL, so Xfce, its window manager and focus have not been tried. Nor has your own VM.</li>
+                <li><b>Not tested: a normal user.</b> Both Kali runs are root, so <code>sudo</code> for <code>/etc/hosts</code> and OpenVPN has not run.</li>
                 <li><b>Not tested: a real Hack The Box connection.</b> The OpenVPN file in the Kali run has no server behind it.</li>
-                <li><b>Not tested: a real tool package used by hand.</b> <code>pwn-shop</code>'s CI installed and started each one (kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng, peass-ng) on Kali, in a container. None has been run on a Kali desktop, against a real target, or by a normal user with <code>sudo</code>.</li>
+                <li><b>Not tested: a real tool package against a real target.</b> <code>pwn-shop</code>'s CI installed and started each one (kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng, peass-ng) on Kali, in a container, and kerbrute was installed from the published index and removed by <code>finish</code> in the run by hand. None has been run on a full Kali desktop, against a real target, or by a normal user with <code>sudo</code>.</li>
                 <li><b>Not tested: the installer's download.</b> No release exists, so fetching the wheel and checking its SHA-256 has not run.</li>
             </ul>
             <ul aria-label="Tested">
@@ -225,6 +247,7 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
                 <li><b>The unit tests, on Ubuntu 24.04 in CI with Python 3.11, 3.12, 3.13 and 3.14:</b> on Linux they include real tool installs into a virtual environment and the launchers. On each of 3.11, 3.12, 3.13 and 3.14: 2607 passed, 8 skipped; as root on 3.13: 2606 passed, 9 skipped; with warnings treated as errors.</li>
                 <li><b>One whole box in the official Kali image, as root, in CI:</b> <code>kalilinux/kali-rolling</code>, Kali 2026.3 at the time, with Python 3.14.8, zsh 5.9.2 and OpenVPN 2.7.8. The real installer, then a new box, the <code>/etc/hosts</code> line written and later removed byte for byte, a ping, the note window in vim, a credential, a recording under Kali's own zsh settings with the <code>[rec dc01]</code> prefix and its text copy, <code>export</code> while recording, <code>replay</code>, <code>vpn start</code> and <code>vpn stop</code> with a real OpenVPN and <code>tun0</code>, a tool installed and removed, a Python test tool on a test runtime package around the pinned upstream CPython 3.13 build: Kali's own <code>python3</code> is 3.14 and the tool runs on 3.13 from the runtime, <code>finish</code>, and <code>import</code>. Most steps are checked on disk or in the system; <code>replay</code> and <code>status</code> are checked by their output. Stand-ins: a virtual display with <code>xterm</code>, the container's gateway as the target, an OpenVPN file with no server behind it, and two small test packages for the tools.</li>
                 <li><b>The unit tests inside that Kali image, as root, on Kali's Python 3.14:</b> with the real asciinema, 2613 passed, 2 skipped, with warnings treated as errors.</li>
+                <li><b>Every command by hand, on 2026-11-16, in Kali 2026.2 under WSL 2 on Windows 11, as root:</b> installed with <code>sh install.sh --from .</code>, with Kali's own qterminal as <code>x-terminal-emulator</code> and Kali's Python 3.14.7. The layout was as <code>docs/design.md</code> section 6.14 describes: the header, the <code>Boxes</code>, <code>New box</code> and <code>Target &lt;n&gt;</code> headings, the indent, and one blank line around each command's output and each yes or no question. <code>note</code> with the note open printed <code>ok    the note is already open</code> and one vim ran; after <code>finish</code> removed the folder, neither that vim nor its terminal window was left. A second box named <code>forest</code> on the same day, after the first was finished and removed, got the folder <code>2026-11-15_htb_forest-2</code> and the archive <code>2026-11-15_htb_forest-2.finished.tar.gz</code>. <code>import</code> with no file asked again, and a folder got <code>fail  /root is a folder, not an exported box</code>. <code>exit</code> left the prompt with the export question, and <code>clear</code> cleared the screen. <code>2</code> and <code>maybe</code> at a yes or no question got <code>fail  answer y or n</code> and the question again. <code>target rename a b</code> printed <code>fail  too many arguments: b</code> with <code>usage: target rename &lt;target&gt;</code> under it. A fresh install's first launch asked nothing about folders, because <code>setup</code> had made them. A long hash in <code>cred list</code> was cut and ended in <code>...</code>, and <code>cred show 1</code> printed the whole secret alone. <code>record</code> in a real zsh session, <code>replay</code>, <code>tool install kerbrute</code> from the published index, and <code>finish</code>, which removed the tool, worked as before.</li>
                 <li><b>The pinned asciinema, in CI on Ubuntu 24.04:</b> the app's own download code fetches it and checks it against its pin, and it reports version 3.2.1. <code>record</code> then records a real bash session and a real zsh session through a pseudo-terminal. All three tests pass: both sessions are recorded, and both show that asciinema writes the recording to disk as it happens. The same job runs the installer without <code>--no-asciinema</code>: it downloads asciinema 3.2.1 and checks it, and <code>record --help</code> runs from the installed launcher.</li>
                 <li><b>The seven packages in <code>pwn-shop</code>, in its CI on <code>main</code> (run 43772170454):</b> the six tools and the <code>python-3.13</code> runtime. Its <code>packages</code> job, on Ubuntu 24.04, built the runtime and build 3 of <code>certipy</code> and <code>targetedkerberoast</code>, downloaded the four packages already published and rebuilt each to the same bytes, and installed all seven through this app's own code under Python 3.12, 3.13 and 3.14, then started each tool's commands. Its <code>kali</code> job, in the official Kali image (Kali 2026.3, Python 3.14.8) with the container's network confirmed off, installed the runtime and all six tools through this app's own code and started each tool. The run then published the runtime and build 3 of <code>certipy</code> and <code>targetedkerberoast</code>.</li>
                 <li><b><code>install.sh</code>, run twice from a checkout on Ubuntu 24.04 in CI:</b> the first run builds the environment, installs the package and writes the launcher and the PATH line; the second reuses the environment and adds no second PATH line.</li>
@@ -238,16 +261,17 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
     <div class="wrap">
         <h2 id="issues-h">Known issues</h2>
         <ul>
-            <li>The recording, <code>/etc/hosts</code>, VPN and ping part has run on Kali only as root, in a container, with a virtual display and an OpenVPN file with no server. The checks still to run by hand are in <code>docs/kali-checks.md</code>.</li>
+            <li>The recording, <code>/etc/hosts</code>, VPN and ping part has run on Kali only as root: in a container, with a virtual display and an OpenVPN file with no server, and by hand under WSL. The checks still to run by hand are in <code>docs/kali-checks.md</code>.</li>
             <li>Builds 1 and 2 of the two Python tool packages, <code>certipy</code> and <code>targetedkerberoast</code>, run on Kali's own Python, and only where it is one they list: build 1 lists 3.12 and 3.13, build 2 lists 3.12, 3.13 and 3.14. Build 3 of each requires the <code>python-3.13</code> runtime instead, and is the one the index names as the latest. The other four tools need no Python.</li>
-            <li>After <code>finish</code> removes the working folder, the note window stays open on a file that no longer exists. Close it by hand.</li>
+            <li>On a terminal that hosts all its windows in one server process, such as gnome-terminal, <code>finish</code> closes the note's vim but cannot close its window. Whether that terminal then closes the window by itself has not been tried.</li>
+            <li>After Ctrl-C at a yes or no question, the next line follows directly under the question, with no blank line between. <code>--help</code> and <code>--version</code> are printed without colour.</li>
             <li>A window still recording has no text copy until it closes or the box is exported. A full-screen program appears only in the <code>.cast</code>.</li>
             <li>A password typed on a command line in a recorded window is recorded, and goes into the archive. The <code>[rec]</code> prefix is for zsh and bash only.</li>
             <li><code>finish</code> refuses while a window is recording for the box. <code>quit</code> leaves the box's <code>/etc/hosts</code> lines in place; only <code>finish</code> removes them.</li>
             <li>Only <code>tun</code> interfaces count as a VPN. Only OpenVPN files can be started, one VPN at a time, and an archive holds no copy of the VPN file. A tunnel the app did not start is never stopped by it.</li>
             <li>Ctrl-C while <code>vpn start</code> waits for OpenVPN to write its process ID can leave an OpenVPN running that the app does not track; stop it by hand. Starting a second tunnel while one the app did not start is up is reported as not up after 15 seconds, because the app reads only the lowest-numbered tunnel.</li>
             <li>Lines in <code>/etc/hosts</code> that are not the app's are never changed, so one that names the same host with another address has to be removed by hand.</li>
-            <li><code>tool install</code> from the published index has not been run on Kali. CI installs every package from a folder, with the network off. From the published address, the app's own download code has fetched the index and two packages (<code>certipy</code> build 3 and the <code>python-3.13</code> runtime) and checked each against the index, on Windows.</li>
+            <li><code>tool install</code> from the published index has run on Kali once, by hand, for kerbrute (see tested on). CI installs every package from a folder, with the network off. From the published address, the app's own download code has fetched the index and two packages (<code>certipy</code> build 3 and the <code>python-3.13</code> runtime) and checked each against the index, on Windows.</li>
             <li>No release has been published, so the <code>curl</code> install line does not work yet. Install from a clone.</li>
             <li><code>cred list</code> marks a secret it cannot show exactly (a tab, another control character, or a space at either end) with <code>*</code> after the number. <code>cred show</code> prints it unchanged.</li>
             <li>Links and special files (named pipes, sockets, devices) in a box are not archived. <code>export</code> and <code>finish</code> list them, and <code>finish</code> says how many will go when the folder is removed.</li>

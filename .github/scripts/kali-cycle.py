@@ -70,10 +70,22 @@ INTERPRETER = "import sys; print(tuple(sys.version_info[:2])); print(sys.prefix)
 VPN_ADDRESS, VPN_PEER = "10.10.14.7", "10.10.14.8"
 COMMAND, MARKER = "echo marker-$((40+2))", "marker-42"
 
-# shell/app.py prompt_text, with a current target
+# shell/app.py prompt_text, with a current target; the prompt line is flush left
 PROMPT = f"{BOX}/{TARGET} > "
+# console.INDENT: before every status line, question, field and table row (not headings or the prompt)
+INDENT = "  "
+# console.DETAIL_INDENT: a detail line starts under the text of the status line above it
+DETAIL = INDENT + " " * len("ok    ")
 # checks.report: "1 check passed" or "<n> checks passed", on an ok line (console.status_line)
-CHECKS_LINE = re.compile(r"ok    \d+ checks? passed")
+CHECKS_LINE = re.compile(re.escape(INDENT) + r"ok    \d+ checks? passed")
+# the longest label of each list of fields waited for (console.fields pads to it, plus two):
+# cmd_misc.status, cmd_vpn.vpn_status, cmd_tool.tool_info for a tool not installed,
+# lifecycle.finish_box's summary with toolhooks.summary's rows, toolhooks._restore
+STATUS_LONGEST = "recordings"
+VPN_STATUS_LONGEST = "started for"
+TOOL_INFO_LONGEST = "description"
+SUMMARY_LONGEST = "runtimes"
+RESTORE_LONGEST = "tools"
 
 # A point-to-point tunnel with no peer and no keys: OpenVPN opens tun0 with its address at
 # start-up and waits for a peer that never comes. The allow option is needed by versions that
@@ -124,14 +136,37 @@ def readable(text: str) -> str:
 
 
 def asked(label: str, default: str | None = None) -> str:
-    """console.TermConsole._ask: the label in 12 columns, an optional [default], then ` > `."""
+    """console.TermConsole._ask: the indent, the label in 12 columns, an optional [default], then ` > `."""
     suffix = f" [{default}]" if default is not None else ""
-    return f"{label:<12}{suffix} > "
+    return f"{INDENT}{label:<12}{suffix} > "
 
 
 def confirm(question: str, default: bool) -> str:
-    """console.TermConsole.confirm: the question, [Y/n] or [y/N], then ` > `."""
-    return f"{question} {'[Y/n]' if default else '[y/N]'} > "
+    """console.TermConsole.confirm: the indent, the question, [Y/n] or [y/N], then ` > `."""
+    return f"{INDENT}{question} {'[Y/n]' if default else '[y/N]'} > "
+
+
+def ok(text: str) -> str:
+    """console.TermConsole._status: the indent, then console.status_line."""
+    return f"{INDENT}ok    {text}"
+
+
+def warn(text: str) -> str:
+    return f"{INDENT}warn  {text}"
+
+
+def fail(text: str) -> str:
+    return f"{INDENT}fail  {text}"
+
+
+def field_row(label: str, value: str, longest: str) -> str:
+    """console.TermConsole.fields: the indent, the label padded to the list's longest label plus two."""
+    return f"{INDENT}{label:<{len(longest) + 2}}{value}"
+
+
+def whole_line(text: str) -> re.Pattern[str]:
+    """The text as a line of its own, nothing before or after it on that line."""
+    return re.compile(r"(?m)^" + re.escape(text) + r"\r?$")
 
 
 # ---- evidence
@@ -617,6 +652,8 @@ class State:
         self.sha256: dict[str, str] = {}
         # how many lines the tool log had before the step that is checking it
         self.logged = 0
+        # the note window that is open: its vim and the terminal around it, by process ID
+        self.window: tuple[int, int] | None = None
 
     @property
     def folder(self) -> Path:
@@ -639,16 +676,77 @@ def check_hosts(s: State, expected: bytes, what: str, snapshot: str) -> None:
     )
 
 
-def launch(name: str, argv: list[str], first: str, repairs: tuple[str, ...] = ()) -> Terminal:
+def note_vims(s: State) -> list[Proc]:
+    """The vims running on this box's note with the app's vimrc (notewindow.vim_command)."""
+    notes = str(s.folder / "notes.md")
+    found = []
+    for p in processes():
+        argv = p.argv
+        if argv and Path(argv[0]).name == "vim" and argv[-1] == notes and "-u" in argv:
+            if argv[argv.index("-u") + 1 : argv.index("-u") + 2] == [str(VIMRC)]:
+                found.append(p)
+    return found
+
+
+def one_note_window(s: State, what: str) -> Proc:
+    """Exactly one note vim for the box: one window per box (notewindow.find_note)."""
+    notes = s.folder / "notes.md"
+
+    def listing() -> str:
+        shown = "\n".join(f"{p.pid} {p.ppid} {p.comm}: {' '.join(p.argv)}" for p in processes())
+        return f"--- processes ---\n{shown}\n--- end ---"
+
+    try:
+        wait_until(lambda: note_vims(s), f"a vim with -u {VIMRC} is running on {notes}", timeout=WAIT)
+    except Failed:
+        raise Failed(f"no vim with -u {VIMRC} on {notes} {what}\n{listing()}") from None
+    time.sleep(1)  # a second window, if one were opened, has started by now
+    found = note_vims(s)
+    check(len(found) == 1, f"one note vim for the box {what}", listing())
+    return found[0]
+
+
+def window_closed(s: State, what: str) -> None:
+    """lifecycle.close_window at finish: the note's vim and its terminal have both ended, not even a zombie left."""
+    vim, terminal = s.window
+
+    def gone() -> bool:
+        left = {p.pid for p in processes()}
+        return vim not in left and terminal not in left and not note_vims(s)
+
+    try:
+        wait_until(gone, f"the note's vim ({vim}) and its terminal ({terminal}) are gone {what}")
+    except Failed:
+        listing = "\n".join(f"{p.pid} {p.ppid} {p.state} {p.comm}: {' '.join(p.argv)}" for p in processes())
+        raise Failed(f"the note window was left {what}\n--- processes ---\n{listing}\n--- end ---") from None
+    s.window = None
+
+
+def launch(
+    name: str, argv: list[str], first: str, repairs: tuple[str, ...] = (), header: bool = True
+) -> Terminal:
     """Start pwn-broker; note every warn and fail line; answer the expected repair offers.
 
+    `header` is whether the launch opens with cli.start's header (every launch but an import).
     `repairs` names the checks whose repair offer is expected; any other offer fails, so an
     installer defect cannot hide behind a repair. Fails when a check fails. Returns once
     `first`, the first thing after the launch, is shown.
     """
+    from pwn_broker import __version__  # the app's own package, in the Python that runs this script
+
     term = Terminal(name, argv, environment())
     start = term.pos
     term.wait(CHECKS_LINE, "the launch checks line")
+    # console.TermConsole.header: the first line, flush left, then a blank line
+    opening = re.match(r"pwn-broker \S+\r?\n\r?\n", term.text())
+    if header:
+        check(
+            opening is not None and opening[0].split()[1] == __version__,
+            f"{name}'s launch opens with the header pwn-broker {__version__} and a blank line",
+            term.failure("no header"),
+        )
+    else:
+        check(opening is None, f"{name}'s launch has no header", term.failure("a header"))
     # checks._offer_repair asks after a check that can be fixed
     fix = confirm("fix it now?", True)
     while term.wait_any({"fix": fix, "next": first}, f"a repair offer or {first!r}") == "fix":
@@ -663,8 +761,8 @@ def launch(name: str, argv: list[str], first: str, repairs: tuple[str, ...] = ()
         note(f"{fix.strip()} for {check_name}, answered with its default, yes")
         term.type("\r")
         # the repair's own line: past the question's redraw, which must not count as another offer
-        done = term.wait(re.compile(r"ok    \S+ fixed|fail  [^\r\n]*"), "the repair's result")
-        note(done[0])
+        done = term.wait(re.compile(re.escape(INDENT) + r"(?:ok    \S+ fixed|fail  [^\r\n]*)"), "the repair's result")
+        note(done[0].strip())
     flagged = [line for line in lines_of(term.text()[start : term.pos]) if line.startswith(("warn  ", "fail  "))]
     for line in flagged:
         note(line)
@@ -769,11 +867,19 @@ def found_by_zsh(command: str) -> None:
 def step_launch(s: State) -> None:
     found_by_zsh("pwn-broker")
     found_by_zsh("record")
-    # the box folders do not exist until the first launch repairs them; no other repair is expected
-    s.prompt = launch("prompt", [str(BIN / "pwn-broker"), "new"], asked("box name"), repairs=("folders",))
+    # setup, run by the installer, makes the box folders; the first launch asks nothing about them
+    check(ACTIVE.is_dir() and WRAPPED.is_dir(), f"setup made {ACTIVE} and {WRAPPED} before the first launch")
+    s.prompt = launch("prompt", [str(BIN / "pwn-broker"), "new"], asked("box name"))
     # the launch questions are answered in step 2; the vpn check must say no tunnel is up
     shown = s.prompt.text()
-    check("warn  vpn   no VPN tunnel is up" in shown, "the vpn check warns that no tunnel is up")
+    check(warn("vpn   no VPN tunnel is up") in shown, "the vpn check warns that no tunnel is up", readable(shown))
+    check(
+        not any("folders" in line for line in lines_of(shown)),
+        "the first launch says nothing about the box folders",
+        readable(shown),
+    )
+    # questions.ask_box: the New box heading, a line of its own, over its questions
+    check(whole_line("New box").search(shown) is not None, "the questions are under the New box heading", readable(shown))
 
 
 def step_new_box(s: State) -> None:
@@ -792,11 +898,13 @@ def step_new_box(s: State) -> None:
     t.answer(asked("os"), OS_NAME, "the os question")
     t.answer(asked("difficulty"), DIFFICULTY, "the difficulty question")
     t.answer(confirm("add a target?", True), "", "the add a target question")
+    # cli.new_box: questions.ask_target's heading counts the targets
+    t.wait(whole_line("Target 1"), "the Target 1 heading")
     t.answer(asked("ip"), s.ip, "the ip question")
     t.answer(asked("hostname"), HOSTNAME, "the hostname question")
     t.answer(asked("scope", "external"), "", "the scope question")
     t.answer(asked("name", HOSTNAME), TARGET, "the target name question")
-    t.wait(f"ok    target {TARGET} created", "the target created line")
+    t.wait(ok(f"target {TARGET} created"), "the target created line")
     t.answer(confirm("add another?", False), "", "the add another question")
 
     box = read_toml(s.folder / "box.toml")
@@ -814,7 +922,7 @@ def step_new_box(s: State) -> None:
 def step_hosts(s: State) -> None:
     t = s.prompt
     t.answer(confirm(f"add {TARGET}'s hostnames to /etc/hosts?", True), "", "the /etc/hosts question")
-    t.wait("ok    /etc/hosts updated", "the /etc/hosts updated line")
+    t.wait(ok("/etc/hosts updated"), "the /etc/hosts updated line")
     check_hosts(
         s,
         s.hosts_before + hosts_line(s, [HOSTNAME]),
@@ -827,29 +935,16 @@ def step_hosts(s: State) -> None:
 
 def step_ping(s: State) -> None:
     # targetflow._ping
-    found = s.prompt.wait(re.compile(rf"ok    {re.escape(s.ip)} answered in \d+ ms"), "the ping line")
-    note(found[0])
+    found = s.prompt.wait(re.compile(re.escape(ok(s.ip)) + r" answered in \d+ ms"), "the ping line")
+    note(found[0].strip())
 
 
 def step_box_created(s: State) -> None:
     t = s.prompt
-    t.wait(f"ok    box {BOX} created", "the box created line")
+    t.wait(ok(f"box {BOX} created"), "the box created line")
     t.wait(PROMPT, "the prompt")
-    notes = str(s.folder / "notes.md")
-
-    def vim() -> Proc | None:
-        for p in processes():
-            argv = p.argv
-            if argv and Path(argv[0]).name == "vim" and argv[-1] == notes and "-u" in argv:
-                if argv[argv.index("-u") + 1 : argv.index("-u") + 2] == [str(VIMRC)]:
-                    return p
-        return None
-
-    try:
-        found = wait_until(vim, f"a vim with -u {VIMRC} is running on {notes}", timeout=WAIT)
-    except Failed:
-        listing = "\n".join(f"{p.pid} {p.ppid} {p.comm}: {' '.join(p.argv)}" for p in processes())
-        raise Failed(f"no vim with -u {VIMRC} on {notes}\n--- processes ---\n{listing}\n--- end ---") from None
+    found = one_note_window(s, "after the new box")
+    s.window = (found.pid, found.ppid)
     parent = process(found.ppid)
     note(f"vim {found.pid}: {' '.join(found.argv)}; parent {found.ppid} ({parent.comm if parent else 'gone'})")
     # the parent is the terminal x-terminal-emulator resolves to, or the program that one runs
@@ -886,14 +981,16 @@ def step_box_created(s: State) -> None:
 def step_cred(s: State) -> None:
     t = s.prompt
     t.type("cred add\r")
+    # cmd_cred: questions.ask_cred's heading
+    t.wait(whole_line("New credential"), "the New credential heading")
     t.answer(asked("username"), USERNAME, "the username question")
     t.answer(asked("domain"), DOMAIN, "the domain question")
     t.answer(asked("secret"), SECRET, "the secret question")
     t.answer(asked("kind", "password"), "", "the kind question")
     t.answer(asked("found on", TARGET), "", "the found on question")
     t.answer(asked("note"), "", "the note question")
-    t.wait(f"ok    cred 1 saved, found on {TARGET}", "the cred saved line")
-    t.wait("ok    lists updated: 1 username, 1 password, 1 pair", "the lists updated line")
+    t.wait(ok(f"cred 1 saved, found on {TARGET}"), "the cred saved line")
+    t.wait(ok("lists updated: 1 username, 1 password, 1 pair"), "the lists updated line")
     t.wait(PROMPT, "the prompt after cred add")
     lists = s.folder / "lists"
     for name, value in (("usernames.txt", USERNAME), ("passwords.txt", SECRET), ("userpass.txt", f"{USERNAME}:{SECRET}")):
@@ -904,8 +1001,8 @@ def step_cred(s: State) -> None:
 def step_host_add(s: State) -> None:
     t = s.prompt
     t.type(f"host add {LATER}\r")
-    t.wait(f"ok    {TARGET} now answers to 2 names", "the hostname count line")
-    t.wait("ok    /etc/hosts updated", "the /etc/hosts updated line")
+    t.wait(ok(f"{TARGET} now answers to 2 names"), "the hostname count line")
+    t.wait(ok("/etc/hosts updated"), "the /etc/hosts updated line")
     t.wait(PROMPT, "the prompt after host add")
     check_hosts(
         s,
@@ -923,8 +1020,9 @@ def step_host_add(s: State) -> None:
 
 def step_record(s: State) -> None:
     r = s.record = Terminal("record", [str(BIN / "record"), TARGET], environment())
-    r.wait(f"ok    recording this window for {TARGET} ({BOX})", "the recording line")
-    r.wait("exit this shell to stop", "the exit line")
+    r.wait(ok(f"recording this window for {TARGET} ({BOX})"), "the recording line")
+    # record._record: a detail line, under the text of the line above
+    r.wait(DETAIL + "exit this shell to stop", "the exit line")
     r.wait(f"[rec {TARGET}]", f"the recorded zsh's prompt with its [rec {TARGET}] prefix")
     r.pump(1.5)  # the rest of Kali's two-line prompt
     shown = readable(r.text()).split("\n")
@@ -969,12 +1067,16 @@ def step_record(s: State) -> None:
 def step_while_recording(s: State) -> None:
     t = s.prompt
     out = shell(t, "status", expect="root flag")
-    # cmd_misc.status: labels in 11 columns; _recordings_line
-    check(f"{'recordings':<11}1 (1 recording now)" in out, "status says one window is recording", readable(out))
+    # cmd_misc.status: console.fields, padded to its longest label, recordings; _recordings_line
+    check(
+        field_row("recordings", "1 (1 recording now)", STATUS_LONGEST) in out,
+        "status says one window is recording",
+        readable(out),
+    )
     start = t.pos
     t.type("finish\r")
     t.wait(
-        f"fail  1 window is still recording ({TARGET}). exit it, then finish again",
+        fail(f"1 window is still recording ({TARGET}). exit it, then finish again"),
         "the still-recording refusal",
     )
     t.wait(PROMPT, "the prompt after finish")
@@ -986,8 +1088,8 @@ def step_while_recording(s: State) -> None:
 def step_export(s: State) -> None:
     t = s.prompt
     t.type("export\r")
-    t.wait("warn  1 window is still recording; the export holds it up to now", "the still-recording warning")
-    found = t.wait(re.compile(r"ok    archive (\S+\.exported\.tar\.gz)"), "the archive line")
+    t.wait(warn("1 window is still recording; the export holds it up to now"), "the still-recording warning")
+    found = t.wait(re.compile(re.escape(ok("archive ")) + r"(\S+\.exported\.tar\.gz)"), "the archive line")
     t.wait(PROMPT, "the prompt after export")
     archive = Path(found[1])
     expected = WRAPPED / f"{s.folder.name}.exported.tar.gz"
@@ -1001,7 +1103,7 @@ def step_export(s: State) -> None:
 def step_close_recording(s: State) -> None:
     r = s.record
     r.type("exit\r")
-    r.wait("ok    recording saved", "the recording saved line")
+    r.wait(ok("recording saved, "), "the recording saved line")
     status = r.wait_exit("record to end after exit")
     check(status == 0, "record ended with status 0", f"status {status}")
     casts = sorted((s.folder / "targets" / TARGET / "recordings").glob("*.cast"))
@@ -1053,8 +1155,8 @@ def step_vpn(s: State) -> None:
     OVPN.write_text(OVPN_TEXT, encoding="utf-8")
     t.type("vpn start\r")
     t.answer(asked("vpn file"), str(OVPN), "the vpn file question")
-    t.wait("ok    copied to vpn/test.ovpn", "the copied line")
-    t.wait(f"ok    vpn up, {VPN_ADDRESS} on tun0", "the vpn up line", timeout=60)
+    t.wait(ok("copied to vpn/test.ovpn"), "the copied line")
+    t.wait(ok(f"vpn up, {VPN_ADDRESS} on tun0"), "the vpn up line", timeout=60)
     t.wait(PROMPT, "the prompt after vpn start")
 
     done = run(["ip", "-4", "addr", "show", "tun0"])
@@ -1071,9 +1173,11 @@ def step_vpn(s: State) -> None:
     check(mode == 0o600, f"{copy} has mode 600", oct(mode) if mode is not None else "missing")
 
     out = shell(t, "vpn status", expect="started for")
-    # cmd_vpn.vpn_status: labels in 13 columns
+    # cmd_vpn.vpn_status: console.fields, padded to its longest label, started for
     check(
-        f"{'state':<13}up" in out and f"{'address':<13}{VPN_ADDRESS} on tun0" in out and f"{'file':<13}test.ovpn" in out,
+        field_row("state", "up", VPN_STATUS_LONGEST) in out
+        and field_row("address", f"{VPN_ADDRESS} on tun0", VPN_STATUS_LONGEST) in out
+        and field_row("file", "test.ovpn", VPN_STATUS_LONGEST) in out,
         "vpn status shows the tunnel up, its address and the file",
         readable(out),
     )
@@ -1082,7 +1186,7 @@ def step_vpn(s: State) -> None:
     out = shell(t, "vpn log", expect=log_lines[-1].strip())
     check("no log yet" not in out, "vpn log prints the log", readable(out))
     out = shell(t, "status", expect="root flag")
-    check(f"{'vpn':<11}{VPN_ADDRESS} on tun0" in out, "status shows the VPN address", readable(out))
+    check(field_row("vpn", f"{VPN_ADDRESS} on tun0", STATUS_LONGEST) in out, "status shows the VPN address", readable(out))
 
 
 def step_vpn_daemon(s: State) -> None:
@@ -1101,7 +1205,7 @@ def step_vpn_daemon(s: State) -> None:
     check(proc.ppid == 1, "openvpn's parent is PID 1", repr(proc))
     check(proc.tty == 0, "openvpn has no controlling terminal", repr(proc))
 
-    shell(t, "vpn stop", expect="ok    vpn stopped")
+    shell(t, "vpn stop", expect=ok("vpn stopped"))
     wait_until(lambda: not openvpns(), "no openvpn process is left")
     wait_until(lambda: run(["ip", "link", "show", "tun0"]).returncode != 0, "tun0 is gone")
 
@@ -1114,7 +1218,7 @@ def step_tool(s: State) -> None:
     s.logged = len(tool_log())
     t.type(f"tool install {TOOL}\r")
     # toolinstall._show
-    t.wait(f"ok    {TOOL} {TOOL_VERSION} installed", "the installed line")
+    t.wait(ok(f"{TOOL} {TOOL_VERSION} installed"), "the installed line")
     t.wait(PROMPT, "the prompt after tool install")
     launcher = BIN / TOOL
     check(launcher.is_file() and os.access(launcher, os.X_OK), f"{launcher} exists")
@@ -1123,7 +1227,7 @@ def step_tool(s: State) -> None:
 
 
 # toolinstall.install_runtime: the runtime's line, with the zip's size in MiB
-RUNTIME_INSTALLED = re.compile(rf"ok    {re.escape(RUNTIME)} {re.escape(RUNTIME_VERSION)} installed \(runtime, \d+ MB\)")
+RUNTIME_INSTALLED = re.compile(re.escape(ok(f"{RUNTIME} {RUNTIME_VERSION} installed")) + r" \(runtime, \d+ MB\)")
 PY_PACKAGE = f"{PY_TOOL} {PY_VERSION}-{PY_BUILD}"
 RUNTIME_PACKAGE = f"{RUNTIME} {RUNTIME_VERSION}-{RUNTIME_BUILD}"
 
@@ -1139,10 +1243,11 @@ def step_python_tool(s: State) -> None:
     rows = [line.split() for line in lines_of(out)]
     check(any(row[:3] == [PY_TOOL, f"{PY_VERSION}-{PY_BUILD}", "kali"] for row in rows), f"tool list shows {PY_TOOL}", readable(out))
     check(RUNTIME not in out, f"tool list does not show {RUNTIME}", readable(out))
-    # cmd_tool._requirement, after the 12-column label
-    out = shell(t, f"tool info {PY_TOOL}", expect=f"{'requires':<12}{RUNTIME} (")
+    # cmd_tool._requirement, in tool_info's fields, padded to its longest label, description
+    requires = field_row("requires", f"{RUNTIME} (", TOOL_INFO_LONGEST)
+    out = shell(t, f"tool info {PY_TOOL}", expect=requires)
     check(
-        re.search(rf"{'requires':<12}{re.escape(RUNTIME)} \(\d+ MB, not installed\)", out) is not None,
+        re.search(re.escape(requires) + r"\d+ MB, not installed\)", out) is not None,
         f"tool info says {PY_TOOL} requires {RUNTIME}, not installed",
         readable(out),
     )
@@ -1153,8 +1258,9 @@ def step_python_tool(s: State) -> None:
     # toolhooks.install_tool: the runtime first, then the tool
     found = t.wait(RUNTIME_INSTALLED, "the runtime's installed line", timeout=300)
     note(found[0])
-    t.wait(f"ok    {PY_TOOL} {PY_VERSION} installed", "the tool's installed line", timeout=300)
-    t.wait(f"run   {PY_TOOL}   from any terminal", "the run line")
+    t.wait(ok(f"{PY_TOOL} {PY_VERSION} installed"), "the tool's installed line", timeout=300)
+    # toolinstall._show: an info line, indented
+    t.wait(f"{INDENT}run   {PY_TOOL}   from any terminal", "the run line")
     t.wait(PROMPT, "the prompt after tool install")
     out = t.text()[start : t.pos]
     check(not any(line.startswith(("warn  ", "fail  ")) for line in lines_of(out)), "tool install printed no warn or fail line", readable(out))
@@ -1193,11 +1299,29 @@ def step_python_tool(s: State) -> None:
     )
 
 
-# toolhooks.summary: the box's tools in the order they were installed, then the runtimes freed
-TOOLS_SUMMARY = f"tools     {TOOL} {TOOL_VERSION}, {PY_TOOL} {PY_VERSION}   (will be removed)"
-RUNTIMES_SUMMARY = f"runtimes  {RUNTIME} {RUNTIME_VERSION}   (will be removed)"
+# toolhooks.summary: the box's tools in the order they were installed, one per row with the
+# label on the first (toolhooks._one_per_row), then the runtimes freed; each row a line of its own
+TOOLS_SUMMARY = [
+    whole_line(field_row("tools", f"{TOOL} {TOOL_VERSION}   (will be removed)", SUMMARY_LONGEST)),
+    whole_line(field_row("", f"{PY_TOOL} {PY_VERSION}   (will be removed)", SUMMARY_LONGEST)),
+]
+RUNTIMES_SUMMARY = whole_line(field_row("runtimes", f"{RUNTIME} {RUNTIME_VERSION}   (will be removed)", SUMMARY_LONGEST))
+# hostflow.summary
+HOSTS_SUMMARY = whole_line(field_row("hosts", "1 line to remove from /etc/hosts", SUMMARY_LONGEST))
 # toolhooks.remove_idle_runtimes
-RUNTIME_REMOVED = f"ok    {RUNTIME} {RUNTIME_VERSION} removed (runtime)"
+RUNTIME_REMOVED = ok(f"{RUNTIME} {RUNTIME_VERSION} removed (runtime)")
+# lifecycle.close_window: the only line it prints, when the window is left
+WINDOW_LEFT = warn("the note window did not close")
+
+
+def summary(t: Terminal, s: State | None = None) -> None:
+    """lifecycle.finish_box's summary, in its order: box, targets, files, archive, then the hooks' rows."""
+    if s is not None:
+        t.wait(whole_line(field_row("box", f"{BOX} ({PLATFORM}), started {s.day}", SUMMARY_LONGEST)), "the summary's box line")
+    for n, row in enumerate(TOOLS_SUMMARY, 1):
+        t.wait(row, f"the summary's tools row {n}")
+    t.wait(RUNTIMES_SUMMARY, "the summary's runtimes line")
+    t.wait(HOSTS_SUMMARY, "the summary's hosts line")
 # toolhooks.undo: each tool in the box's order, then the runtime no tool requires any more
 FINISHED = [
     ("finish", f"{TOOL} {TOOL_VERSION}-{TOOL_BUILD}"),
@@ -1210,28 +1334,30 @@ def step_finish(s: State) -> None:
     t = s.prompt
     t.type("vpn start\r")
     t.answer(asked("vpn file", str(OVPN)), "", "the vpn file question with the last file")
-    t.wait("ok    copied to vpn/test.ovpn", "the copied line")
-    t.wait(f"ok    vpn up, {VPN_ADDRESS} on tun0", "the vpn up line", timeout=60)
+    t.wait(ok("copied to vpn/test.ovpn"), "the copied line")
+    t.wait(ok(f"vpn up, {VPN_ADDRESS} on tun0"), "the vpn up line", timeout=60)
     t.wait(PROMPT, "the prompt after vpn start")
 
     s.logged = len(tool_log())
+    start = t.pos
     t.type("finish\r")
     # lifecycle.finish_box's summary, then the hooks' lines: toolhooks registers before kalihooks
-    t.wait(f"box       {BOX} ({PLATFORM}), started {s.day}", "the summary's box line")
-    t.wait(TOOLS_SUMMARY, "the summary's tools line")
-    t.wait(RUNTIMES_SUMMARY, "the summary's runtimes line")
-    t.wait("hosts     1 line to remove from /etc/hosts", "the summary's hosts line")
+    summary(t, s)
     t.answer(confirm("finish this box?", False), "y", "the finish question")
-    found = t.wait(re.compile(r"ok    archive (\S+\.finished\.tar\.gz)"), "the archive line")
+    found = t.wait(re.compile(re.escape(ok("archive ")) + r"(\S+\.finished\.tar\.gz)"), "the archive line")
     # toolhooks.undo removes the runtime once no tool requires it, before kalihooks' lines
     t.wait(RUNTIME_REMOVED, "the runtime removed line")
-    t.wait("ok    removed 1 line from /etc/hosts", "the hosts lines removed")
+    t.wait(ok("removed 1 line from /etc/hosts"), "the hosts lines removed")
     t.answer(confirm(f"the VPN is still up ({VPN_ADDRESS}). stop it?", False), "y", "the VPN question")
-    t.wait("ok    vpn stopped", "the vpn stopped line")
+    t.wait(ok("vpn stopped"), "the vpn stopped line")
     t.answer(confirm("remove working folder?", False), "y", "the remove folder question")
-    t.wait(f"ok    removed {s.folder}", "the folder removed line")
+    # lifecycle.finish_box closes the note window, then removes the folder
+    t.wait(ok(f"removed {s.folder}"), "the folder removed line")
     status = t.wait_exit("the prompt to end after finish")
     check(status == 0, "pwn-broker ended with status 0", f"status {status}")
+    out = t.text()[start:]
+    check(WINDOW_LEFT not in out, "finish did not say the note window was left", readable(out))
+    window_closed(s, "after finish")
 
     check_hosts(s, s.hosts_before, "/etc/hosts is byte for byte what it was before step 3", "hosts.step17")
     wait_until(lambda: not openvpns(), "no openvpn process is left")
@@ -1255,22 +1381,29 @@ def step_finish(s: State) -> None:
 
 def step_import(s: State) -> None:
     s.logged = len(tool_log())
+    # cli.start prints no header for an import
     t = launch(
         "import",
         [str(BIN / "pwn-broker"), "import", str(s.finished)],
-        f"tools     {TOOL} {TOOL_VERSION}, {PY_TOOL} {PY_VERSION}",
+        field_row("tools", f"{TOOL} {TOOL_VERSION}, {PY_TOOL} {PY_VERSION}", RESTORE_LONGEST),
+        header=False,
     )
     # toolhooks._restore asks first and installs in the box's order, a runtime before the tool
     # that requires it; lifecycle.import_box reports after its hooks; cli.start's
-    # hostflow.on_open puts the line back
+    # hostflow.on_open puts the line back, then opens the note: none is open since finish closed it
     t.answer(confirm("install these tools again?", True), "y", "the install again question")
-    t.wait(f"ok    {TOOL} {TOOL_VERSION} installed", "the installed line")
+    t.wait(ok(f"{TOOL} {TOOL_VERSION} installed"), "the installed line")
     t.wait(RUNTIME_INSTALLED, "the runtime's installed line", timeout=300)
-    t.wait(f"ok    {PY_TOOL} {PY_VERSION} installed", f"{PY_TOOL}'s installed line", timeout=300)
-    t.wait(f"ok    unpacked to {s.folder}", "the unpacked line")
-    t.wait("ok    1 targets", "the targets line")
-    t.wait("ok    /etc/hosts updated", "the /etc/hosts updated line")
+    t.wait(ok(f"{PY_TOOL} {PY_VERSION} installed"), f"{PY_TOOL}'s installed line", timeout=300)
+    t.wait(ok(f"unpacked to {s.folder}"), "the unpacked line")
+    t.wait(ok("1 targets"), "the targets line")
+    t.wait(ok("/etc/hosts updated"), "the /etc/hosts updated line")
+    start = t.pos
     t.wait(PROMPT, "the prompt")
+    check("the note is already open" not in t.text()[start : t.pos], "the import opened the note, none being open", readable(t.text()))
+    found = one_note_window(s, "after the import")
+    s.window = (found.pid, found.ppid)
+    note(f"vim {found.pid} on the imported note; its terminal {found.ppid}")
     check((s.folder / "box.toml").is_file(), f"{s.folder} is back")
     check(read_toml(s.folder / "box.toml").get("status") == "active", "the box is active again")
     check_hosts(
@@ -1300,25 +1433,33 @@ def step_import(s: State) -> None:
 
 
 def step_last_finish(s: State) -> None:
-    t = launch("resume", [str(BIN / "pwn-broker"), "resume", BOX], PROMPT)
+    # cli.start: the box's note is still open from the import, so the launch opens no other
+    t = launch("resume", [str(BIN / "pwn-broker"), "resume", BOX], ok("the note is already open"))
+    t.wait(PROMPT, "the prompt")
+    found = one_note_window(s, "after the box is opened again with its note open")
+    check(
+        (found.pid, found.ppid) == s.window,
+        "it is the window the import opened",
+        f"vim {found.pid} in {found.ppid}; the import's was {s.window}",
+    )
     start = t.pos
     s.logged = len(tool_log())
     t.type("finish\r")
-    t.wait(TOOLS_SUMMARY, "the summary's tools line")
-    t.wait(RUNTIMES_SUMMARY, "the summary's runtimes line")
-    t.wait("hosts     1 line to remove from /etc/hosts", "the summary's hosts line")
+    summary(t, s)
     t.answer(confirm("finish this box?", False), "y", "the finish question")
     t.answer(confirm("replace the existing archive?", False), "y", "the replace archive question")
-    found = t.wait(re.compile(r"ok    archive (\S+\.finished\.tar\.gz)"), "the archive line")
+    found = t.wait(re.compile(re.escape(ok("archive ")) + r"(\S+\.finished\.tar\.gz)"), "the archive line")
     t.wait(RUNTIME_REMOVED, "the runtime removed line")
-    t.wait("ok    removed 1 line from /etc/hosts", "the hosts lines removed")
+    t.wait(ok("removed 1 line from /etc/hosts"), "the hosts lines removed")
     t.answer(confirm("remove working folder?", False), "y", "the remove folder question")
-    t.wait(f"ok    removed {s.folder}", "the folder removed line")
+    t.wait(ok(f"removed {s.folder}"), "the folder removed line")
     status = t.wait_exit("the prompt to end after finish")
     check(status == 0, "pwn-broker ended with status 0", f"status {status}")
     out = t.text()[start:]
     # kalihooks.vpn_question asks only while the app's VPN runs; none was started since step 17
     check("stop it?" not in out, "finish asked no VPN question", readable(out))
+    check(WINDOW_LEFT not in out, "finish did not say the note window was left", readable(out))
+    window_closed(s, "after the last finish")
     check(not openvpns(), "no openvpn process is running", repr(openvpns()))
     archive = Path(found[1])
     check(archive == s.finished and archive.is_file(), f"the replaced finished archive is {s.finished}", str(archive))
@@ -1330,15 +1471,16 @@ def step_last_finish(s: State) -> None:
     logged_since(s, s.logged, FINISHED, f"{TOOL_LOG} has a finish line for {TOOL}, {PY_TOOL} and {RUNTIME} again")
     check(not s.folder.exists(), f"{s.folder} is gone")
 
-    # the app leaves each launch's note window open; recorded here, not judged
+    # finish closed each note window it removed the folder of: no vim with the app's vimrc is left
     windows = [
         p for p in processes()
         if p.argv and Path(p.argv[0]).name == "vim" and "-u" in p.argv and str(VIMRC) in p.argv
     ]  # fmt: skip
-    note(f"{len(windows)} note windows are still open at the end")
-    for p in windows:
-        shown = p.argv[-1]
-        note(f"vim {p.pid} on {shown} ({'exists' if Path(shown).exists() else 'no longer exists'})")
+    check(
+        not windows,
+        "no note window is open at the end",
+        "\n".join(f"vim {p.pid} ({p.state}) on {p.argv[-1]}" for p in windows),
+    )
 
 
 STEPS = [
