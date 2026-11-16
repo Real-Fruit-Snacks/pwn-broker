@@ -83,6 +83,7 @@ At commit cf585e7.
 - In another box, Ctrl-C at `sudo`'s prompt for `/etc/hosts` printed `warn  /etc/hosts was not changed: sudo was cancelled` and the line to add by hand. Three wrong passwords at `host file on` printed `warn  /etc/hosts was not changed: cp exited 1` and the same line. Ctrl-C at `sudo`'s prompt in `vpn start` printed `cancelled`, and `vpn status` then said `not up`.
 - In another, `sudo` made two files and a folder with a file in it under a target's `scans/`, all root's, and one more file only root could read. `finish` asked for the password once, wrote and verified the archive with all four files in it, and removed the working folder.
 - With `tools_index` set to a folder filled by `pwn-shop`'s `fetch.sh`, and the shell in a network namespace whose only interface was `lo`, down: the launch ran its checks, a box was made, `tool install` ran for `certipy` with the runtime, `ligolo-ng` and `pspy`, and `finish` removed them.
+- Then with a `sudo` that needs no password: `kali-grant-root` 2024.4.0 installed and the user added to `kali-trusted`, so `sudo -n` worked. With `/opt/pwn-broker` moved aside, the install line printed every `ok` line and asked for nothing. In one box the `/etc/hosts` line was written, `vpn start` brought `tun0` up, `ligolo-ng` was installed and `sudo /opt/pwn-broker/bin/ligolo-proxy -h` ran, a window was recorded with `sudo id` in it, and `sudo` made three files under a target's `scans/`, one of them readable by root alone. `finish` archived all three, took the line out of `/etc/hosts`, stopped the VPN and removed the folder, with no prompt at any step. `/etc/hosts` was byte for byte what it was before, and nothing under `/opt/pwn-broker` or the home folder belonged to root.
 
 ## pwn-shop's packages
 
@@ -93,7 +94,7 @@ At commit cf585e7.
 ## Not tested
 
 - A full Kali desktop session. CI's Kali run used a virtual display and `xterm`, and the run by hand used Kali's own qterminal under WSL, so Xfce, its window manager and focus have not been tried. Nor has your own VM.
-- A normal user anywhere but that one run by hand under WSL. CI's Kali run is root. A `sudo` that needs no password, as `kali-grant-root` sets up, has not been tried.
+- A normal user anywhere but that one run by hand under WSL, with a `sudo` that asks for a password and then with one that does not. CI's Kali run is root.
 - A real Hack The Box connection. The OpenVPN file in the Kali run has no server behind it.
 - A real tool package against a real target. `pwn-shop`'s CI installed and started each one on Kali, in a container, and all six were installed from the published index, started once and removed by `finish` in the run by hand under WSL. Three were installed and started by a normal user there. None has been run on a full Kali desktop or against a real target.
 - On a terminal that hosts all its windows in one server process, such as gnome-terminal, `finish` closes the note's vim but cannot close its window. Whether that terminal then closes the window by itself has not been tried.
