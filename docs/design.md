@@ -586,6 +586,143 @@ Nothing else. With `--from` and a folder index, nothing at all.
 - Installing from a checkout takes one more step.
 - x86_64 with glibc only.
 
+### 6.14 Layout, and the fixes from the first hands-on test
+
+Not built yet. This section is the design. It changes how sections 6.3, 6.4 and 6.7 look on screen, and fixes what a full pass over every command on a real Kali showed.
+
+**Why.** The app worked, and it did not look finished. Every line sat flush against the next: the launch checks, the menu, a string of one-word questions and the results read as one block. The words are right. What is missing is rhythm and alignment.
+
+**Goals.**
+
+- It opens and reads like a finished tool: a header, sections, space between them, one indent and one alignment everywhere.
+- Everything it prints still copies cleanly into a note and looks right in a recording.
+- The wording, the commands and the colours of section 6.7 stay. `ok`, `warn` and `fail` still start every status line.
+
+**Non-goals.** No new commands beyond `exit` and `clear`. No change to what is stored on disk. No change to the installer or the tools.
+
+**Anti-goals.** Boxes, frames, rules across the screen, banner art, anything that breaks in a narrow terminal or ends up as noise in copied text. Nothing that makes output depend on the terminal's width to be readable.
+
+**Approaches.**
+
+| Approach | What it is | Chosen | Why |
+|---|---|---|---|
+| Blank lines only | Today's output with blank lines between sections | No | Fixes the crowding, but the questions stay an unlabelled string and nothing lines up |
+| Spacing and headings | Blank lines, a header at launch, a quiet heading over each group of questions, one indent, aligned columns | Yes | Reads as designed while staying plain text that copies and records cleanly |
+| Rules and panels | Lines across the screen and a framed summary | No | Striking in a screenshot; the frames land in copied text and recordings and break in narrow terminals |
+
+**What it looks like.**
+
+```
+pwn-broker 0.1.0
+
+  ok    8 checks passed
+  warn  vpn   no VPN tunnel is up
+        start one with: vpn start
+
+Boxes
+  1  new box
+  2  import a box from a file
+
+  choice      > 1
+
+New box
+  name        > forest
+  platform    [htb] >
+  date        [2026-11-16] >
+  os          > windows
+  difficulty  > easy
+
+  add a target? [Y/n] >
+
+Target 1
+  ip          > 10.10.10.161
+  hostname    > forest.htb.local
+  scope       [external] >
+  name        [forest.htb.local] > dc01
+
+  ok    target dc01 created
+
+  add another? [y/N] >
+
+  ok    /etc/hosts updated
+        10.10.10.161 forest.htb.local
+  ok    10.10.10.161 answered in 31 ms
+  ok    box forest created
+
+forest/dc01 > status
+
+  box         forest (htb)
+  started     2026-11-16
+  targets     1
+  tools       0
+  vpn         not up
+  ...
+
+forest/dc01 >
+```
+
+The sketch shortens `status`; it keeps every row it has now.
+
+**The rules.**
+
+- **Indent.** Everything the app prints is indented two spaces: status lines, questions, tables, lists. Three things are not: the prompt line (`forest/dc01 >`), headings, and output that exists to be copied or piped whole (`cred show`, `path`).
+- **Detail lines.** A line that belongs to the status line above it (the hint under a `warn`, the hosts lines under `/etc/hosts updated`, the paths under `recording saved`) is aligned under that line's text.
+- **Blocks.** What one command prints is one block, with one blank line above it and one below. A command that prints nothing adds no blank line. There are never two blank lines in a row.
+- **Headings.** A group of questions gets a heading, flush left, in the text colour and bold, with a blank line above: `New box`, `Target 1`, `Target 2`, `New target`, `Edit <target>`, `New credential`, `Edit credential <n>`. The start menu gets `Boxes`. A single question on its own gets no heading. Headings are sentence case and never coloured Ember.
+- **Questions.** Every question is `  <label padded to 12> [default] > `, as now but indented. A yes or no question stands on its own, with a blank line above and below.
+- **Header.** At launch, and only there, the first line is `pwn-broker <version>`, then a blank line, then the checks.
+- **Lists of fields.** `status`, `target show`, `tool info`, the summary before `finish` and every other label-and-value list are printed by one function that pads the labels to the longest one. No command pads its own.
+- **Help.** `help` groups the commands by their first word with a blank line between groups, both columns aligned. A group's name alone (`tool`, `cred`, `host file`) prints that group the same way. Today those lines are ragged.
+- **Long values.** A table cell that would wrap is cut and ends in `...`; the command that shows the whole value is one step away (`cred show <n>`, `tool info <name>`). The summary before `finish` lists one tool per line.
+- **No colour, no terminal.** With `NO_COLOR` the layout is the same without colour. When output is not a terminal the same lines and blank lines are written; nothing depends on the width.
+- **The prompt line and the status bar** are unchanged.
+
+**Where it applies.**
+
+- The app itself: launch, the start menu, every question, every command at the prompt, and `setup`.
+- `record` prints inside the window it records. It gets the indent and the aligned detail lines, with one blank line above and below what it says, and no header.
+- `--help`, `--version` and `record --help` stay as they are, flush left: they are usage text, and scripts read them.
+- The installer is not part of this.
+
+**Who leaves the space.**
+
+- At the prompt it is automatic: whatever a command prints becomes one block, with the blank line above written before its first line and the one below after its last. A command that prints nothing gets neither.
+- Outside the prompt (launch, the menu, a new box, an import) the flow asks the console for a gap or a heading where the sketch shows one. No code prints an empty line by hand.
+- The console knows whether the last thing on screen was a blank line, a question included, so two never follow each other.
+
+**Cutting long values.**
+
+- Only when the output is a terminal, and at that terminal's width. Piped output and the Kali job see every value whole.
+- Each table names the one column that may be cut (the secret in `cred list`, the description in `tool list` and `tool search`, the hostnames in `target list`). No other column is cut; if the table still does not fit, it wraps as now.
+
+**Headings, in full.** `Boxes` (the start menu), `New box`, `Target <n>` (counting the targets added while the box is made), `New target` (`target add`, and when `record` adds one), `Edit <target>`, `New credential`, `Edit credential <n>`, `Import usernames` (`cred import`). Yes or no questions and single questions (`vpn start`, `flag`, `import`) get none.
+
+**Help, in full.** The commands that are one word (`check`, `export`, `files`, `finish`, `help`, `note`, `path`, `quit`, `exit`, `clear`, `replay`, `status`) come first as one group, then each family (`cred`, `flag`, `host`, `target`, `tool`, `vpn`) as its own, with a blank line between groups. `help` shows each command's one-line description. Usage lines appear when an argument is wrong.
+
+**Fixes from the test.** Each of these was seen on a real Kali (2026.2 under WSL, as root, installed from `main`), running every command.
+
+| Seen | Fix |
+|---|---|
+| Every `note`, every box opened and every import opened another vim on the same note; windows of a finished box stayed open. Four windows on one file, no swap file, so the last one to save wins | One note window per box. The app finds a box's note window by looking for the vim it starts: a running `vim -u <the app's vimrc> <that box's notes.md>`. That works whichever terminal program opened it. While one is running, opening the box, importing it or `note` says `ok    the note is already open` and opens nothing. `finish` already refuses to start while the note has unsaved changes. When the working folder is then removed, the app closes that vim (the terminal window goes with it). If the note gained unsaved changes in between, it says so, closes nothing and keeps the folder |
+| Two boxes with the same name on the same day got the same archive name; `finish` asked `replace the existing archive?` and yes destroyed the earlier box's archive | A new box's folder name is checked against the archives in `wrapped/` as well as the folders in `active/`, so the second box is `..._abc-2` and its archives are too. `replace the existing archive?` is then only ever asked about the same box |
+| `import` with no file given: `import failed: .: cannot open as a gzip tar ([Errno 21] Is a directory: '.')` | An empty answer asks again, with `fail  give the path of an exported box`. A folder gets `fail  <path> is a folder, not an exported box` |
+| `exit` answered `did you mean: export`; `clear` answered `did you mean: cred clear` | `exit` does what `quit` does. `clear` clears the screen |
+| At a yes or no question, anything that was not yes counted as no, silently: `2` at `fix it now? [Y/n]` skipped the fix | Only `y`, `yes`, `n`, `no` and an empty answer (the default) are accepted, in any case. Anything else: `fail  answer y or n`, and the question again |
+| Wrong arguments got no hint: `target rename old new` said `too many arguments: new` | Every command has a usage line. An argument error prints it under the `fail` line: `usage: target rename <target>` |
+| A fresh install's first launch warned `box folders are missing` and asked to fix it | The app makes `~/pwn-broker/active` and `wrapped` itself, at setup and at launch, without asking. The check stays for a folder it cannot make |
+| `vpn log` and the tools row before `finish` wrapped in the middle of words | Covered by the layout rules above; `vpn log` prints OpenVPN's lines as they are, unindented, because they are a log to copy |
+
+**Constraints.**
+
+- Layout lives in the console layer, not in the commands. Commands say what a line is (a status, a detail, a heading, a field list, a table, a gap); the console decides how it is spaced. A command never prints a blank line or pads a label by hand.
+- The console the tests use records the same calls, so a test can check that a heading or a gap was asked for without knowing how it is drawn.
+- Output that other programs or my own notes rely on does not change: `cred show` prints the secret and nothing else, `path` prints the path and nothing else, the text copy of a recording keeps its format.
+- The Kali job in CI reads the app's output; it is updated in the same change and must stay green.
+
+**Left to the builder.** How the console tracks whether the last thing printed was a blank line; the exact names of the new console methods; how a command declares its usage line; where each existing hand-padded list moves to the shared function.
+
+**To check by hand afterwards.** The whole flow in the Kali under WSL, every command, as in the test that found the above: the layout matches the sketch, a recording of a session reads cleanly, and each row of the table of fixes behaves as written.
+
 ## 7. Phase 2: recording and Kali changes
 
 Ships in the first release, with phases 1 and 3. It adds `record` and `replay`, the box's lines in `/etc/hosts`, the `host` and `vpn` commands, a VPN check and a ping for each new target.
