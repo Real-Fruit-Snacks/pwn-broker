@@ -412,11 +412,21 @@ def test_needs_root_and_uploads_print_lines(paths, box, tmp_path):
     assert console.lines == [
         ("ok", "ligolo-ng 1.0.3 installed"),
         ("info", "run   ligolo-proxy   from any terminal"),
-        ("info", f"      sudo {(paths.bin / 'ligolo-proxy').as_posix()}"),
+        ("detail", f"sudo {(paths.bin / 'ligolo-proxy').as_posix()}"),
         ("info", f"files {(paths.upload / 'ligolo-ng').as_posix()}   agent  agent.exe"),
     ]
     assert (paths.upload / "ligolo-ng" / "agent.exe").read_bytes() == b"B"
     assert item.uploads == ["agent", "agent.exe"]
+    # on screen the sudo form starts under the command it is for
+    import io
+
+    from pwn_broker import toolinstall
+    from pwn_broker.console import TermConsole
+
+    out = io.StringIO()
+    toolinstall._show(paths, TermConsole({"NO_COLOR": "1"}, out=out), item)
+    run_line, sudo_line = out.getvalue().splitlines()[:2]
+    assert run_line.index("ligolo-proxy") == sudo_line.index("sudo") == 8
 
 
 @posix_only

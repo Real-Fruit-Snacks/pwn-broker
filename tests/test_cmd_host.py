@@ -60,7 +60,7 @@ def test_host_add_rewrites_the_line_without_asking(session):
     assert session.console.lines == [
         ("ok", "dc01 now answers to 2 names"),
         ("ok", "/etc/hosts updated"),
-        ("info", "    10.10.10.161 forest.htb.local crm.forest.htb"),
+        ("detail", "10.10.10.161 forest.htb.local crm.forest.htb"),
     ]
     assert _text(session) == "127.0.0.1 localhost\n" + _line(
         session, "10.10.10.161 forest.htb.local crm.forest.htb"
@@ -100,7 +100,10 @@ def test_host_add_refuses_a_name_that_is_not_plain(session):
 
 def test_host_add_needs_a_name(session):
     dispatch(session, "host add")
-    assert _fails(session) == ["missing argument: hostname"]
+    assert session.console.lines == [
+        ("fail", "missing argument: hostname"),
+        ("detail", "usage: host add <hostname>..."),
+    ]
 
 
 def test_host_add_says_one_name(session):
@@ -134,7 +137,7 @@ def test_host_remove_takes_names_off_and_rewrites_the_line(session):
     assert session.console.lines == [
         ("ok", "dc01 now answers to 1 name"),
         ("ok", "/etc/hosts updated"),
-        ("info", "    10.10.10.161 forest.htb.local"),
+        ("detail", "10.10.10.161 forest.htb.local"),
     ]
 
 
@@ -166,7 +169,10 @@ def test_host_remove_refuses_a_name_the_target_does_not_have(session):
 
 def test_host_remove_needs_a_name(session):
     dispatch(session, "host remove")
-    assert _fails(session) == ["missing argument: hostname"]
+    assert session.console.lines == [
+        ("fail", "missing argument: hostname"),
+        ("detail", "usage: host remove <hostname>..."),
+    ]
 
 
 def test_host_lists_every_hostname_and_whether_it_is_in_the_file(session):
@@ -252,6 +258,6 @@ def test_host_remove_leaving_only_an_invalid_name_forgets_the_line(session):
 def test_host_file_alone_lists_on_and_off(session):
     dispatch(session, "host file")
     assert session.console.lines == [
-        ("info", "host file off   take the target's line out of /etc/hosts and forget it"),
-        ("info", "host file on   put the target's line into /etc/hosts"),
+        ("field", "host file off  take the target's line out of /etc/hosts and forget it"),
+        ("field", "host file on  put the target's line into /etc/hosts"),
     ]

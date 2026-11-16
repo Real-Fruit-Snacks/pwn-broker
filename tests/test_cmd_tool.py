@@ -166,10 +166,40 @@ def test_search_matches_every_word(session, shop):
     assert rows == [["kerbrute", "1.0.3-1", "kali", "", "kerbrute stand-in"]]
 
 
-def test_search_without_words_fails(session, shop):
+def test_search_without_words_fails_with_the_usage(session, shop):
     console = run(session, "tool search")
-    assert len(lines(console, "fail")) == 1
+    assert console.lines == [
+        ("fail", "search for what? give at least one word"),
+        ("detail", "usage: tool search <word>..."),
+    ]
     assert console.tables == []
+
+
+def test_each_table_names_the_one_column_it_may_cut(session, shop):
+    run(session, "tool install kerbrute")
+    assert run(session, "tool list").events == [("table", "kali")]
+    assert run(session, "tool list --installed").events == [("table", "run")]
+    assert run(session, "tool search ker").events == [("table", "description")]
+
+
+@pytest.mark.parametrize(
+    "line, message, usage",
+    [
+        ("tool list --all", "unknown option: --all", "usage: tool list [--installed]"),
+        ("tool list a b", "too many arguments: b", "usage: tool list [--installed]"),
+        ("tool info", "missing argument: tool name", "usage: tool info <name>"),
+        ("tool install", "missing argument: tool name", "usage: tool install <name>[@<version>[-<build>]]"),
+        ("tool install a b", "too many arguments: b", "usage: tool install <name>[@<version>[-<build>]]"),
+        ("tool remove", "missing argument: tool name", "usage: tool remove <name>"),
+        ("tool history x", "too many arguments: x", "usage: tool history"),
+    ],
+)
+def test_a_wrong_argument_shows_the_usage(session, shop, line, message, usage):
+    assert run(session, line).lines == [("fail", message), ("detail", usage)]
+
+
+def test_an_unknown_tool_shows_no_usage(session, shop):
+    assert [kind for kind, _ in run(session, "tool install nosuch").lines] == ["fail"]
 
 
 def test_search_with_no_match_is_an_info_line(session, shop):
@@ -182,7 +212,7 @@ def test_search_with_no_match_is_an_info_line(session, shop):
 
 def test_info_for_a_tool_that_is_not_installed(session, shop):
     console = run(session, "tool info kerbrute")
-    text = "\n".join(lines(console, "info"))
+    text = "\n".join(lines(console, "field"))
     assert "kerbrute 1.0.3-1" in text
     assert "kerbrute stand-in" in text
     assert "kali" in text and "MIT" in text
@@ -203,7 +233,7 @@ def test_info_for_an_installed_tool_fills_the_examples(session, shop):
     session.creds.append(make_cred(n=2, domain=""))
     session.creds.append(make_cred(n=3, domain="HTB.LOCAL"))
     run(session, "tool install kerbrute")
-    joined = "\n".join(lines(run(session, "tool info kerbrute"), "info"))
+    joined = "\n".join(lines(run(session, "tool info kerbrute"), "field"))
     folder = toolstate.load_installed(session.paths)["kerbrute"].folder
     assert folder in joined
     assert ".kerb" in joined
@@ -216,28 +246,50 @@ def test_info_for_an_installed_tool_fills_the_examples(session, shop):
 def test_info_shows_missing_values_as_placeholders(session, shop):
     run(session, "tool install kerbrute")
     session.current = None
-    joined = "\n".join(lines(run(session, "tool info kerbrute"), "info"))
+    joined = "\n".join(lines(run(session, "tool info kerbrute"), "field"))
     assert "kerbrute userenum -d <domain> --dc <ip> <hostname> <lhost> {nope} {0}" in joined
 
 
 def test_info_shows_sudo_and_upload_details_for_a_root_tool(session, shop):
     run(session, "tool install ligolo-ng")
-    joined = "\n".join(lines(run(session, "tool info ligolo-ng"), "info"))
+    joined = "\n".join(lines(run(session, "tool info ligolo-ng"), "field"))
     assert f"sudo {(session.paths.bin / 'ligolo-proxy').as_posix()}" in joined
     assert (session.paths.upload / "ligolo-ng").as_posix() in joined
     assert "agent" in joined
 
 
+def test_info_is_one_list_with_the_sudo_form_in_the_value_column(session, shop):
+    import io
+
+    from pwn_broker.console import TermConsole
+
+    run(session, "tool install ligolo-ng")
+    console = run(session, "tool info ligolo-ng")
+    assert [kind for kind, _ in console.lines] == ["field"] * len(console.lines)
+    labels = [text.split("  ", 1)[0] if not text.startswith("  ") else "" for _, text in console.lines]
+    assert labels == ["name", "description", "kind", "licence", "upstream", "versions", "run", "", "folder", "upload", "example"]
+    out = io.StringIO()
+    session.console = TermConsole({"NO_COLOR": "1"}, out=out)
+    dispatch(session, "tool info ligolo-ng")
+    shown = out.getvalue().splitlines()
+    run_line, sudo_line = shown[6], shown[7]
+    assert run_line.startswith("  run ") and sudo_line.lstrip().startswith("sudo ")
+    # every value starts in one column: two spaces past the longest label, description
+    column = 2 + len("description") + 2
+    assert run_line.index("ligolo-proxy") == sudo_line.index("sudo") == column
+    assert all(line[column - 2 : column] == "  " and line[column] != " " for line in shown)
+
+
 def test_a_value_that_looks_like_a_placeholder_is_not_filled_again(session, shop):
     session.creds.append(make_cred(domain="{ip}"))
     run(session, "tool install kerbrute")
-    joined = "\n".join(lines(run(session, "tool info kerbrute"), "info"))
+    joined = "\n".join(lines(run(session, "tool info kerbrute"), "field"))
     assert "-d {ip} --dc 10.10.10.161" in joined
 
 
 def test_info_shows_no_install_details_for_a_tool_another_box_installed(session, shop, other):
     install_for(other, shop, shop.entries[1], session.paths)
-    joined = "\n".join(lines(run(session, "tool info kerbrute"), "info"))
+    joined = "\n".join(lines(run(session, "tool info kerbrute"), "field"))
     assert "userenum" not in joined
 
 
@@ -255,7 +307,7 @@ def test_install_prints_the_install_output_and_records_the_tool(session, shop):
 
 def test_install_a_root_tool_prints_the_sudo_form(session, shop):
     console = run(session, "tool install ligolo-ng")
-    assert f"      sudo {(session.paths.bin / 'ligolo-proxy').as_posix()}" in lines(console, "info")
+    assert f"sudo {(session.paths.bin / 'ligolo-proxy').as_posix()}" in lines(console, "detail")
     assert any(t.startswith("files ") for t in lines(console, "info"))
 
 
@@ -415,7 +467,7 @@ def test_remove_by_the_last_user_moves_the_home_data_into_the_box(session, shop)
     console.confirm = lambda q, default=False: shown.extend(console.lines) or original(q, default)
     session.console = console
     dispatch(session, "tool remove kerbrute")
-    assert shown == [("info", f"home      {shop.home / '.kerb'}   (will be deleted)")]
+    assert shown == [("field", f"home  {shop.home / '.kerb'}   (will be deleted)")]
     copy = session.box.path / "tooldata" / "kerbrute" / "home" / ".kerb" / "found.txt"
     assert copy.read_text() == "result"
     assert not (shop.home / ".kerb").exists()
@@ -534,10 +586,10 @@ def test_toolbar_counts_the_boxes_tools_after_targets(session, shop):
 
 
 def test_status_shows_the_tool_count(session, shop):
-    assert "tools      0" in lines(run(session, "status"), "info")
+    assert "tools  0" in lines(run(session, "status"), "field")
     run(session, "tool install kerbrute")
-    shown = lines(run(session, "status"), "info")
-    assert shown.index("tools      1") == shown.index("targets    1") + 1
+    shown = lines(run(session, "status"), "field")
+    assert shown.index("tools  1") == shown.index("targets  1") + 1
 
 
 def test_completions_for_install_and_info_come_from_the_cached_index(session, shop):
@@ -620,8 +672,8 @@ def test_info_without_the_installed_manifest_warns_after_the_lines_before_it(ses
     (Path(item.folder) / "manifest.toml").unlink()
     console = run(session, "tool info kerbrute")
     assert len(lines(console, "warn")) == 1
-    assert any(t.startswith("folder") for t in lines(console, "info"))
-    assert not any("userenum" in t for t in lines(console, "info"))
+    assert any(t.startswith("folder") for t in lines(console, "field"))
+    assert not any("userenum" in t for t in lines(console, "field"))
 
 
 def test_info_with_an_empty_installed_folder_skips_the_examples(session, shop):
@@ -631,7 +683,7 @@ def test_info_with_an_empty_installed_folder_skips_the_examples(session, shop):
     toolstate.save_installed(session.paths, installed)
     console = run(session, "tool info kerbrute")
     assert lines(console, "warn") == [] and lines(console, "fail") == []
-    assert not any("userenum" in t for t in lines(console, "info"))
+    assert not any("userenum" in t for t in lines(console, "field"))
 
 
 def test_info_for_an_installed_tool_missing_from_the_index(session, shop):
@@ -639,8 +691,8 @@ def test_info_for_an_installed_tool_missing_from_the_index(session, shop):
     toolkit.write_index(shop.folder, shop.entries[2:])
     console = run(session, "tool info kerbrute")
     assert lines(console, "warn") == ["kerbrute is not in the index"]
-    shown = "\n".join(lines(console, "info"))
-    assert "run         kerbrute" in shown and "folder" in shown and "userenum" in shown
+    shown = "\n".join(lines(console, "field"))
+    assert "run  kerbrute" in shown and "folder" in shown and "userenum" in shown
     assert lines(console, "fail") == []
 
 
@@ -699,7 +751,7 @@ def test_a_tool_the_box_records_but_the_machine_lacks_is_not_installed(session, 
     _columns, rows = table(run(session, "tool search stand-in"))
     assert [r[3] for r in rows] == ["not installed", "installed"]
     assert toolbar_text(session, start).endswith("1 target   1 tool   no vpn   00:00")
-    assert "tools      1" in lines(run(session, "status"), "info")
+    assert "tools  1" in lines(run(session, "status"), "field")
 
 
 def test_the_toolbar_counts_nothing_while_the_installed_list_cannot_be_read(session, shop):
@@ -739,7 +791,7 @@ def test_installing_a_root_tool_names_the_copy_sudo_would_run(session, shop, mon
 def test_info_fills_lhost_from_the_tunnel(session, shop, system):
     system.tunnel_found = Tunnel("tun0", "10.10.14.7")
     run(session, "tool install kerbrute")
-    joined = "\n".join(lines(run(session, "tool info kerbrute"), "info"))
+    joined = "\n".join(lines(run(session, "tool info kerbrute"), "field"))
     assert "--dc 10.10.10.161 forest.htb.local 10.10.14.7 {nope} {0}" in joined
     assert "<lhost>" not in joined
 
@@ -999,20 +1051,20 @@ def test_listings_completions_and_counts_leave_runtimes_out(session, shop, pysho
     assert completions(session, "tool info p") == []
     assert completions(session, "tool remove ") == ["tool remove certipy"]
     assert toolbar_text(session, start).endswith("1 target   1 tool   no vpn   00:00")
-    assert "tools      1" in lines(run(session, "status"), "info")
+    assert "tools  1" in lines(run(session, "status"), "field")
     assert lines(run(session, "tool refresh"), "ok") == ["index refreshed: 4 tools"]
 
 
 def info_lines(session, name):
-    return lines(run(session, f"tool info {name}"), "info")
+    return lines(run(session, f"tool info {name}"), "field")
 
 
 def test_info_names_the_runtime_a_tool_requires(session, shop, pyshop):
     shown = info_lines(session, "certipy")
-    after = shown[shown.index("versions    5.1.0-3") + 1]
-    assert after == "requires    python-3.13 (1 MB, not installed)"
+    after = shown[shown.index("versions  5.1.0-3") + 1]
+    assert after == "requires  python-3.13 (1 MB, not installed)"
     run(session, "tool install bloodhound")
-    assert "requires    python-3.13 (1 MB, installed)" in info_lines(session, "certipy")
+    assert "requires  python-3.13 (1 MB, installed)" in info_lines(session, "certipy")
     assert not any(t.startswith("requires") for t in info_lines(session, "kerbrute"))
 
 
@@ -1021,14 +1073,14 @@ def test_info_shows_what_the_installed_build_requires(session, shop, pyshop):
     run(session, "tool install certipy@5.1.0-2")
     assert not any(t.startswith("requires") for t in info_lines(session, "certipy"))
     run(session, "tool remove certipy", "y")
-    assert "requires    python-3.13 (1 MB, not installed)" in info_lines(session, "certipy")
+    assert "requires  python-3.13 (1 MB, not installed)" in info_lines(session, "certipy")
     run(session, "tool install certipy")
-    assert "requires    python-3.13 (1 MB, installed)" in info_lines(session, "certipy")
+    assert "requires  python-3.13 (1 MB, installed)" in info_lines(session, "certipy")
 
 
 def test_info_for_a_tool_whose_runtime_is_not_in_the_index(session, shop, pyshop):
     toolkit.write_index(shop.folder, [e for e in pyshop.entries if e.name != "python-3.13"])
-    assert "requires    python-3.13 (not in the index)" in info_lines(session, "certipy")
+    assert "requires  python-3.13 (not in the index)" in info_lines(session, "certipy")
 
 
 def test_remove_takes_the_runtime_with_the_last_tool_that_requires_it(session, shop, pyshop):
@@ -1307,12 +1359,12 @@ def test_a_removed_tool_is_not_listed_counted_completed_or_removed_again(session
     _columns, rows = table(run(session, "tool list"))
     assert [r[3] for r in rows] == ["", ""]
     assert toolbar_text(session, start).endswith("1 target   no vpn   00:00")
-    assert "tools      0" in lines(run(session, "status"), "info")
+    assert "tools  0" in lines(run(session, "status"), "field")
     assert completions(session, "tool remove ") == []
     console = run(session, "tool remove kerbrute", "y")
     assert lines(console, "fail") == ["kerbrute is not installed for forest"]
     assert console.asked == []
-    shown = lines(run(session, "tool info kerbrute"), "info")
+    shown = lines(run(session, "tool info kerbrute"), "field")
     assert not any(t.startswith("folder") for t in shown)
 
 
@@ -1320,7 +1372,7 @@ def test_a_removed_tool_another_box_uses_is_not_counted(session, shop, other):
     install_for(other, shop, shop.entries[1], session.paths)
     run(session, "tool install kerbrute")
     run(session, "tool remove kerbrute", "y")
-    assert "tools      0" in lines(run(session, "status"), "info")
+    assert "tools  0" in lines(run(session, "status"), "field")
     _columns, rows = table(run(session, "tool list"))
     assert [r[3] for r in rows if r[0] == "kerbrute"] == [""]
 

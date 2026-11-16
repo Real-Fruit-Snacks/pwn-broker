@@ -397,6 +397,43 @@ def test_fake_records_typed_in_events_only():
     assert c.events == [("typed", "")] and c.lines == []
 
 
+def test_fields_align_to_labels_printed_apart(monkeypatch):
+    c, out = screen(monkeypatch)
+    c.fields([("a", "1")], align_to=["a", "longer"])
+    c.fields([("bb", "2")], align_to=["a", "longer"])
+    assert out.getvalue() == "  a       1\n  bb      2\n"
+
+
+def test_clear_writes_the_clear_sequence_once_and_the_screen_counts_as_empty(monkeypatch):
+    from pwn_broker.console import CLEAR_SCREEN
+
+    c, out = screen(monkeypatch, width=80)
+    c.ok("a")
+    c.typed()
+    with c.block():
+        c.clear()
+    c.typed()
+    with c.block():
+        c.clear()
+        c.ok("b")
+    assert out.getvalue() == f"  ok    a\n{CLEAR_SCREEN}{CLEAR_SCREEN}  ok    b\n\n"
+
+
+def test_clear_off_a_terminal_writes_nothing_and_keeps_the_spacing(monkeypatch):
+    c, out = screen(monkeypatch)
+    c.ok("a")
+    c.clear()
+    c.gap()
+    c.ok("b")
+    assert out.getvalue() == "  ok    a\n\n  ok    b\n"
+
+
+def test_fake_records_clear_in_events_only():
+    c = FakeConsole()
+    c.clear()
+    assert c.events == [("clear", "")] and c.lines == []
+
+
 # --- control characters -------------------------------------------------------------------------
 
 CONTROLS = ["\r", "\n", "\x08", "\x07", "\x1b[2J", "\x7f", "\x9b", "\x00", "\x85"]

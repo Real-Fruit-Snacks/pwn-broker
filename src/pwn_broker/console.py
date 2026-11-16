@@ -1,4 +1,4 @@
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from typing import Protocol, TextIO
 
@@ -31,8 +31,9 @@ class Console(Protocol):
     def info(self, text: str) -> None: ...
     def detail(self, text: str) -> None: ...
     def heading(self, text: str) -> None: ...
-    def fields(self, rows: list[tuple[str, str]]) -> None: ...
+    def fields(self, rows: list[tuple[str, str]], *, align_to: Iterable[str] = ()) -> None: ...
     def gap(self) -> None: ...
+    def clear(self) -> None: ...
     def typed(self) -> None: ...
     def block(self) -> AbstractContextManager[None]: ...
     def raw(self, text: str) -> None: ...
@@ -47,6 +48,8 @@ def status_line(kind: str, text: str) -> str:
 DETAIL_INDENT = INDENT + " " * len(status_line("ok", ""))
 
 ANSWER_Y_OR_N = "answer y or n"
+# cursor home, then erase the screen
+CLEAR_SCREEN = "\x1b[H\x1b[2J"
 
 
 def _yes_no(answer: str, default: bool) -> bool | None:
@@ -134,12 +137,15 @@ class FakeConsole:
     def heading(self, text: str) -> None:
         self._line("heading", text)
 
-    def fields(self, rows: list[tuple[str, str]]) -> None:
+    def fields(self, rows: list[tuple[str, str]], *, align_to: Iterable[str] = ()) -> None:
         for label, value in rows:
             self._line("field", f"{label}  {value}")
 
     def gap(self) -> None:
         self.events.append(("gap", ""))
+
+    def clear(self) -> None:
+        self.events.append(("clear", ""))
 
     def typed(self) -> None:
         self.events.append(("typed", ""))
@@ -213,6 +219,18 @@ class TermConsole:
         # something else wrote a line to the terminal, such as the command line at the prompt
         self._last = _LINE
 
+    def clear(self) -> None:
+        # the terminal's own clear sequence; off a terminal there is no screen to clear
+        if not self._rich.is_terminal:
+            return
+        stream = self._rich.file
+        stream.write(CLEAR_SCREEN)
+        stream.flush()
+        self._last = _NOTHING
+        if self._depth:
+            # the screen is empty: the block has nothing above to leave a blank line under
+            self._block_printed = False
+
     @contextmanager
     def block(self) -> Iterator[None]:
         if self._depth == 0:
@@ -261,8 +279,9 @@ class TermConsole:
         self.gap()
         self._write((text, self._style(theme.TEXT, bold=True)))
 
-    def fields(self, rows: list[tuple[str, str]]) -> None:
-        width = max((len(label) for label, _ in rows), default=0) + 2
+    def fields(self, rows: list[tuple[str, str]], *, align_to: Iterable[str] = ()) -> None:
+        # align_to: more labels to pad to, so lists printed apart line up as one
+        width = max((len(label) for label in [*(label for label, _ in rows), *align_to]), default=0) + 2
         for label, value in rows:
             self._write(
                 (INDENT, Style()), (f"{label:<{width}}", self._style(theme.MUTE)), (value, self._style(theme.TEXT))

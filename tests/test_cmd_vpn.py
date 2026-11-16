@@ -278,11 +278,11 @@ def test_status_of_ours(session, paths, system):
     running(paths, system)
     dispatch(session, "vpn status")
     assert lines(session) == [
-        ("info", "state        up"),
-        ("info", "address      10.10.14.7 on tun0"),
-        ("info", "since        2026-11-14 12:00"),
-        ("info", "file         lab_user.ovpn"),
-        ("info", "started for  cascade"),
+        ("field", "state  up"),
+        ("field", "address  10.10.14.7 on tun0"),
+        ("field", "since  2026-11-14 12:00"),
+        ("field", "file  lab_user.ovpn"),
+        ("field", "started for  cascade"),
     ]
 
 
@@ -290,7 +290,7 @@ def test_status_of_ours_before_the_tunnel_comes(session, paths, system):
     running(paths, system)
     system.tunnel_found = None
     dispatch(session, "vpn status")
-    assert lines(session)[:2] == [("info", "state        starting"), ("info", "address      -")]
+    assert lines(session)[:2] == [("field", "state  starting"), ("field", "address  -")]
 
 
 def test_status_of_a_tunnel_not_ours_and_of_none(session, system):

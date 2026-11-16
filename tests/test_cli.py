@@ -100,7 +100,7 @@ def test_new_box_offers_the_hosts_line_and_pings_each_target(env, system):
     assert system.pings == ["10.10.10.161", "10.10.10.162"]
     assert s.box.hosts == ["dc01"] and load_box(s.box.path).hosts == ["dc01"]
     assert f"forest.htb.local  # pwn-broker {s.box.id}" in system.hosts_path.read_text()
-    tail = [line for line in env.console.lines if line[0] != "info"][-5:]
+    tail = [line for line in env.console.lines if line[0] not in ("info", "detail")][-5:]
     assert tail == [
         ("ok", "target 10.10.10.162 created"),
         ("ok", "/etc/hosts updated"),

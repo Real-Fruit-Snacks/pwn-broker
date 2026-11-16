@@ -26,7 +26,8 @@ from pwn_broker.store import StoreError, load_box, save_box
 from pwn_broker.toolpkg import ToolError
 
 BLOCK_HOOKS: list[Callable[[Session], str | None]] = []
-SUMMARY_HOOKS: list[Callable[[Session], list[str]]] = []
+# each gives the label and value rows it adds to the summary before finish
+SUMMARY_HOOKS: list[Callable[[Session], list[tuple[str, str]]]] = []
 PRE_PACK_HOOKS: list[Callable[[Session], None]] = []
 UNDO_HOOKS: list[Callable[[Session], None]] = []
 RESTORE_HOOKS: list[Callable[[Session], None]] = []
@@ -143,13 +144,15 @@ def finish_box(
     except _FAILURES as exc:
         console.fail(f"cannot read the box: {exc}")
         return None
-    console.info(f"box       {box.name} ({box.platform}), started {box.started:%Y-%m-%d}")
-    console.info(f"targets   {len(session.targets)}")
-    console.info(f"files     {len(files)}")
-    console.info(f"archive   {dest}")
+    rows = [
+        ("box", f"{box.name} ({box.platform}), started {box.started:%Y-%m-%d}"),
+        ("targets", str(len(session.targets))),
+        ("files", str(len(files))),
+        ("archive", str(dest)),
+    ]
     for hook in SUMMARY_HOOKS:
-        for line in hook(session):
-            console.info(line)
+        rows.extend(hook(session))
+    console.fields(rows)
 
     if not console.confirm("finish this box?"):
         return None

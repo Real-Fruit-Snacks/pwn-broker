@@ -143,7 +143,7 @@ def report(console: Console, results: list[CheckResult]) -> None:
         else:
             console.warn(line)
         if result.hint:
-            console.info(result.hint)
+            console.detail(result.hint)
         if result.repair is not None:
             _offer_repair(console, result.name, result.repair)
 

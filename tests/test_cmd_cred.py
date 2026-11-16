@@ -350,6 +350,27 @@ def test_cred_list_shows_values_literally(session):
     _, rows = session.console.tables[0]
     assert rows[0] == ["1", "administrator", "HTB", "[red]x[/red]", "password", "dc01", "dc01, web"]
     assert rows[1] == ["2", "administrator", "", "", "", "", ""]
+    # the secret is the one column cut on a narrow terminal
+    assert session.console.events == [("table", "secret")]
+
+
+@pytest.mark.parametrize(
+    "line, message, usage",
+    [
+        ("cred show", "missing argument: cred number", "usage: cred show <n>"),
+        ("cred edit 1 2", "too many arguments: 2", "usage: cred edit <n>"),
+        ("cred remove", "missing argument: cred number", "usage: cred remove <n>"),
+        ("cred works", "missing argument: cred number", "usage: cred works <n> [<target>...]"),
+        ("cred import", "missing argument: file", "usage: cred import <file>"),
+        ("cred add x", "too many arguments: x", "usage: cred add"),
+        ("cred list x", "too many arguments: x", "usage: cred list"),
+    ],
+)
+def test_a_wrong_number_of_arguments_shows_the_usage(session, line, message, usage):
+    _seed(session)
+    dispatch(session, line)
+    assert session.console.lines == [("fail", message), ("detail", usage)]
+    assert session.console.asked == []
 
 
 def test_cred_list_empty(session):
@@ -669,11 +690,26 @@ def test_cred_clear_bad_field(session):
     assert session.creds[0].secret == "s3cret"
 
 
-@pytest.mark.parametrize("line", ["cred clear", "cred clear 1", "cred clear 1 note x", "cred clear x note", "cred clear 0 note", "cred clear 9 note"])
+@pytest.mark.parametrize("line", ["cred clear x note", "cred clear 0 note", "cred clear 9 note"])
 def test_cred_clear_bad_arguments(session, line):
     _clear_seed(session)
     dispatch(session, line)
     assert [k for k, _ in session.console.lines] == ["fail"]
+    assert session.creds[0].note == "a note"
+
+
+@pytest.mark.parametrize(
+    "line, message",
+    [
+        ("cred clear", "missing argument: cred number"),
+        ("cred clear 1", "missing argument: field"),
+        ("cred clear 1 note x", "too many arguments: x"),
+    ],
+)
+def test_cred_clear_with_the_wrong_number_of_arguments_shows_its_usage(session, line, message):
+    _clear_seed(session)
+    dispatch(session, line)
+    assert session.console.lines == [("fail", message), ("detail", "usage: cred clear <n> <field>")]
     assert session.creds[0].note == "a note"
 
 

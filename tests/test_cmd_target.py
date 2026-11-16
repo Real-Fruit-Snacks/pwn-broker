@@ -78,16 +78,23 @@ def test_ask_target_with_defaults_and_no_name(dc01):
 
 def test_target_show_prints_one_target(session):
     dispatch(session, "target show")
-    text = "\n".join(t for kind, t in session.console.lines if kind == "info")
-    folder = str(session.box.path / "targets" / "dc01")
-    for part in ("10.10.10.161", "forest.htb.local", "external", folder):
-        assert part in text
-    assert "name      dc01" in text
+    folder = session.box.path / "targets" / "dc01"
+    assert session.console.lines == [
+        ("field", "name  dc01"),
+        ("field", "ips  10.10.10.161"),
+        ("field", "hostnames  forest.htb.local"),
+        ("field", "scope  external"),
+        ("field", f"added  {NOW:%Y-%m-%d %H:%M}"),
+        ("field", f"folder  {folder}"),
+    ]
 
 
 def test_target_show_extra_arguments_fail(session):
     dispatch(session, "target show dc01 extra")
-    assert len(_fails(session.console)) == 1
+    assert session.console.lines == [
+        ("fail", "too many arguments: extra"),
+        ("detail", "usage: target show [<target>]"),
+    ]
 
 
 def test_target_add_updates_everything(session):
@@ -189,6 +196,31 @@ def test_target_list_table(session):
         ["dc01", "10.10.10.161", "forest.htb.local", "external"],
         ["web", "10.10.10.2, 10.10.10.3", "-", "internal"],
     ]
+    # the hostnames are the one column cut on a narrow terminal
+    assert session.console.events == [("table", "hostname")]
+
+
+@pytest.mark.parametrize(
+    "line, usage",
+    [
+        ("target use", "usage: target use <target>"),
+        ("target edit", "usage: target edit <target>"),
+        ("target rename dc01 new", "usage: target rename <target>"),
+        ("target remove", "usage: target remove <target>"),
+        ("target add x", "usage: target add"),
+        ("target list x", "usage: target list"),
+    ],
+)
+def test_a_wrong_argument_shows_the_usage_under_the_fail_line(session, line, usage):
+    dispatch(session, line)
+    [(kind, _), last] = session.console.lines
+    assert kind == "fail" and last == ("detail", usage)
+    assert session.console.asked == []
+
+
+def test_an_error_that_is_not_about_the_arguments_shows_no_usage(session):
+    dispatch(session, "target use nosuch")
+    assert [kind for kind, _ in session.console.lines] == ["fail"]
 
 
 def test_target_list_empty(session):

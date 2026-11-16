@@ -25,10 +25,10 @@ def target_list(session: Session, args: list[str]) -> None:
         [t.name, ", ".join(t.ips) or "-", ", ".join(t.hostnames) or "-", t.scope]
         for t in session.targets
     ]
-    session.console.table(["name", "ip", "hostname", "scope"], rows)
+    session.console.table(["name", "ip", "hostname", "scope"], rows, cut="hostname")
 
 
-@command("target use", "switch to a target")
+@command("target use", "switch to a target", "<target>")
 def target_use(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, ("target name",))
     target = boxes.find_target(session.targets, name)
@@ -36,7 +36,7 @@ def target_use(session: Session, args: list[str]) -> None:
     session.console.ok(f"now on {target.name}")
 
 
-@command("target show", "show one target")
+@command("target show", "show one target", "[<target>]")
 def target_show(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, optional=("target name",))
     if name is not None:
@@ -54,11 +54,10 @@ def target_show(session: Session, args: list[str]) -> None:
         ("added", target.added.strftime("%Y-%m-%d %H:%M")),
         ("folder", str(folder)),
     ]
-    for label, value in rows:
-        session.console.info(f"{label:<10}{value}")
+    session.console.fields(rows)
 
 
-@command("target edit", "change a target's addresses or scope")
+@command("target edit", "change a target's addresses or scope", "<target>")
 def target_edit(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, ("target name",))
     target = boxes.find_target(session.targets, name)
@@ -93,7 +92,7 @@ def _not_recording(session: Session, target: Target, doing: str) -> None:
         )
 
 
-@command("target rename", "rename a target and its folder")
+@command("target rename", "rename a target and its folder", "<target>")
 def target_rename(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, ("target name",))
     target = boxes.find_target(session.targets, name)
@@ -120,7 +119,7 @@ def target_rename(session: Session, args: list[str]) -> None:
         hostflow.sync(session)
 
 
-@command("target remove", "remove an empty target")
+@command("target remove", "remove an empty target", "<target>")
 def target_remove(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, ("target name",))
     target = boxes.find_target(session.targets, name)

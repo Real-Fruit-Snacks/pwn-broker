@@ -30,6 +30,8 @@ PATH_FOLDERS = tuple(sorted({*TARGET_FOLDERS, "lists", "screenshots"}))
 IMPORT_COMMAND = "cred import "
 # seconds a command waits for record to finish adding a target
 LOCK_WAIT = 30
+# the command lines that leave the shell
+LEAVING = (("quit", []), ("exit", []))
 
 _TARGET_ARG = re.compile(r"(" + "|".join(TARGET_ARG_COMMANDS) + r") (\S*)")
 _TOOL_INDEX_ARG = re.compile(r"(tool install|tool info) (\S*)")
@@ -158,39 +160,48 @@ def run_shell(session: Session) -> None:
             if "quit" not in COMMANDS:
                 break
             line = "quit"
-        try:
-            # an OSError here is the lock file itself: every error inside is handled below
-            with boxlock.held(session.paths, wait=LOCK_WAIT):
+        # the command line is on screen; what the command prints is one block below it
+        console.typed()
+        with console.block():
+            if not _run_line(session, line):
+                break
+
+
+def _run_line(session: Session, line: str) -> bool:
+    """Run one command line under the box lock; false once the session is to end."""
+    console = session.console
+    try:
+        # an OSError here is the lock file itself: every error inside is handled below
+        with boxlock.held(session.paths, wait=LOCK_WAIT):
+            try:
+                reload_if_changed(session)
+            except (StoreError, OSError) as exc:
+                if resolve(line) in LEAVING:
+                    # what could not be read cannot be exported; leaving must still work
+                    console.warn(f"{session.box.name} was not exported because it could not be read")
+                    raise Quit from None
+                # acting on stale data, or marking the new state as seen, would hide the change
+                console.fail(f"could not reload the box: {exc}")
+                return True
+            try:
+                _read_status(session)
                 try:
-                    reload_if_changed(session)
+                    rescan(session)
                 except (StoreError, OSError) as exc:
-                    if resolve(line) == ("quit", []):
-                        # what could not be read cannot be exported; leaving must still work
-                        console.warn(
-                            f"{session.box.name} was not exported because it could not be read"
-                        )
-                        raise Quit from None
-                    # acting on stale data, or marking the new state as seen, would hide the change
-                    console.fail(f"could not reload the box: {exc}")
-                    continue
+                    console.warn(str(exc))
+                dispatch(session, line)
+            finally:
                 try:
-                    _read_status(session)
-                    try:
-                        rescan(session)
-                    except (StoreError, OSError) as exc:
-                        console.warn(str(exc))
-                    dispatch(session, line)
-                finally:
-                    try:
-                        mark_seen(session)
-                    except OSError as exc:
-                        # the next command reads the box again, which costs nothing but time
-                        console.fail(f"could not note the box's files as read: {exc}")
-        except boxlock.Busy:
-            console.fail("record is adding a target in another window; try again")
-        except OSError as exc:
-            console.fail(f"could not use the lock file {session.paths.box_lock}: {exc}")
-        except Quit:
-            break
-        except KeyboardInterrupt:
-            console.info("cancelled")
+                    mark_seen(session)
+                except OSError as exc:
+                    # the next command reads the box again, which costs nothing but time
+                    console.fail(f"could not note the box's files as read: {exc}")
+    except boxlock.Busy:
+        console.fail("record is adding a target in another window; try again")
+    except OSError as exc:
+        console.fail(f"could not use the lock file {session.paths.box_lock}: {exc}")
+    except Quit:
+        return False
+    except KeyboardInterrupt:
+        console.info("cancelled")
+    return True

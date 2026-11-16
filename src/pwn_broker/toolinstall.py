@@ -198,7 +198,7 @@ def _show(
         console.info(f"run   {command}   from any terminal")
     if item.needs_root:
         for command in item.commands:
-            console.info(f"      sudo {(paths.bin / command).as_posix()}")
+            console.detail(f"sudo {(paths.bin / command).as_posix()}")
     if item.uploads:
         folder = (paths.upload / item.name).as_posix()
         console.info(f"files {folder}   {'  '.join(item.uploads)}")

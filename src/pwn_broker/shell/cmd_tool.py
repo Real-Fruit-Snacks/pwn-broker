@@ -7,7 +7,7 @@ from pathlib import Path
 from pwn_broker import tooldata, toolhooks, toolindex, toolinstall, toolstate
 from pwn_broker.model import current_tools
 from pwn_broker.session import Session, current_tunnel
-from pwn_broker.shell.commands import command, take_args
+from pwn_broker.shell.commands import ArgumentError, command, take_args
 from pwn_broker.toolindex import BuildEntry, Index, ToolEntry
 from pwn_broker.toolpkg import MANIFEST, ToolError, build_id, read_manifest
 from pwn_broker.toolstate import Installed
@@ -16,7 +16,6 @@ from pwn_broker.toolstate import Installed
 _lookup = shutil.which
 
 _PLACEHOLDER = re.compile(r"\{(ip|hostname|domain|lhost)\}")
-_LABEL = 12
 
 
 def _count(n: int, noun: str) -> str:
@@ -76,11 +75,11 @@ def _run_column(session: Session, item: Installed) -> str:
     return (session.paths.upload / item.name).as_posix()
 
 
-@command("tool list", "list the tools in the index; --installed shows this box's")
+@command("tool list", "list the tools in the index; --installed shows this box's", "[--installed]")
 def tool_list(session: Session, args: list[str]) -> None:
     (option,) = take_args(args, optional=("--installed",))
     if option is not None and option != "--installed":
-        raise ValueError(f"unknown option: {option}")
+        raise ArgumentError(f"unknown option: {option}")
     console = session.console
     status = _status(session)
     if option is None:
@@ -99,7 +98,8 @@ def tool_list(session: Session, args: list[str]) -> None:
         if not rows:
             console.info("no tools in the index")
             return
-        console.table(["name", "version", "kind", "status", "kali"], rows)
+        # no column is long but the last; it is the one cut
+        console.table(["name", "version", "kind", "status", "kali"], rows, cut="kali")
         return
 
     records = current_tools(session.box)
@@ -127,13 +127,13 @@ def tool_list(session: Session, args: list[str]) -> None:
                 _run_column(session, item) if item else "",
             ]
         )
-    console.table(["name", "version", "kind", "status", "kali", "run"], rows)
+    console.table(["name", "version", "kind", "status", "kali", "run"], rows, cut="run")
 
 
-@command("tool search", "search the index by name, description or tag")
+@command("tool search", "search the index by name, description or tag", "<word>...")
 def tool_search(session: Session, args: list[str]) -> None:
     if not args:
-        raise ValueError("search for what? give at least one word")
+        raise ArgumentError("search for what? give at least one word")
     found = toolindex.search(_index(session), args)
     if not found:
         session.console.info(f"no tools match {' '.join(args)}")
@@ -151,7 +151,7 @@ def tool_search(session: Session, args: list[str]) -> None:
                 tool.description,
             ]
         )
-    session.console.table(["name", "version", "kind", "status", "description"], rows)
+    session.console.table(["name", "version", "kind", "status", "description"], rows, cut="description")
 
 
 def _last_domain(session: Session) -> str:
@@ -174,10 +174,6 @@ def fill_examples(session: Session, text: str) -> str:
     return _PLACEHOLDER.sub(lambda m: values[m[1]] or f"<{m[1]}>", text)
 
 
-def _line(session: Session, label: str, text: str) -> None:
-    session.console.info(f"{label:<{_LABEL}}{text}")
-
-
 def _requirement(session: Session, index: Index, name: str) -> str:
     try:
         runtime = _latest(toolindex.find_runtime(index, name))
@@ -195,54 +191,61 @@ def _requirement(session: Session, index: Index, name: str) -> str:
     return f"{name} ({toolinstall.megabytes(runtime.size)} MB, {state})"
 
 
-@command("tool info", "show a tool's details, how to run it and its examples")
+@command("tool info", "show a tool's details, how to run it and its examples", "<name>")
 def tool_info(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, required=("tool name",))
+    console = session.console
     index = _index(session)
     item = toolstate.load_installed(session.paths).get(name) if name in _have(session) else None
+    rows: list[tuple[str, str]] = []
     try:
         tool = toolindex.find_tool(index, name)
     except ToolError:
         if item is None:
             raise
-        session.console.warn(f"{name} is not in the index")
+        console.warn(f"{name} is not in the index")
     else:
         build = _latest(tool)
-        _line(session, "name", f"{tool.name} {tool.latest}")
-        _line(session, "description", tool.description)
-        _line(session, "kind", build.kind if build else "")
-        _line(session, "licence", tool.licence)
-        _line(session, "upstream", tool.upstream)
-        _line(session, "versions", ", ".join(build_id(b.version, b.build) for b in tool.builds))
+        rows += [
+            ("name", f"{tool.name} {tool.latest}"),
+            ("description", tool.description),
+            ("kind", build.kind if build else ""),
+            ("licence", tool.licence),
+            ("upstream", tool.upstream),
+            ("versions", ", ".join(build_id(b.version, b.build) for b in tool.builds)),
+        ]
         # the build this box has installed, or else the one an install would take
         requires = item.requires if item is not None else build.requires if build else []
-        for runtime in requires:
-            _line(session, "requires", _requirement(session, index, runtime))
+        rows += [("requires", _requirement(session, index, runtime)) for runtime in requires]
     if item is None:
+        console.fields(rows)
         return
     paths = session.paths
     if item.commands:
-        _line(session, "run", ", ".join(item.commands))
+        rows.append(("run", ", ".join(item.commands)))
         if item.needs_root:
-            for cmd in item.commands:
-                _line(session, "", f"sudo {(paths.bin / cmd).as_posix()}")
-    _line(session, "folder", item.folder)
+            # under the run row's value, as a row of its own
+            rows += [("", f"sudo {(paths.bin / cmd).as_posix()}") for cmd in item.commands]
+    rows.append(("folder", item.folder))
     if item.uploads:
-        _line(session, "upload", f"{(paths.upload / item.name).as_posix()}   {'  '.join(item.uploads)}")
+        rows.append(("upload", f"{(paths.upload / item.name).as_posix()}   {'  '.join(item.uploads)}"))
     if item.home:
-        _line(session, "home", "  ".join(item.home))
-    if not item.folder:
-        return
-    try:
-        manifest = read_manifest(Path(item.folder) / MANIFEST)
-    except ToolError as exc:
-        session.console.warn(f"the examples could not be read: {exc}")
-        return
-    for example in manifest.examples:
-        _line(session, "example", fill_examples(session, example))
+        rows.append(("home", "  ".join(item.home)))
+    problem = None
+    if item.folder:
+        try:
+            manifest = read_manifest(Path(item.folder) / MANIFEST)
+        except ToolError as exc:
+            problem = f"the examples could not be read: {exc}"
+        else:
+            rows += [("example", fill_examples(session, example)) for example in manifest.examples]
+    # one list, so every value starts in the same column
+    console.fields(rows)
+    if problem is not None:
+        console.warn(problem)
 
 
-@command("tool install", "install a tool; name@version picks a version")
+@command("tool install", "install a tool; name@version picks a version", "<name>[@<version>[-<build>]]")
 def tool_install(session: Session, args: list[str]) -> None:
     (spec,) = take_args(args, required=("tool name",))
     name, at, version = spec.partition("@")
@@ -291,7 +294,7 @@ def tool_install(session: Session, args: list[str]) -> None:
         )
 
 
-@command("tool remove", "take a tool off this box")
+@command("tool remove", "take a tool off this box", "<name>")
 def tool_remove(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, required=("tool name",))
     box, console = session.box, session.console
@@ -311,8 +314,7 @@ def tool_remove(session: Session, args: list[str]) -> None:
     last = item is not None and bool(item.home) and not any(u in holding for u in item.users)
     homes = toolhooks.user_homes() if last else []
     named = tooldata.to_delete(item, homes, False) if last else []
-    for path in named:
-        console.info(f"home      {path}   (will be deleted)")
+    console.fields([("home", f"{path}   (will be deleted)") for path in named])
     if not console.confirm(f"remove {name}?"):
         console.info("nothing removed")
         return

@@ -182,10 +182,10 @@ def test_report_lists_each_problem_and_offers_repair():
     assert c.lines == [
         ("ok", "1 check passed"),
         ("warn", "path   not on PATH"),
-        ("info", "open a new terminal"),
+        ("detail", "open a new terminal"),
         ("ok", "path fixed"),
         ("fail", "tar   not found"),
-        ("info", "apt install tar"),
+        ("detail", "apt install tar"),
     ]
 
 

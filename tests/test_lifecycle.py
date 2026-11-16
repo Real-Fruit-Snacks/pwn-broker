@@ -16,7 +16,7 @@ from pwn_broker.lifecycle import export_box, finish_box, import_box, reopen_box
 from pwn_broker.model import Flag
 from pwn_broker.note import read_note
 from pwn_broker.paths import AppPaths
-from pwn_broker.store import StoreError, load_box, load_creds, load_targets, read_toml, save_box
+from pwn_broker.store import StoreError, load_box, load_creds, load_files, load_targets, read_toml, save_box
 
 NOFIX = dict(fix=lambda path: 0)
 SAVED = dict(fix=lambda path: 0, unsaved=lambda box: False)
@@ -85,11 +85,13 @@ def test_finish_shows_summary_before_asking(session):
     original = console.confirm
     console.confirm = lambda q, default=False: shown.extend(console.lines) or original(q, default)
     finish_box(session, **SAVED)
-    text = "\n".join(t for k, t in shown if k == "info")
-    assert "forest (htb), started 2026-11-14" in text
-    assert "targets   1" in text
-    assert "files     " in text
-    assert str(archive_path(session.paths, session.box, "finished")) in text
+    archive = archive_path(session.paths, session.box, "finished")
+    assert shown == [
+        ("field", "box  forest (htb), started 2026-11-14"),
+        ("field", "targets  1"),
+        ("field", f"files  {len(load_files(session.box))}"),
+        ("field", f"archive  {archive}"),
+    ]
 
 
 def test_finish_happy_path(session):
@@ -611,15 +613,16 @@ def test_block_reasons_and_an_unsaved_note_are_both_reported(session, monkeypatc
 
 
 def test_summary_hook_lines_follow_the_existing_ones_before_the_question(session, monkeypatch):
-    monkeypatch.setattr(lifecycle, "SUMMARY_HOOKS", [lambda s: ["extra     one", "extra     two"]])
+    monkeypatch.setattr(lifecycle, "SUMMARY_HOOKS", [lambda s: [("extra", "one"), ("", "two")]])
     console = answers(session, "n").console
     shown = []
     original = console.confirm
-    console.confirm = lambda q, default=False: shown.extend(console.lines) or original(q, default)
+    console.confirm = lambda q, default=False: shown.extend(console.events) or original(q, default)
     finish_box(session, **SAVED)
-    info = [t for k, t in shown if k == "info"]
-    assert info[-2:] == ["extra     one", "extra     two"]
-    assert info[-3].startswith("archive   ")
+    # one list, so the hooks' labels line up with the summary's own
+    assert [k for k, _ in shown] == ["field"] * 6
+    assert [t for _, t in shown][-2:] == ["extra  one", "  two"]
+    assert shown[-3][1].startswith("archive  ")
 
 
 def test_pre_pack_hooks_run_after_ownership_and_before_refresh(session, monkeypatch):

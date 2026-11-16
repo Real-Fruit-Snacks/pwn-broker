@@ -129,8 +129,7 @@ def vpn_status(session: Session, args: list[str]) -> None:
         ("file", marker.file),
         ("started for", marker.box_name),
     ]
-    for label, value in rows:
-        console.info(f"{label:<13}{value}")
+    console.fields(rows)
 
 
 @command("vpn log", "the last lines of OpenVPN's log")

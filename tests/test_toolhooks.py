@@ -164,8 +164,8 @@ def test_summary_is_empty_for_a_box_without_tools(session, registered):
 
 def test_summary_lists_tools_and_home_paths(tooled, user):
     assert toolhooks.summary(tooled) == [
-        "tools     kerbrute 1.0.3   (will be removed)",
-        f"home      {user / '.kerb'}   (will be deleted)",
+        ("tools", "kerbrute 1.0.3   (will be removed)"),
+        ("home", f"{user / '.kerb'}   (will be deleted)"),
     ]
 
 
@@ -173,7 +173,7 @@ def test_summary_lists_no_home_path_another_box_still_uses(tooled, other):
     item = load_installed(tooled.paths)["kerbrute"]
     item.users.append(other.id)
     toolstate.save_installed(tooled.paths, {"kerbrute": item})
-    assert toolhooks.summary(tooled) == ["tools     kerbrute 1.0.3   (will be removed)"]
+    assert toolhooks.summary(tooled) == [("tools", "kerbrute 1.0.3   (will be removed)")]
 
 
 # ---- pre_pack
@@ -273,7 +273,7 @@ def test_restore_installs_the_recorded_build_on_yes(tooled):
     toolhooks.restore(tooled)
     assert tooled.console.asked == ["install these tools again?"]
     assert tooled.box.id in load_installed(tooled.paths)["kerbrute"].users
-    assert any("kerbrute 1.0.3" in t for t in lines(tooled, "info"))
+    assert lines(tooled, "field") == ["tools  kerbrute 1.0.3"]
 
 
 def test_restore_does_nothing_on_no(tooled):
@@ -404,7 +404,7 @@ def test_leftovers_never_take_a_runtime_for_an_unused_tool_or_a_stray(paths, tmp
     toolhooks.leftovers(paths, console)
     # offered once, as a runtime
     assert console.asked == [RUNTIME_QUESTION]
-    assert console.lines == [("info", "runtimes  python-3.13 3.13.18")]
+    assert console.lines == [("field", "runtimes  python-3.13 3.13.18")]
     assert list(load_installed(paths)) == ["python-3.13"]
     assert (paths.tools / "python-3.13" / "3.13.18-1").is_dir()
 
@@ -443,9 +443,9 @@ def test_finish_end_to_end(tooled, user):
     )
     path = finish_box(tooled, **SAVED)
     assert path is not None and path.exists()
-    before_question = [t for k, t in shown if k == "info"]
-    assert "tools     kerbrute 1.0.3   (will be removed)" in before_question
-    assert f"home      {user / '.kerb'}   (will be deleted)" in before_question
+    before_question = [t for k, t in shown if k == "field"]
+    assert "tools  kerbrute 1.0.3   (will be removed)" in before_question
+    assert f"home  {user / '.kerb'}   (will be deleted)" in before_question
     assert any(n.endswith("tooldata/kerbrute/home/.kerb/found.txt") for n in archive_names(path))
     assert load_installed(tooled.paths) == {}
     assert not (user / ".kerb").exists() and (user / ".old").exists()
@@ -609,7 +609,7 @@ def test_reopen_after_a_failed_removal_offers_the_tools_again(tooled, env, monke
     reopened = cli.choose(env)
     assert reopened.box.status == "active"
     assert env.console.asked[-1] == "install these tools again?"
-    assert any("kerbrute 1.0.3" in t for k, t in env.console.lines if k == "info")
+    assert ("field", "tools  kerbrute 1.0.3") in env.console.lines
     assert reopened.box.id in load_installed(tooled.paths)["kerbrute"].users
 
 
@@ -918,7 +918,7 @@ def test_files_left_by_an_interrupted_install_are_offered_and_removed(tooled):
     console = FakeConsole(["y"])
     toolhooks.leftovers(paths, console)
     assert console.asked == [SWEEP_QUESTION]
-    assert [t for k, t in console.lines if k == "info"] == [f"left      {s}" for s in sorted(strays)]
+    assert [t for k, t in console.lines if k == "field"] == [f"left  {s}" for s in sorted(strays)]
     assert [t for k, t in console.lines if k == "ok"] == [f"removed {s}" for s in sorted(strays)]
     assert not any(os.path.lexists(s) for s in strays)
     assert sorted(p.relative_to(paths.opt).as_posix() for p in paths.opt.rglob("*")) == keep
@@ -992,7 +992,7 @@ def test_a_removed_orphans_home_paths_are_named_not_deleted(tooled, user):
 RUNTIME_QUESTION = "remove runtimes no installed tool requires?"
 RT_LINE = ("ok", "python-3.13 3.13.18 installed (runtime, 1 MB)")
 RT_GONE = ("ok", "python-3.13 3.13.18 removed (runtime)")
-RT_SUMMARY = "runtimes  python-3.13 3.13.18   (will be removed)"
+RT_SUMMARY = ("runtimes", "python-3.13 3.13.18   (will be removed)")
 
 
 @pytest.fixture
@@ -1046,7 +1046,12 @@ def wipe_all(session):
 def test_summary_lists_the_runtimes_that_will_go(tooled, pyshop):
     put(tooled, pyshop.certipy)
     shown = toolhooks.summary(say(tooled))
-    assert shown[:2] == ["tools     kerbrute 1.0.3, certipy 5.1.0   (will be removed)", RT_SUMMARY]
+    # one tool per row, the label on the first
+    assert shown[:3] == [
+        ("tools", "kerbrute 1.0.3   (will be removed)"),
+        ("", "certipy 5.1.0   (will be removed)"),
+        RT_SUMMARY,
+    ]
 
 
 def test_summary_keeps_a_runtime_a_tool_of_another_unfinished_box_requires(tooled, pyshop, other):
@@ -1078,7 +1083,7 @@ def test_finish_removes_the_runtime_with_the_last_tool(tooled, pyshop, user):
     )
     path = finish_box(tooled, **SAVED)
     assert path is not None and path.exists()
-    assert ("info", RT_SUMMARY) in shown
+    assert ("field", "  ".join(RT_SUMMARY)) in shown
     assert RT_GONE in tooled.console.lines
     assert load_installed(tooled.paths) == {}
     assert not (tooled.paths.tools / "python-3.13").exists()
@@ -1259,7 +1264,7 @@ def test_leftovers_offer_the_runtime_of_a_tool_they_removed(tooled, pyshop):
     console = FakeConsole(["y", "y"])
     toolhooks.leftovers(tooled.paths, console)
     assert console.asked == ["remove tools left by finished boxes?", RUNTIME_QUESTION]
-    assert ("info", "runtimes  python-3.13 3.13.18") in console.lines
+    assert ("field", "runtimes  python-3.13 3.13.18") in console.lines
     assert load_installed(tooled.paths) == {}
     assert not (tooled.paths.tools / "python-3.13").exists()
 
@@ -1295,7 +1300,7 @@ def test_a_runtime_folder_with_no_row_is_a_stray(tooled, pyshop):
     console = FakeConsole(["y"])
     toolhooks.leftovers(tooled.paths, console)
     assert console.asked == [SWEEP_QUESTION]
-    assert ("info", f"left      {tooled.paths.tools / 'python-3.13'}") in console.lines
+    assert ("field", f"left  {tooled.paths.tools / 'python-3.13'}") in console.lines
 
 
 # ---- removed tools
@@ -1358,7 +1363,7 @@ def test_import_offers_only_the_tools_the_box_still_had(tooled, pyshop, tmp_path
     paths = fresh_paths(tooled, tmp_path)
     console = FakeConsole(["y"])
     box = import_box(paths, tooled.settings, console, archive, lambda: NOW)
-    assert ("info", "tools     kerbrute 1.0.3") in console.lines
+    assert ("field", "tools  kerbrute 1.0.3") in console.lines
     assert set(load_installed(paths)) == {"kerbrute"}
     # the tool installed again keeps its row; the removed one stays removed
     assert [(t.name, t.removed) for t in box.tools] == [("kerbrute", None), ("certipy", NOW)]

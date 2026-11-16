@@ -9,7 +9,7 @@ from pwn_broker.lists import ListSummary
 from pwn_broker.model import Cred
 from pwn_broker.questions import ask_cred, ask_domain, ask_found_on
 from pwn_broker.session import Session, refresh
-from pwn_broker.shell.commands import command, take_args
+from pwn_broker.shell.commands import ArgumentError, command, take_args
 from pwn_broker.store import save_box
 
 
@@ -112,14 +112,14 @@ def cred_list(session: Session, args: list[str]) -> None:
         for c in session.creds
     ]  # fmt: skip
     session.console.table(
-        ["n", "user", "domain", "secret", "kind", "found on", "works on"], rows
+        ["n", "user", "domain", "secret", "kind", "found on", "works on"], rows, cut="secret"
     )
     if flagged:
         which = str(flagged[0]) if len(flagged) == 1 else "<n>"
         session.console.info(f"* the table cannot show this secret exactly. use: cred show {which}")
 
 
-@command("cred show", "print one secret and nothing else")
+@command("cred show", "print one secret and nothing else", "<n>")
 def cred_show(session: Session, args: list[str]) -> None:
     (text,) = take_args(args, ("cred number",))
     cred = _get(session, text)
@@ -129,7 +129,7 @@ def cred_show(session: Session, args: list[str]) -> None:
     session.console.raw(cred.secret)
 
 
-@command("cred edit", "change a credential")
+@command("cred edit", "change a credential", "<n>")
 def cred_edit(session: Session, args: list[str]) -> None:
     (text,) = take_args(args, ("cred number",))
     cred = _get(session, text)
@@ -154,7 +154,7 @@ def cred_edit(session: Session, args: list[str]) -> None:
     _report_lists(session, summary)
 
 
-@command("cred clear", "empty a credential's secret or note")
+@command("cred clear", "empty a credential's secret or note", "<n> <field>")
 def cred_clear(session: Session, args: list[str]) -> None:
     text, field = take_args(args, ("cred number", "field"))
     cred = _get(session, text)
@@ -182,10 +182,10 @@ def cred_clear(session: Session, args: list[str]) -> None:
     _report_lists(session, summary)
 
 
-@command("cred works", "record where a credential works")
+@command("cred works", "record where a credential works", "<n> [<target>...]")
 def cred_works(session: Session, args: list[str]) -> None:
     if not args:
-        raise ValueError("missing argument: cred number")
+        raise ArgumentError("missing argument: cred number")
     cred = _get(session, args[0])
     if args[1:]:
         names = [boxes.find_target(session.targets, word).name for word in args[1:]]
@@ -203,7 +203,7 @@ def cred_works(session: Session, args: list[str]) -> None:
     _report_lists(session, summary)
 
 
-@command("cred remove", "delete a credential")
+@command("cred remove", "delete a credential", "<n>")
 def cred_remove(session: Session, args: list[str]) -> None:
     (text,) = take_args(args, ("cred number",))
     cred = _get(session, text)
@@ -233,10 +233,10 @@ def _read_names(text: str) -> list[str]:
         raise ValueError(f"{path} is not valid UTF-8 text") from None
 
 
-@command("cred import", "add usernames from a file, one per line")
+@command("cred import", "add usernames from a file, one per line", "<file>")
 def cred_import(session: Session, args: list[str]) -> None:
     if not args:
-        raise ValueError("missing argument: file")
+        raise ArgumentError("missing argument: file")
     lines = _read_names(" ".join(args))
     console = session.console
     domain = ask_domain(console, session)

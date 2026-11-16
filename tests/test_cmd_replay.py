@@ -241,7 +241,6 @@ def test_refuses_without_asciinema(session, monkeypatch):
         ("replay 3", "no recording 3; use 1 to 2"),
         ("replay 0", "no recording 0; use 1 to 2"),
         ("replay dc01 x", "x is not a recording number"),
-        ("replay dc01 1 2", "too many arguments: 2"),
     ],
 )
 def test_bad_numbers(session, played, line, message):
@@ -249,6 +248,16 @@ def test_bad_numbers(session, played, line, message):
     _cast(session, "dc01", "2026-11-14_1432")
     _cast(session, "dc01", "2026-11-14_1510")
     assert _run(session, line).lines == [("fail", message)]
+    assert calls == []
+
+
+def test_too_many_arguments_shows_the_usage(session, played):
+    calls, status = played
+    _cast(session, "dc01", "2026-11-14_1432")
+    assert _run(session, "replay dc01 1 2").lines == [
+        ("fail", "too many arguments: 2"),
+        ("detail", "usage: replay [<target>] [<n>]"),
+    ]
     assert calls == []
 
 

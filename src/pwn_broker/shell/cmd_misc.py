@@ -7,7 +7,7 @@ from pwn_broker.note import NOTE_NAME, NoteError
 from pwn_broker.questions import ask_value
 from pwn_broker.session import Session, current_tunnel, recording_count, write_new_note
 from pwn_broker.store import StoreError
-from pwn_broker.shell.commands import COMMANDS, command, take_args
+from pwn_broker.shell.commands import command, help_groups, list_commands, take_args
 
 BOX_FOLDERS = ("lists", "screenshots")
 
@@ -30,7 +30,7 @@ def _added(session: Session, record: FileRecord) -> str:
     return seen.strftime("%Y-%m-%d")
 
 
-@command("files", "list the files saved for a target or the whole box")
+@command("files", "list the files saved for a target or the whole box", "[<target>]")
 def files(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, optional=("target name",))
     records = store.load_files(session.box)
@@ -41,7 +41,7 @@ def files(session: Session, args: list[str]) -> None:
         session.console.info("no files yet")
         return
     rows = [[r.path, _added(session, r), human_size(r.size)] for r in records]
-    session.console.table(["file", "added", "size"], rows)
+    session.console.table(["file", "added", "size"], rows, cut="file")
 
 
 def _flag(which: str):
@@ -65,7 +65,7 @@ command("flag user", "record the user flag")(_flag("user"))
 command("flag root", "record the root flag")(_flag("root"))
 
 
-@command("path", "print a folder's full path")
+@command("path", "print a folder's full path", "[<folder>]")
 def path(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, optional=("folder",))
     box = session.box.path
@@ -134,8 +134,7 @@ def status(session: Session, args: list[str]) -> None:
         ("user flag", _flag_line(session, "user")),
         ("root flag", _flag_line(session, "root")),
     ]
-    for label, value in rows:
-        session.console.info(f"{label:<11}{value}")
+    session.console.fields(rows)
 
 
 @command("check", "run the setup checks again")
@@ -159,5 +158,13 @@ def check(session: Session, args: list[str]) -> None:
 @command("help", "list the commands")
 def help_(session: Session, args: list[str]) -> None:
     take_args(args)
-    rows = [[name, COMMANDS[name][1]] for name in sorted(COMMANDS)]
-    session.console.table(["command", "does"], rows)
+    for n, names in enumerate(help_groups()):
+        if n:
+            session.console.gap()
+        list_commands(session.console, names)
+
+
+@command("clear", "clear the screen")
+def clear(session: Session, args: list[str]) -> None:
+    take_args(args)
+    session.console.clear()

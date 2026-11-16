@@ -105,7 +105,7 @@ def _play(session: Session, n: int, casts: list[Path]) -> None:
         console.warn(f"asciinema ended with status {status}")
 
 
-@command("replay", "list a target's recordings, or play one")
+@command("replay", "list a target's recordings, or play one", "[<target>] [<n>]")
 def replay(session: Session, args: list[str]) -> None:
     target, n = _parse(session, args)
     casts = casttext.cast_files(session.box, target.name)
