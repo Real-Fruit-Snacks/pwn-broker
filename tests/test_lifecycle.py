@@ -686,14 +686,14 @@ def test_export_packs_a_live_cast_up_to_its_last_whole_line(session, system, mon
 
 
 def window(open_now=True, signalled=None):
-    """Stand-ins for the note window: close_note sends nothing, find_note reports it."""
+    """Stand-in for closing the note window: it notes the box and says whether a window is left."""
     signalled = [] if signalled is None else signalled
 
     def close(paths, box):
         signalled.append(box.path)
-        return True
+        return open_now
 
-    return dict(close=close, find=lambda paths, box: 1 if open_now else None), signalled
+    return dict(close=close), signalled
 
 
 def test_finish_closes_the_note_window_before_removing_the_folder(session):
@@ -704,9 +704,9 @@ def test_finish_closes_the_note_window_before_removing_the_folder(session):
 
     def close(paths, box):
         seen.append(folder.exists())
-        return True
+        return False
 
-    assert finish_box(session, **SAVED, close=close, find=stand_in["find"]) is not None
+    assert finish_box(session, **SAVED, close=close) is not None
     assert seen == [True] and not folder.exists()
     assert "the note window did not close" not in kinds(session, "warn")
 
@@ -817,5 +817,5 @@ def test_finish_keeps_the_folder_when_the_note_cannot_be_read_after_the_archive(
 
 def test_finish_says_so_when_the_signal_could_not_be_sent(session):
     answers(session, "y", "y")
-    finish_box(session, **SAVED, close=lambda paths, box: False, find=lambda paths, box: 1)
+    finish_box(session, **SAVED, close=lambda paths, box: True)
     assert kinds(session, "warn").count("the note window did not close") == 1

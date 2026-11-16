@@ -8,6 +8,7 @@ from pwn_broker.store import save_box
 
 # the real listing of the current user's processes, for the one test of it
 REAL_OWN_PROCESSES = _notewindow._own_processes
+REAL_PARENT_PID = _notewindow._parent_pid
 
 __all__ = ["NOW", "make_cred"]
 
@@ -293,10 +294,12 @@ def no_real_processes(monkeypatch):
     from pwn_broker import notewindow
 
     monkeypatch.setattr(notewindow, "_own_processes", lambda: [])
+    monkeypatch.setattr(notewindow, "_parent_pid", lambda pid: None)
 
     def refuse(*args, **kwargs):
         raise AssertionError("a test reached a real signal or sleep; pass a kill and sleep stand-in")
 
-    defaults = dict(notewindow.close_note.__kwdefaults__)
-    defaults.update(kill=refuse, sleep=refuse)
-    monkeypatch.setattr(notewindow.close_note, "__kwdefaults__", defaults)
+    for function in (notewindow.close_note, notewindow.shut_note):
+        defaults = dict(function.__kwdefaults__)
+        defaults.update(kill=refuse, sleep=refuse, parent=lambda pid: None)
+        monkeypatch.setattr(function, "__kwdefaults__", defaults)

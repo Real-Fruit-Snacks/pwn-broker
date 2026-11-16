@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import REAL_OWN_PROCESSES
+from conftest import REAL_OWN_PROCESSES, REAL_PARENT_PID
 from pwn_broker.config import Settings
 from pwn_broker.notewindow import (
     close_note,
@@ -12,6 +12,7 @@ from pwn_broker.notewindow import (
     has_display,
     note_unsaved,
     open_note,
+    shut_note,
     vim_command,
 )
 
@@ -195,3 +196,146 @@ def test_a_note_path_that_is_not_utf8_still_matches(tmp_path):
 
     odd = os.fsdecode(os.fsencode(tmp_path) + b"/b\xff")
     assert _parse_cmdline(os.fsencode(odd) + b"\0") == [odd]
+
+
+class World:
+    """A table of processes where a signal ends the process, the way TERM ends a vim and a terminal."""
+
+    def __init__(self, *rows):
+        self.table = dict(rows)
+        self.sent = []
+        self.stays = set()
+
+    def listing(self):
+        return list(self.table.items())
+
+    def kill(self, pid, sig):
+        self.sent.append(pid)
+        if pid not in self.stays:
+            self.table.pop(pid, None)
+
+
+def terminal_argv(paths, box, first="x-terminal-emulator"):
+    return [first, "-e", *note_argv(paths, box)]
+
+
+def shut(world, paths, box, parent_of):
+    return shut_note(
+        paths, box, kill=world.kill, processes=world.listing, sleep=lambda s: None,
+        parent=parent_of.get,
+    )  # fmt: skip
+
+
+def test_the_terminal_made_for_the_note_is_closed_after_the_vim(paths, box):
+    world = World((7, terminal_argv(paths, box)), (42, note_argv(paths, box)))
+    assert shut(world, paths, box, {42: 7}) is False
+    assert world.sent == [42, 7] and world.table == {}
+
+
+def test_a_shell_is_never_signalled(paths, box):
+    world = World((7, ["bash"]), (42, note_argv(paths, box)))
+    assert shut(world, paths, box, {42: 7}) is False
+    assert world.sent == [42] and 7 in world.table
+
+
+def test_a_terminal_server_without_the_tail_is_never_signalled(paths, box):
+    world = World((7, ["qterminal"]), (42, note_argv(paths, box)))
+    shut(world, paths, box, {42: 7})
+    assert world.sent == [42]
+
+
+def test_a_tail_that_differs_by_one_argument_is_never_signalled(paths, box):
+    argv = terminal_argv(paths, box)
+    argv[-1] = str(box.path / "other.md")
+    world = World((7, argv), (42, note_argv(paths, box)))
+    shut(world, paths, box, {42: 7})
+    assert world.sent == [42]
+
+
+def test_a_terminal_with_more_after_the_vim_arguments_is_never_signalled(paths, box):
+    world = World((7, [*terminal_argv(paths, box), "extra"]), (42, note_argv(paths, box)))
+    shut(world, paths, box, {42: 7})
+    assert world.sent == [42]
+
+
+def test_another_users_terminal_is_never_signalled(paths, box):
+    # the listing holds only the current user's processes, so the parent is not in it
+    world = World((42, note_argv(paths, box)))
+    shut(world, paths, box, {42: 7})
+    assert world.sent == [42]
+
+
+def test_a_terminal_that_closed_with_the_vim_is_not_signalled(paths, box):
+    # xterm: the window closes by itself once the vim is signalled
+    world = World((7, terminal_argv(paths, box)), (42, note_argv(paths, box)))
+    kill = world.kill
+
+    def kill_both(pid, sig):
+        kill(pid, sig)
+        world.table.pop(7, None)
+
+    assert shut_note(
+        paths, box, kill=kill_both, processes=world.listing, sleep=lambda s: None, parent={42: 7}.get
+    ) is False  # fmt: skip
+    assert world.sent == [42]
+
+
+def test_a_terminal_that_stays_after_its_wait_is_reported(paths, box):
+    world = World((7, terminal_argv(paths, box)), (42, note_argv(paths, box)))
+    world.stays.add(7)
+    sleeps = []
+    left = shut_note(
+        paths, box, kill=world.kill, processes=world.listing, sleep=sleeps.append,
+        parent={42: 7}.get, wait=0.3,
+    )  # fmt: skip
+    assert left is True and world.sent == [42, 7] and 1 <= len(sleeps) <= 4
+
+
+def test_a_vim_that_stays_is_reported_and_its_terminal_left_alone(paths, box):
+    world = World((7, terminal_argv(paths, box)), (42, note_argv(paths, box)))
+    world.stays.add(42)
+    left = shut_note(
+        paths, box, kill=world.kill, processes=world.listing, sleep=lambda s: None,
+        parent={42: 7}.get, wait=0.2,
+    )  # fmt: skip
+    assert left is True and world.sent == [42]
+
+
+def test_the_terminal_is_read_again_right_before_its_signal(paths, box):
+    world = World((7, terminal_argv(paths, box)), (42, note_argv(paths, box)))
+    calls = {"after_vim_gone": 0}
+
+    def listing():
+        rows = world.listing()
+        if 42 not in world.table:
+            calls["after_vim_gone"] += 1
+            # the first reads (the wait, then the terminal's match) see the terminal; the read made
+            # right before its signal finds that pid now runs something else
+            if calls["after_vim_gone"] > 3:
+                return [(7, ["bash"])]
+        return rows
+
+    shut_note(
+        paths, box, kill=world.kill, processes=listing, sleep=lambda s: None, parent={42: 7}.get
+    )  # fmt: skip
+    assert world.sent == [42]
+
+
+def test_nothing_is_signalled_when_the_parent_cannot_be_read(paths, box):
+    world = World((7, terminal_argv(paths, box)), (42, note_argv(paths, box)))
+    assert shut(world, paths, box, {}) is False
+    assert world.sent == [42]
+
+
+def test_the_parent_of_a_process_is_read_from_its_stat_line(monkeypatch):
+    from pwn_broker import notewindow
+
+    class Stat:
+        def __init__(self, text):
+            self.text = text
+
+        def read_text(self, **kwargs):
+            return self.text
+
+    monkeypatch.setattr(notewindow, "Path", lambda p: Stat("42 (vim (x) y) S 7 42 42 0 -1"))
+    assert REAL_PARENT_PID(42) == 7
