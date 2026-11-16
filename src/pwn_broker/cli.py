@@ -78,7 +78,6 @@ def new_box(env: Env) -> Session:
     targets: list[Target] = []
     try:
         adding = console.confirm("add a target?", default=True)
-        console.gap()
         while adding:
             given = questions.ask_target(
                 console, heading=f"Target {len(targets) + 1}", taken={t.name for t in targets}
@@ -97,9 +96,7 @@ def new_box(env: Env) -> Session:
                 console.fail(f"could not add the target: {exc}")
             else:
                 console.ok(f"target {target.name} created")
-            console.gap()
             adding = console.confirm("add another?", default=False)
-            console.gap()
     except Cancelled:
         # the box exists on disk already; keep it and what was added
         pass

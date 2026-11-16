@@ -84,6 +84,7 @@ Target 2
   add another? [y/N] > 
 
   add dc01's hostnames to /etc/hosts? [Y/n] > n
+
   ok    10.10.10.161 answered in 1 ms
   ok    10.10.10.162 answered in 1 ms
   ok    box forest created
@@ -203,7 +204,9 @@ def test_target_add_at_the_prompt(session, monkeypatch):
         "  name         [web.htb] > web01\n"
         "\n"
         "  ok    target web01 created\n"
+        "\n"
         "  add web01's hostnames to /etc/hosts? [Y/n] > n\n"
+        "\n"
         "  ok    10.10.10.50 answered in 1 ms\n"
         "\n"
     )
@@ -322,3 +325,19 @@ def test_the_launch_makes_the_box_folders_without_asking(env, monkeypatch, syste
     assert start(env, []) == 0
     assert env.paths.active.is_dir() and env.paths.wrapped.is_dir()
     assert not any(text.startswith("folders") for _, text in env.console.lines)
+
+
+def test_a_launch_as_the_wrong_user_prints_the_header_a_gap_and_the_fail_line(env, monkeypatch):
+    monkeypatch.setattr(privilege, "wrong_owner", lambda path: "kali")
+    env.console, out = term(monkeypatch)
+    assert start(env, []) == 1
+    assert out.getvalue() == (
+        f"pwn-broker {__version__}\n\n  fail  pwn-broker was installed by kali; run it as kali\n"
+    )
+    env.console = FakeConsole()
+    assert start(env, []) == 1
+    assert env.console.events[:3] == [
+        ("header", f"pwn-broker {__version__}"),
+        ("gap", ""),
+        ("fail", "pwn-broker was installed by kali; run it as kali"),
+    ]

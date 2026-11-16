@@ -270,7 +270,9 @@ def test_every_kind_of_line_has_its_indent(monkeypatch):
         "  h  k\n"
         "  v  w\n"
         "  name         > forest\n"
+        "\n"
         "  go? [Y/n] > \n"
+        "\n"
         "r\n"
         "\n"
         "New box\n"
@@ -325,7 +327,7 @@ def test_an_answered_question_counts_as_a_line(monkeypatch):
     c.gap()
     c.confirm("add another?")
     c.ok("done")
-    assert out.getvalue() == "  add a target? [y/N] > \n\n  add another? [y/N] > \n  ok    done\n"
+    assert out.getvalue() == "  add a target? [y/N] > \n\n  add another? [y/N] > \n\n  ok    done\n"
 
 
 def test_a_block_that_prints_nothing_writes_nothing(monkeypatch):
@@ -476,7 +478,7 @@ def test_control_characters_in_a_question_are_written_as_question_marks(monkeypa
     assert c.ask(f"user{control}", default=f"a{control}b") == f"a{control}b"  # the answer itself is untouched
     c.confirm(f"go{control}?")
     shown = _shown(control)
-    assert out.getvalue() == f"  {f'user{shown}':<12} [a{shown}b] > \n  go{shown}? [y/N] > \n"
+    assert out.getvalue() == f"  {f'user{shown}':<12} [a{shown}b] > \n\n  go{shown}? [y/N] > \n\n"
 
 
 def test_a_tab_is_kept_in_lines_and_a_space_in_cells(monkeypatch):
@@ -521,7 +523,7 @@ def test_a_block_ending_in_a_question_has_one_blank_below(monkeypatch):
         c.ok("a")
         c.confirm("go?")
     c.gap()
-    assert out.getvalue() == "\n  ok    a\n  go? [y/N] > y\n\n"
+    assert out.getvalue() == "\n  ok    a\n\n  go? [y/N] > y\n\n"
 
 
 def test_a_block_starting_with_a_heading_has_one_blank_above(monkeypatch):
@@ -638,7 +640,7 @@ def test_term_confirm_asks_again_until_yes_or_no(monkeypatch, bad):
     c, out = screen(monkeypatch, bad, "n")
     assert c.confirm("fix it now?", default=True) is False
     assert out.getvalue() == (
-        f"  fix it now? [Y/n] > {bad}\n  fail  answer y or n\n  fix it now? [Y/n] > n\n"
+        f"  fix it now? [Y/n] > {bad}\n  fail  answer y or n\n  fix it now? [Y/n] > n\n\n"
     )
 
 
@@ -660,7 +662,9 @@ def test_fake_confirm_asks_again_until_yes_or_no(bad):
     assert c.confirm("go?") is True
     assert c.asked == ["go?", "go?"]
     assert c.lines == [("fail", "answer y or n")]
-    assert c.events == [("confirm", "go?"), ("fail", "answer y or n"), ("confirm", "go?")]
+    assert c.events == [
+        ("gap", ""), ("confirm", "go?"), ("fail", "answer y or n"), ("confirm", "go?"), ("gap", "")
+    ]  # fmt: skip
 
 
 def test_fake_confirm_cancels_when_a_wrong_answer_is_the_last():
@@ -727,7 +731,9 @@ def test_fake_records_lines_and_events_in_order():
         ("heading", "New box"),
         ("ask", "name"),
         ("gap", ""),
+        ("gap", ""),
         ("confirm", "add a target?"),
+        ("gap", ""),
         ("ok", "created"),
         ("detail", "10.10.10.161 forest.htb"),
         ("field", "box  forest"),
@@ -739,3 +745,55 @@ def test_fake_records_lines_and_events_in_order():
     ]
     assert c.tables == [(["n", "secret"], [["1", "s"]]), (["h"], [["v"]])]
     assert c.asked == ["name", "add a target?"]
+
+
+def test_a_yes_or_no_question_has_a_blank_line_above_and_below(monkeypatch):
+    c, out = screen(monkeypatch, "y")
+    c.ok("a")
+    c.confirm("go?")
+    c.ok("b")
+    assert out.getvalue() == "  ok    a\n\n  go? [y/N] > y\n\n  ok    b\n"
+
+
+def test_two_yes_or_no_questions_in_a_row_have_one_blank_line_between(monkeypatch):
+    c, out = screen(monkeypatch, "y", "n")
+    c.confirm("one?")
+    c.confirm("two?")
+    assert out.getvalue() == "  one? [y/N] > y\n\n  two? [y/N] > n\n\n"
+
+
+def test_a_yes_or_no_question_first_and_last_in_a_block(monkeypatch):
+    c, out = screen(monkeypatch, "y", "y")
+    c.typed()  # the command line, drawn by the prompt loop
+    with c.block():
+        c.confirm("first?")
+        c.ok("a")
+        c.confirm("last?")
+    assert out.getvalue() == "\n  first? [y/N] > y\n\n  ok    a\n\n  last? [y/N] > y\n\n"
+
+
+def test_a_rejected_answer_is_asked_again_with_no_blank_line_between(monkeypatch):
+    c, out = screen(monkeypatch, "maybe", "y")
+    c.ok("a")
+    c.confirm("go?")
+    assert out.getvalue() == (
+        "  ok    a\n\n  go? [y/N] > maybe\n  fail  answer y or n\n  go? [y/N] > y\n\n"
+    )
+
+
+def test_a_cancelled_yes_or_no_question_leaves_the_screen_ready_for_the_next_line(monkeypatch):
+    c, out = screen(monkeypatch, KeyboardInterrupt())
+    c.ok("a")
+    with pytest.raises(Cancelled):
+        c.confirm("go?")
+    c.info("cancelled")
+    # the question is on a line of its own; no second blank line is written before what follows
+    assert out.getvalue() == "  ok    a\n\n  go? [y/N] > \n  cancelled\n"
+    c.gap()
+    assert out.getvalue().endswith("  cancelled\n\n")
+
+
+def test_fake_confirm_records_a_gap_before_and_after():
+    c = FakeConsole(["y"])
+    c.confirm("go?")
+    assert c.events == [("gap", ""), ("confirm", "go?"), ("gap", "")]

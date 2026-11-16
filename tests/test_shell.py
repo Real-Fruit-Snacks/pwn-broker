@@ -697,6 +697,7 @@ def test_a_block_that_ends_in_a_question_has_one_blank_line_below(registry, scre
         f"{PROMPT}ask\n"
         "\n"
         "  ok    found\n"
+        "\n"
         "  go on? [y/N] > maybe\n"
         "  fail  answer y or n\n"
         "  go on? [y/N] > n\n"

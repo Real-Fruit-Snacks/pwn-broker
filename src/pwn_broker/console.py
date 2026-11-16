@@ -113,10 +113,13 @@ class FakeConsole:
         return self.ask(label, default)
 
     def confirm(self, question: str, default: bool = False) -> bool:
+        # a yes or no question stands on its own: a gap above and below
+        self.gap()
         while True:
             self.events.append(("confirm", question))
             answer = _yes_no(self._next(question), default)
             if answer is not None:
+                self.gap()
                 return answer
             self.fail(ANSWER_Y_OR_N)
 
@@ -355,9 +358,12 @@ class TermConsole:
 
     def confirm(self, question: str, default: bool = False) -> bool:
         hint = "[Y/n]" if default else "[y/N]"
+        # a yes or no question stands on its own: a gap above and below
+        self.gap()
         while True:
             answer = _yes_no(self._prompt(f"{INDENT}{question} {hint} > "), default)
             if answer is not None:
+                self.gap()
                 return answer
             self.fail(ANSWER_Y_OR_N)
 
