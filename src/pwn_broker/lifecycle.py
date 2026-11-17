@@ -315,7 +315,7 @@ def _close_replaced(
     close_window(console, paths, old, close=close)
 
 
-def _opens(folder: Path) -> None:
+def _opens(folder: Path) -> Box:
     # everything opening a box reads, read where the archive was unpacked: a box that cannot be
     # opened never takes the place of one that can
     try:
@@ -326,6 +326,23 @@ def _opens(folder: Path) -> None:
     except StoreError as exc:
         reason = str(exc).replace(str(folder) + os.sep, "")
         raise ArchiveError(f"the box in the archive cannot be opened: {reason}") from exc
+    return box
+
+
+def _same_box_elsewhere(paths: AppPaths, box_id: str, folder: str) -> str | None:
+    # the folder of another box here with this id. Tools are held by a box's id, so two boxes
+    # with one id would each take the other's off the machine.
+    if not paths.active.is_dir():
+        return None
+    for other in sorted(paths.active.iterdir()):
+        if other.name == folder or other.name.startswith(".") or not other.is_dir():
+            continue
+        try:
+            if load_box(other).id == box_id:
+                return other.name
+        except StoreError:
+            continue
+    return None
 
 
 def import_box(
@@ -350,7 +367,12 @@ def import_box(
             if not replace:
                 return None
             _close_replaced(paths, console, folder, unsaved, close)
-        box = load_box(unpack(archive, paths.active, replace=replace, check=_opens))
+        def check(unpacked: Path) -> None:
+            twin = _same_box_elsewhere(paths, _opens(unpacked).id, folder)
+            if twin is not None:
+                raise ArchiveError(f"this box is already here as {twin}, under another folder name")
+
+        box = load_box(unpack(archive, paths.active, replace=replace, check=check))
         if box.status == "finished":
             reopen_box(box)
         session = load_session(paths, settings, console, box, clock)

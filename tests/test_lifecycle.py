@@ -989,3 +989,36 @@ def test_export_and_finish_go_through_with_a_file_whose_name_is_not_utf8(session
     with tarfile.open(archive) as tar:
         names = [os.fsencode(name) for name in tar.getnames()]
     assert os.fsencode(session.box.path.name) + b"/caf\xe9 \xff.txt" in names
+
+
+def renamed_copy(archive, dest, top):
+    """The same archive under another top folder: the same box, id and all, by another name."""
+    with tarfile.open(archive) as old, tarfile.open(dest, "w:gz") as new:
+        for member in old.getmembers():
+            first, _, rest = member.name.partition("/")
+            member.name = f"{top}/{rest}" if rest else top
+            new.addfile(member, old.extractfile(member) if member.isreg() else None)
+    return dest
+
+
+def test_import_refuses_a_box_that_is_already_here_under_another_name(session, tmp_path):
+    archive = renamed_copy(export_box(session, **NOFIX), tmp_path / "copy.tar.gz", "2026-11-14_htb_twin")
+    console = FakeConsole()
+    assert import_box(session.paths, Settings(), console, archive, lambda: NOW) is None
+    assert [t for k, t in console.lines if k == "fail"] == [
+        f"import failed: this box is already here as {session.box.path.name}, under another folder name"
+    ]
+    assert sorted(p.name for p in session.paths.active.iterdir()) == [session.box.path.name]
+
+
+def test_import_over_the_same_box_is_not_taken_for_another(session):
+    archive = export_box(session, **NOFIX)
+    box = import_box(session.paths, Settings(), FakeConsole(["y"]), archive, lambda: NOW)
+    assert box is not None and box.id == session.box.id
+
+
+def test_import_goes_on_when_another_folder_here_cannot_be_read(session, tmp_path):
+    archive = renamed_copy(export_box(session, **NOFIX), tmp_path / "copy.tar.gz", "2026-11-14_htb_twin")
+    (session.box.path / "box.toml").write_text("not toml [", encoding="utf-8")
+    box = import_box(session.paths, Settings(), FakeConsole(), archive, lambda: NOW)
+    assert box is not None and box.path.name == "2026-11-14_htb_twin"
