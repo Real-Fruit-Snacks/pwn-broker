@@ -7,7 +7,7 @@ import tarfile
 import tempfile
 import tomllib
 import zlib
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict
 from datetime import datetime
 from fnmatch import fnmatchcase
@@ -117,8 +117,31 @@ class _Head:
         return data
 
 
-def _add_cut(tar: tarfile.TarFile, full: Path, arcname: str, rel: str, size: int) -> None:
+def _info(tar: tarfile.TarFile, full: Path, arcname: str, rel: str) -> tarfile.TarInfo:
     info = tar.gettarinfo(full, arcname=arcname)
+    if info is None:
+        raise ArchiveError(f"{rel} is not a file or folder that can be packed")
+    if info.islnk():
+        # a second name of a file already packed: tarfile would write a link to the first, and
+        # the manifest lists each name as a file of its own
+        info.type = tarfile.REGTYPE
+        info.linkname = ""
+        info.size = os.lstat(full).st_size
+    return info
+
+
+def _add(tar: tarfile.TarFile, full: Path, arcname: str, rel: str) -> None:
+    info = _info(tar, full, arcname, rel)
+    if info.isreg():
+        with open(full, "rb") as fh:
+            # tarfile fails on its own if the file is cut short while it is read
+            tar.addfile(info, fh)
+    else:
+        tar.addfile(info)
+
+
+def _add_cut(tar: tarfile.TarFile, full: Path, arcname: str, rel: str, size: int) -> None:
+    info = _info(tar, full, arcname, rel)
     if info.size < size:
         raise ArchiveError(f"{rel} is shorter than the {size} bytes recorded for it")
     info.size = size
@@ -144,7 +167,7 @@ def pack(box: Box, dest: Path, cut: Mapping[str, int] | None = None) -> list[str
                 if rel in cut:
                     _add_cut(tar, full, arcname, rel, cut[rel])
                 else:
-                    tar.add(full, arcname=arcname, recursive=False)
+                    _add(tar, full, arcname, rel)
         verify(part)
         os.replace(part, dest)
     except BaseException as exc:
@@ -201,7 +224,9 @@ def _manifest_rows(tar: tarfile.TarFile, member: tarfile.TarInfo | None) -> list
         raise ArchiveError(f"{MANIFEST} is too large ({member.size} bytes)")
     try:
         data = tomllib.loads(tar.extractfile(member).read().decode("utf-8"))
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+    except RecursionError as exc:
+        raise ArchiveError(f"{MANIFEST} is nested too deeply to read") from exc
+    except ValueError as exc:  # not UTF-8, not TOML, or a number too long to read
         raise ArchiveError(f"{MANIFEST} cannot be read ({exc})") from exc
     rows = data.get("file", [])
     if data.get("schema") != SCHEMA or not isinstance(rows, list):
@@ -223,6 +248,8 @@ def verify(archive: Path) -> None:
     try:
         with _open(archive) as tar:
             members = tar.getmembers()
+            for member in members:
+                _check_member(member)
             top = _top_folder(members)
             by_name = {m.name: m for m in members}
             rows = _manifest_rows(tar, by_name.get(f"{top}/{MANIFEST}"))
@@ -263,9 +290,23 @@ def _check_member(member: tarfile.TarInfo) -> None:
         raise ArchiveError(f"archive entry {name!r} would write outside the destination")
     if not (member.isreg() or member.isdir()):
         raise ArchiveError(f"archive entry {name!r} is not a regular file or folder")
+    if member.issparse():
+        # a few hundred bytes can stand for any number of gigabytes of zeros
+        raise ArchiveError(f"archive entry {name!r} is a sparse file, which a box's archive never holds")
 
 
-def unpack(archive: Path, active: Path, *, replace: bool = False) -> Path:
+def unpack(
+    archive: Path,
+    active: Path,
+    *,
+    replace: bool = False,
+    check: Callable[[Path], object] | None = None,
+) -> Path:
+    """Unpacks the archive's one folder into active and returns it.
+
+    `check` is given the folder where it was unpacked, before anything in active is moved: what
+    it raises stops the unpack with the folder that was there, if any, untouched.
+    """
     if not hasattr(tarfile, "data_filter"):
         raise ArchiveError("this Python cannot unpack archives safely; install a newer Python 3.11 patch release")
     tmp: Path | None = None
@@ -281,6 +322,8 @@ def unpack(archive: Path, active: Path, *, replace: bool = False) -> Path:
             active.mkdir(parents=True, exist_ok=True)
             tmp = Path(tempfile.mkdtemp(prefix=".import-", dir=active))
             tar.extractall(tmp, filter=tarfile.data_filter)
+        if check is not None:
+            check(tmp / top)
         _move_into_place(tmp / top, final, replace)
         return final
     except ArchiveError:

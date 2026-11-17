@@ -1,3 +1,5 @@
+import io
+import os
 import shutil
 import sys
 import tarfile
@@ -5,6 +7,7 @@ import tomllib
 from dataclasses import replace
 
 import pytest
+import tomli_w
 
 from helpers import NOW
 from pwn_broker import lifecycle
@@ -821,3 +824,155 @@ def test_finish_says_so_when_the_signal_could_not_be_sent(session):
     finish_box(session, **SAVED, close=lambda paths, box: True)
     assert kinds(session, "warn") == ["the note window did not close; the folder was kept"]
     assert session.box.path.exists()
+
+
+# --- what was written after the archive ---
+
+
+def at_the_remove_question(session, act):
+    ask = session.console.confirm
+
+    def confirm(question, default=False):
+        if question == "remove working folder?":
+            act()
+        return ask(question, default)
+
+    session.console.confirm = confirm
+
+
+def test_finish_keeps_the_folder_when_a_file_was_made_after_the_archive(session):
+    stand_in, signalled = window()
+    answers(session, "y", "y")
+    new = session.box.path / "targets" / "scan-output.txt"
+    at_the_remove_question(session, lambda: new.write_text("found late"))
+    path = finish_box(session, **SAVED, **stand_in)
+    assert path is not None and new.read_text() == "found late" and signalled == []
+    assert kinds(session, "warn") == [
+        "targets/scan-output.txt changed after the archive was made; the folder was kept"
+    ]
+    with tarfile.open(path) as tar:
+        assert not any(name.endswith("scan-output.txt") for name in tar.getnames())
+
+
+def test_finish_keeps_the_folder_when_files_grew_after_the_archive(session):
+    stand_in, signalled = window()
+    first = session.box.path / "a.txt"
+    second = session.box.path / "b.txt"
+    first.write_text("one")
+    second.write_text("two")
+    answers(session, "y", "y")
+
+    def grow():
+        first.write_text("one and more")
+        second.write_text("two and more")
+
+    at_the_remove_question(session, grow)
+    assert finish_box(session, **SAVED, **stand_in) is not None
+    assert session.box.path.exists() and signalled == []
+    assert kinds(session, "warn") == ["a.txt and 1 more changed after the archive was made; the folder was kept"]
+
+
+def test_finish_removes_the_folder_though_the_undo_steps_wrote_box_toml(session, monkeypatch):
+    def undo(s):
+        s.box.extra["undone"] = True
+        save_box(s.box)
+
+    monkeypatch.setattr(lifecycle, "UNDO_HOOKS", [undo])
+    (session.box.path / "loot.txt").write_text("kept in the archive")
+    answers(session, "y", "y")
+    assert finish_box(session, **SAVED, close=lambda paths, box: False) is not None
+    assert not session.box.path.exists() and kinds(session, "warn") == []
+
+
+def test_finish_removes_the_folder_when_a_file_only_went_away(session):
+    gone = session.box.path / "scratch.txt"
+    gone.write_text("x")
+    answers(session, "y", "y")
+    at_the_remove_question(session, gone.unlink)
+    assert finish_box(session, **SAVED, close=lambda paths, box: False) is not None
+    assert not session.box.path.exists()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs named pipes")
+def test_a_special_file_made_before_the_archive_does_not_keep_the_folder(session):
+    os.mkfifo(session.box.path / "pipe")
+    answers(session, "y", "y")
+    assert finish_box(session, **SAVED, close=lambda paths, box: False) is not None
+    assert not session.box.path.exists()
+
+
+def test_finish_keeps_the_folder_when_the_box_cannot_be_read_again(session, monkeypatch):
+    answers(session, "y", "y")
+    real = lifecycle.scan
+
+    def scan(box, records, **options):
+        if options.get("limit") == -1:
+            raise PermissionError("no")
+        return real(box, records, **options)
+
+    monkeypatch.setattr(lifecycle, "scan", scan)
+    assert finish_box(session, **SAVED, close=lambda paths, box: False) is not None
+    assert session.box.path.exists()
+    assert kinds(session, "warn") == [
+        "the box could not be read again after the archive was made; the folder was kept"
+    ]
+
+
+# --- import: the box that is there stays until the new one opens ---
+
+
+def boxless_archive(dest, top, files):
+    def add(tar, name, data):
+        info = tarfile.TarInfo(name)
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+
+    with tarfile.open(dest, "w:gz") as tar:
+        folder = tarfile.TarInfo(top)
+        folder.type = tarfile.DIRTYPE
+        folder.mode = 0o755
+        tar.addfile(folder)
+        add(tar, f"{top}/manifest.toml", tomli_w.dumps({"schema": 1, "kind": "exported", "file": []}).encode())
+        for name, data in files.items():
+            add(tar, f"{top}/{name}", data)
+    return dest
+
+
+def test_import_keeps_the_box_it_would_replace_when_the_archive_holds_no_box(session, tmp_path):
+    work = session.box.path / "work.txt"
+    work.write_text("mine")
+    archive = boxless_archive(tmp_path / "x.tar.gz", session.box.path.name, {"readme": b"hello"})
+    console = FakeConsole(["y"])
+    assert import_box(session.paths, Settings(), console, archive, lambda: NOW) is None
+    assert work.read_text() == "mine" and load_box(session.box.path).id == session.box.id
+    assert [t for k, t in console.lines if k == "fail"] == [
+        "import failed: the box in the archive cannot be opened: cannot read box.toml: "
+        + [t for k, t in console.lines if k == "fail"][0].split("cannot read box.toml: ", 1)[1]
+    ]
+    assert sorted(p.name for p in session.paths.active.iterdir()) == [session.box.path.name]
+
+
+def test_import_keeps_the_box_it_would_replace_when_a_target_cannot_be_read(session, tmp_path):
+    work = session.box.path / "work.txt"
+    work.write_text("mine")
+    box_toml = (session.box.path / "box.toml").read_bytes()
+    archive = boxless_archive(
+        tmp_path / "x.tar.gz",
+        session.box.path.name,
+        {"box.toml": box_toml, "targets/dc01/target.toml": b'schema = 1\nnot_a_field = "x"\n'},
+    )
+    console = FakeConsole(["y"])
+    assert import_box(session.paths, Settings(), console, archive, lambda: NOW) is None
+    assert work.read_text() == "mine"
+    [line] = [t for k, t in console.lines if k == "fail"]
+    assert line.startswith("import failed: the box in the archive cannot be opened: ")
+    assert "target.toml" in line and str(session.paths.active) not in line
+    assert sorted(p.name for p in session.paths.active.iterdir()) == [session.box.path.name]
+
+
+def test_import_of_a_new_box_that_cannot_be_opened_leaves_nothing(paths, tmp_path):
+    archive = boxless_archive(tmp_path / "x.tar.gz", "2026-11-14_htb_other", {"readme": b"hello"})
+    console = FakeConsole()
+    assert import_box(paths, Settings(), console, archive, lambda: NOW) is None
+    assert [k for k, _ in console.lines] == ["fail"]
+    assert not paths.active.exists() or list(paths.active.iterdir()) == []

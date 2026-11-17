@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import io
 import os
@@ -863,3 +864,115 @@ def test_pack_refuses_a_cut_longer_than_the_file(box, tmp_path):
     with pytest.raises(ArchiveError, match="recordings"):
         pack(box, dest, cut={CAST: len(WHOLE)})
     assert not dest.exists() and not part_of(dest).exists()
+
+
+# --- what a box can hold, and what an archive may not ---
+
+
+def test_two_names_of_one_file_are_each_packed_as_a_file(filled, tmp_path):
+    first = filled.path / "targets/dc01/loot/SAM.bak"
+    try:
+        os.link(first, filled.path / "targets/dc01/loot/SAM.copy")
+    except OSError:
+        pytest.skip("no hard links here")
+    records = scan(filled, [], now=NOW)
+    save_files(filled, records)
+    write_manifest(filled, records, kind="exported", now=NOW)
+    dest = tmp_path / "out.tar.gz"
+    pack(filled, dest)
+    verify(dest)
+    top = filled.path.name
+    with tarfile.open(dest) as tar:
+        for name in ("SAM.bak", "SAM.copy"):
+            member = tar.getmember(f"{top}/targets/dc01/loot/{name}")
+            assert member.isreg() and tar.extractfile(member).read() == b"\x00\x01binary"
+    folder = unpack(dest, tmp_path / "elsewhere")
+    assert (folder / "targets/dc01/loot/SAM.copy").read_bytes() == b"\x00\x01binary"
+
+
+def sparse_header(name: str, real_size: int) -> bytes:
+    # an old GNU sparse entry: no data stored, and a header that says how long the file really is
+    info = tarfile.TarInfo(name)
+    info.type = tarfile.GNUTYPE_SPARSE
+    block = bytearray(info.tobuf(tarfile.GNU_FORMAT))
+    block[386:410] = tarfile.itn(0, 12, tarfile.GNU_FORMAT) + tarfile.itn(0, 12, tarfile.GNU_FORMAT)
+    block[483:495] = tarfile.itn(real_size, 12, tarfile.GNU_FORMAT)
+    block[148:156] = b"        "
+    block[148:156] = b"%06o\0 " % tarfile.calc_chksums(bytes(block))[0]
+    return bytes(block)
+
+
+def sparse_archive(dest, real_size=64 * 1024**2):
+    data = b"x"
+    plain = io.BytesIO()
+    with tarfile.open(fileobj=plain, mode="w") as tar:
+        add_dir(tar, "b")
+        add_bytes(tar, "b/manifest.toml", manifest_bytes([record("big", data, size=real_size)]))
+    # the two blocks of zeros that end the tar are replaced by the sparse entry and a new end
+    body = plain.getvalue().rstrip(b"\0")
+    body += b"\0" * (-len(body) % 512)
+    dest.write_bytes(gzip.compress(body + sparse_header("b/big", real_size) + b"\0" * 1024))
+    return dest
+
+
+def test_the_stand_in_sparse_archive_is_one_tarfile_reads_as_sparse(tmp_path):
+    with tarfile.open(sparse_archive(tmp_path / "s.tar.gz")) as tar:
+        member = tar.getmember("b/big")
+        assert member.issparse() and member.size == 64 * 1024**2
+
+
+def test_verify_refuses_a_sparse_entry_before_reading_it(tmp_path, monkeypatch):
+    dest = sparse_archive(tmp_path / "s.tar.gz")
+    monkeypatch.setattr(tarfile.TarFile, "extractfile", raising(AssertionError("read")))
+    with pytest.raises(ArchiveError, match="sparse"):
+        verify(dest)
+
+
+def test_unpack_refuses_a_sparse_entry(tmp_path):
+    dest = sparse_archive(tmp_path / "s.tar.gz")
+    with pytest.raises(ArchiveError, match="sparse"):
+        unpack(dest, tmp_path / "active")
+    assert not (tmp_path / "active").exists() or list((tmp_path / "active").iterdir()) == []
+
+
+@pytest.mark.parametrize("nested", ["file = " + "[" * 100_000, "x = " + "{a=" * 100_000])
+def test_a_manifest_nested_too_deeply_is_refused_with_a_message(tmp_path, nested):
+    dest = raw_archive(
+        tmp_path / "deep.tar.gz",
+        lambda tar: (add_dir(tar, "b"), add_bytes(tar, "b/manifest.toml", f"schema = 1\n{nested}".encode())),
+    )
+    with pytest.raises(ArchiveError, match="manifest.toml"):
+        verify(dest)
+
+
+def test_verify_refuses_an_entry_that_is_not_a_file_or_folder(tmp_path):
+    def build(tar):
+        add_dir(tar, "b")
+        add_bytes(tar, "b/manifest.toml", manifest_bytes([]))
+        link = tarfile.TarInfo("b/link")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "/etc/passwd"
+        tar.addfile(link)
+
+    with pytest.raises(ArchiveError, match="not a regular file or folder"):
+        verify(raw_archive(tmp_path / "l.tar.gz", build))
+
+
+def test_unpack_checks_the_folder_before_it_replaces_anything(filled, tmp_path):
+    dest = tmp_path / "out.tar.gz"
+    pack(filled, dest)
+    active = tmp_path / "active"
+    old = active / filled.path.name
+    old.mkdir(parents=True)
+    (old / "work.txt").write_text("mine")
+    seen = []
+
+    def check(folder):
+        seen.append((folder.parent.parent == active, (folder / "notes.md").read_text(), (old / "work.txt").exists()))
+        raise ArchiveError("not a box")
+
+    with pytest.raises(ArchiveError, match="not a box"):
+        unpack(dest, active, replace=True, check=check)
+    assert seen == [(True, "hello", True)]
+    assert (old / "work.txt").read_text() == "mine"
+    assert sorted(p.name for p in active.iterdir()) == [filled.path.name]

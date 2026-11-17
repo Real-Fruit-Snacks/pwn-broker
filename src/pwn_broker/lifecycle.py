@@ -17,14 +17,21 @@ from pwn_broker.archive import (
 )
 from pwn_broker.config import Settings
 from pwn_broker.console import Cancelled, Console
-from pwn_broker.filescan import sha256_file
-from pwn_broker.model import Box
+from pwn_broker.filescan import scan, sha256_file
+from pwn_broker.model import Box, FileRecord
 from pwn_broker.note import NOTE_NAME
 from pwn_broker.notewindow import note_unsaved, shut_note
 from pwn_broker.paths import AppPaths
 from pwn_broker.privilege import fix_ownership
 from pwn_broker.session import Session, load_session, process_checks, refresh, rescan
-from pwn_broker.store import StoreError, load_box, load_files, save_box
+from pwn_broker.store import (
+    StoreError,
+    load_box,
+    load_creds,
+    load_files,
+    load_targets,
+    save_box,
+)
 from pwn_broker.toolpkg import ToolError
 
 BLOCK_HOOKS: list[Callable[[Session], str | None]] = []
@@ -106,9 +113,9 @@ def export_box(
     return dest
 
 
-def _recorded_note(box: Box) -> str | None:
+def _recorded_note(records: list[FileRecord]) -> str | None:
     # the checksum the archive step recorded for the note; None when it had no note
-    for record in load_files(box):
+    for record in records:
         if record.path == NOTE_NAME:
             return record.sha256
     return None
@@ -121,6 +128,37 @@ def _note_is_archived(box: Box, recorded: str | None) -> bool:
         return recorded is None
     except OSError:
         return False
+
+
+# the box's own record, which the steps after the archive write again
+_REWRITTEN = frozenset({"box.toml"})
+
+
+def _changed_since(session: Session, archived: list[FileRecord]) -> list[str] | None:
+    """The files made or changed in the box since the archive was packed, by size and time.
+
+    None when the box could not be read again. Nothing is hashed: a scan in another terminal can
+    still be writing, and the folder is about to be deleted.
+    """
+    packed = {r.path: (r.size, r.mtime) for r in archived}
+    unread: list[str] = []
+
+    def on_skip(rel: str, reason: str) -> None:
+        # a link or special file is never archived, and one that disappeared has nothing to lose
+        if reason == "cannot read":
+            unread.append(rel)
+
+    try:
+        # a limit below any size: no file is read, only its size and time are taken
+        found = scan(session.box, [], now=session.clock(), limit=-1, on_skip=on_skip)
+    except OSError:
+        return None
+    changed = {
+        r.path for r in found if r.path not in _REWRITTEN and packed.get(r.path) != (r.size, r.mtime)
+    }
+    # a file or folder that cannot be looked at now may be new too
+    changed.update(rel for rel in unread if rel not in packed)
+    return sorted(changed)
 
 
 def _remove_folder(session: Session) -> None:
@@ -202,7 +240,8 @@ def finish_box(
         box.finished = session.clock()
         save_box(box)
         packed, left_out = _pack(session, "finished")
-        archived_note = _recorded_note(box)
+        archived = load_files(box)
+        archived_note = _recorded_note(archived)
         copy = _copy(session, packed)
     except _FAILURES as exc:
         _rollback(box)
@@ -245,6 +284,12 @@ def finish_box(
         console.warn("the note has unsaved changes; the folder was kept")
     elif remove and not _note_is_archived(box, archived_note):
         console.warn("the note changed after the archive was made; the folder was kept")
+    elif remove and (changed := _changed_since(session, archived)) != []:
+        if changed is None:
+            console.warn("the box could not be read again after the archive was made; the folder was kept")
+        else:
+            more = f" and {len(changed) - 1} more" if len(changed) > 1 else ""
+            console.warn(f"{changed[0]}{more} changed after the archive was made; the folder was kept")
     elif remove and close(session.paths, box):
         # the vim, or the terminal made for it, is still there: the window would show a folder that is gone
         console.warn("the note window did not close; the folder was kept")
@@ -270,6 +315,19 @@ def _close_replaced(
     close_window(console, paths, old, close=close)
 
 
+def _opens(folder: Path) -> None:
+    # everything opening a box reads, read where the archive was unpacked: a box that cannot be
+    # opened never takes the place of one that can
+    try:
+        box = load_box(folder)
+        load_targets(box)
+        load_creds(box)
+        load_files(box)
+    except StoreError as exc:
+        reason = str(exc).replace(str(folder) + os.sep, "")
+        raise ArchiveError(f"the box in the archive cannot be opened: {reason}") from exc
+
+
 def import_box(
     paths: AppPaths,
     settings: Settings,
@@ -292,7 +350,7 @@ def import_box(
             if not replace:
                 return None
             _close_replaced(paths, console, folder, unsaved, close)
-        box = load_box(unpack(archive, paths.active, replace=replace))
+        box = load_box(unpack(archive, paths.active, replace=replace, check=_opens))
         if box.status == "finished":
             reopen_box(box)
         session = load_session(paths, settings, console, box, clock)

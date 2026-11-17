@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
+from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX, is_temp_name
 from pwn_broker.model import Box
 from pwn_broker.store import write_text
 from pwn_broker.toolpkg import ToolError, valid_tool_name
@@ -146,7 +146,9 @@ def _copy_tree(source: Path, dest: Path) -> bool:
                 complete = False
                 continue
             if is_file:
-                if not _copy_file(entry.path, target):
+                # a name the archive leaves out as one of the app's own temporary files: left
+                # where it is, or it would be deleted from the home folder with no copy kept
+                if is_temp_name(entry.name) or not _copy_file(entry.path, target):
                     complete = False
             elif is_dir:
                 if depth + 1 > _MAX_DEPTH:

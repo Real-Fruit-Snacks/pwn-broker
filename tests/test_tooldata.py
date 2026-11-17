@@ -703,3 +703,15 @@ def test_rmtree_removes_a_link_inside_a_folder_not_its_target(tmp_path, home):
     tooldata.delete([d], [home])
     assert not d.exists()
     assert outside.read_text() == "keep"
+
+
+def test_a_file_named_like_the_apps_temporary_files_is_not_copied_and_means_not_full(tmp_path, home):
+    # the archive leaves such a name out, so a copy in the box would not outlive the folder
+    box = make_box(tmp_path)
+    write(home / "d" / "real.txt", "r")
+    write(home / "d" / "deep" / ".pwn-broker-keep.tmp", "only copy")
+    got = tooldata.collect(box, make_item(home={"d": False}), [home], NOW)
+    assert [(c.dest, c.full) for c in got] == [("tooldata/burp/home/d", False)]
+    assert (box.path / "tooldata/burp/home/d/real.txt").read_text() == "r"
+    assert not (box.path / "tooldata/burp/home/d/deep/.pwn-broker-keep.tmp").exists()
+    assert (home / "d" / "deep" / ".pwn-broker-keep.tmp").read_text() == "only copy"
