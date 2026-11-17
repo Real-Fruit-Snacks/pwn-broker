@@ -569,14 +569,14 @@ def test_a_time_from_before_1970_is_refused_and_one_from_a_clock_never_set_is_re
 
 
 def test_a_file_too_large_to_be_one_of_a_boxes_is_not_read(box, monkeypatch):
-    monkeypatch.setattr(store, "MAX_TOML_BYTES", (box.path / "box.toml").stat().st_size - 1)
+    monkeypatch.setattr(store, "MAX_SMALL_TOML_BYTES", (box.path / "box.toml").stat().st_size - 1)
     monkeypatch.setattr(store.tomllib, "loads", lambda text: pytest.fail("read"))
     with pytest.raises(StoreError, match="it is larger than"):
         load_box(box.path)
 
 
 def test_a_file_at_the_size_limit_is_read(box, monkeypatch):
-    monkeypatch.setattr(store, "MAX_TOML_BYTES", (box.path / "box.toml").stat().st_size)
+    monkeypatch.setattr(store, "MAX_SMALL_TOML_BYTES", (box.path / "box.toml").stat().st_size)
     assert load_box(box.path).id == box.id
 
 
@@ -590,6 +590,25 @@ def test_a_time_with_no_offset_that_cannot_be_taken_as_local_time_is_a_store_err
     with pytest.raises(TypeError, match="too early to take as local time"):
         store._aware(early)
     real = store.read_toml
-    monkeypatch.setattr(store, "read_toml", lambda path: {**real(path), "started": early})
+    monkeypatch.setattr(store, "read_toml", lambda path, *limit: {**real(path, *limit), "started": early})
     with pytest.raises(StoreError, match="invalid content"):
         load_box(box.path)
+
+
+def test_each_of_a_boxes_files_has_its_own_size_limit(box, dc01, monkeypatch):
+    save_creds(box, [make_cred()])
+    save_files(box, [FileRecord("a.txt", "", NOW, 1, 1.5, "ab")])
+    assert store.MAX_SMALL_TOML_BYTES == 1024 * 1024 and store.MAX_TOML_BYTES == 64 * 1024 * 1024
+    # a target's file is held to the small limit, as box.toml is
+    monkeypatch.setattr(store, "MAX_SMALL_TOML_BYTES", 10)
+    with pytest.raises(StoreError, match="target.toml: it is larger than"):
+        load_targets(box)
+    with pytest.raises(StoreError, match="box.toml: it is larger than"):
+        load_box(box.path)
+    # the creds and the file records are not: they grow with the box
+    assert len(load_creds(box)) == 1 and len(load_files(box)) == 1
+    monkeypatch.setattr(store, "MAX_TOML_BYTES", 10)
+    with pytest.raises(StoreError, match="creds.toml: it is larger than"):
+        load_creds(box)
+    with pytest.raises(StoreError, match="files.toml: it is larger than"):
+        load_files(box)

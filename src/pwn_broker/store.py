@@ -55,14 +55,18 @@ def write_toml(path: Path, data: dict) -> None:
 
 # The most of one of a box's files that is read, and so the largest manifest an archive may
 # hold: about 250,000 files' worth of records. A megabyte of gzip unpacks to a gigabyte of
-# box.toml, and each megabyte read costs about ten of memory.
+# box.toml, and each megabyte read can cost twenty-five of memory.
 MAX_TOML_BYTES = 64 * 1024 * 1024
+# box.toml and a target's file hold a few kilobytes, and box.toml is read for every box at
+# every launch
+MAX_SMALL_TOML_BYTES = 1024 * 1024
 
 
-def read_toml(path: Path) -> dict:
+def read_toml(path: Path, limit: int | None = None) -> dict:
+    limit = MAX_TOML_BYTES if limit is None else limit
     try:
-        if path.stat().st_size > MAX_TOML_BYTES:
-            raise StoreError(f"cannot read {path}: it is larger than {MAX_TOML_BYTES // 1048576} MiB")
+        if path.stat().st_size > limit:
+            raise StoreError(f"cannot read {path}: it is larger than {limit // 1048576} MiB")
         return tomllib.loads(path.read_text(encoding="utf-8"))
     except RecursionError as exc:
         raise StoreError(f"cannot read {path}: it is nested too deeply") from exc
@@ -70,8 +74,8 @@ def read_toml(path: Path) -> dict:
         raise StoreError(f"cannot read {path}: {exc}") from exc
 
 
-def _read_checked(path: Path) -> dict:
-    data = read_toml(path)
+def _read_checked(path: Path, limit: int | None = None) -> dict:
+    data = read_toml(path, limit)
     if data.get("schema") != SCHEMA:
         raise StoreError(f"{path}: unsupported schema {data.get('schema')!r}")
     return data
@@ -226,7 +230,7 @@ def _hosts(value) -> list[str]:
 
 def load_box(folder: Path) -> Box:
     path = folder / "box.toml"
-    data = _read_checked(path)
+    data = _read_checked(path, MAX_SMALL_TOML_BYTES)
 
     def make() -> Box:
         known = {
@@ -256,7 +260,7 @@ def save_target(box: Box, target: Target) -> None:
 def load_targets(box: Box) -> list[Target]:
     targets = []
     for file in sorted((box.path / "targets").glob("*/target.toml")):
-        data = _read_checked(file)
+        data = _read_checked(file, MAX_SMALL_TOML_BYTES)
         data.pop("schema")
         targets.append(_build(file, lambda data=data: _row(Target, data, _TARGET, "target")))
     return sorted(targets, key=lambda t: t.added)

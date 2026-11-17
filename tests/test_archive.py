@@ -1406,3 +1406,85 @@ def test_an_archive_whose_folder_starts_with_a_dot_is_refused(tmp_path, top):
         with pytest.raises(ArchiveError, match="starts with a dot"):
             check(dest)
     assert not (tmp_path / "active").exists() or list((tmp_path / "active").iterdir()) == []
+
+
+# --- numbers an extended header can make long ---
+
+
+def with_owner(uid=0, gid=0):
+    def build(tar):
+        info = tarfile.TarInfo("b/x")
+        info.uid, info.gid = uid, gid
+        tar.addfile(info)
+
+    return build
+
+
+@pytest.mark.parametrize("build", [with_owner(uid=2**32), with_owner(gid=2**40), with_owner(uid=10**300)])
+def test_an_owner_number_no_user_or_group_has_is_refused(tmp_path, build):
+    dest = formatted_archive(tmp_path / "o.tar.gz", build, format=tarfile.PAX_FORMAT)
+    for check in (verify, peek_folder, lambda path: unpack(path, tmp_path / "active")):
+        with pytest.raises(ArchiveError, match="has an owner number no user or group has"):
+            check(dest)
+
+
+def test_the_largest_owner_number_a_directory_service_gives_is_read(tmp_path):
+    # larger than a tar header's own field holds, so it travels in an extended header
+    dest = formatted_archive(
+        tmp_path / "o.tar.gz", with_owner(uid=2**32 - 1, gid=2**31), format=tarfile.PAX_FORMAT
+    )
+    verify(dest)
+    assert (unpack(dest, tmp_path / "active") / "x").exists()
+
+
+def test_a_folder_entry_that_gives_a_size_is_refused(tmp_path):
+    # tarfile keeps the number and never uses it: a folder's data is not skipped over
+    def build(tar):
+        info = tarfile.TarInfo("b/sub")
+        info.type = tarfile.DIRTYPE
+        info.pax_headers = {"size": "9" * 300}
+        tar.addfile(info)
+
+    dest = formatted_archive(tmp_path / "d.tar.gz", build, format=tarfile.PAX_FORMAT)
+    with tarfile.open(dest) as tar:
+        assert tar.getmember("b/sub").isdir() and tar.getmember("b/sub").size == int("9" * 300)
+    with pytest.raises(ArchiveError, match="has a size no file or folder has"):
+        verify(dest)
+
+
+def test_numbers_thousands_of_digits_long_are_refused_at_the_first_entry(tmp_path, monkeypatch):
+    def build(tar):
+        for n in range(50):
+            info = tarfile.TarInfo(f"b/d{n}")
+            info.type = tarfile.DIRTYPE
+            info.pax_headers = {"uid": "9" * 4299, "gid": "9" * 4299, "size": "9" * 4299}
+            tar.addfile(info)
+
+    dest = formatted_archive(tmp_path / "n.tar.gz", build, format=tarfile.PAX_FORMAT)
+    seen = []
+    real = archive._check_member
+    monkeypatch.setattr(archive, "_check_member", lambda member: seen.append(member.name) or real(member))
+    with pytest.raises(ArchiveError):
+        verify(dest)
+    assert seen == ["b", "b/manifest.toml", "b/d0"]
+
+
+def test_what_the_check_given_to_unpack_raises_is_not_called_an_archive_error(filled, tmp_path):
+    dest = tmp_path / "out.tar.gz"
+    pack(filled, dest)
+
+    def check(folder):
+        raise KeyError("a mistake in the caller's own code")
+
+    with pytest.raises(KeyError, match="a mistake in the caller's own code"):
+        unpack(dest, tmp_path / "active", check=check)
+    assert list((tmp_path / "active").iterdir()) == []
+
+
+def test_a_move_into_place_that_fails_is_an_archive_error(filled, tmp_path, monkeypatch):
+    dest = tmp_path / "out.tar.gz"
+    pack(filled, dest)
+    monkeypatch.setattr(archive, "_move_into_place", raising(PermissionError("no")))
+    with pytest.raises(ArchiveError, match="cannot unpack .*: no"):
+        unpack(dest, tmp_path / "active")
+    assert list((tmp_path / "active").iterdir()) == []

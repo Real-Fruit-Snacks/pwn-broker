@@ -36,6 +36,7 @@ _MAX_NAMES_BYTES = 64 * 1024 * 1024
 # cost _HEADER_ROOM and twice its name. Thousands of short records in a header are slow to
 # read, so the room is what an honest entry needs and little more.
 _ENTRY_HEADER_BYTES = 16 * 1024
+_MAX_OWNER = 2**32 - 1
 _HEADER_ROOM = 2048
 
 
@@ -438,6 +439,12 @@ def _check_member(member: tarfile.TarInfo) -> None:
     if member.linkname:
         # kept on every entry, and an extended header can make it as long as a header may be
         raise ArchiveError(f"archive entry {name[:60]!r} names a link target, which a file or folder has none of")
+    # An extended header can give these as numbers thousands of digits long, and tarfile keeps
+    # each one on the entry. A folder holds no data; an owner is a 32-bit number.
+    if member.size < 0 or (member.isdir() and member.size):
+        raise ArchiveError(f"archive entry {name[:60]!r} has a size no file or folder has")
+    if not (0 <= member.uid <= _MAX_OWNER and 0 <= member.gid <= _MAX_OWNER):
+        raise ArchiveError(f"archive entry {name[:60]!r} has an owner number no user or group has")
     if member.issparse():
         # a few hundred bytes can stand for any number of gigabytes of zeros
         raise ArchiveError(f"archive entry {name!r} is a sparse file, which a box's archive never holds")
@@ -469,26 +476,31 @@ def unpack(
         raise ArchiveError("this Python cannot unpack archives safely; install a newer Python 3.11 patch release")
     tmp: Path | None = None
     try:
-        with _open(archive) as tar:
-            members = _members(tar)
-            top = _top_folder(members)
-            final = active / top
-            if os.path.lexists(final) and not replace:
-                raise ArchiveError(f"{final} already exists")
-            active.mkdir(parents=True, exist_ok=True)
-            _check_room(members, active)
-            tmp = Path(tempfile.mkdtemp(prefix=".import-", dir=active))
-            tar.extractall(tmp, filter=tarfile.data_filter)
+        try:
+            with _open(archive) as tar:
+                members = _members(tar)
+                top = _top_folder(members)
+                final = active / top
+                if os.path.lexists(final) and not replace:
+                    raise ArchiveError(f"{final} already exists")
+                active.mkdir(parents=True, exist_ok=True)
+                _check_room(members, active)
+                tmp = Path(tempfile.mkdtemp(prefix=".import-", dir=active))
+                tar.extractall(tmp, filter=tarfile.data_filter)
+        except ArchiveError:
+            raise
+        except Exception as exc:
+            # whatever tarfile raises on an archive it cannot make sense of: it has more kinds
+            # of error than it documents (a ValueError for a size too large to seek to, for one)
+            raise ArchiveError(f"cannot unpack {archive}: {_said(exc)}") from exc
+        # what the caller's check raises is the caller's: it is not an error in the archive
         if check is not None:
             check(tmp / top)
-        _move_into_place(tmp / top, final, replace)
+        try:
+            _move_into_place(tmp / top, final, replace)
+        except OSError as exc:
+            raise ArchiveError(f"cannot unpack {archive}: {_said(exc)}") from exc
         return final
-    except ArchiveError:
-        raise
-    except Exception as exc:
-        # whatever tarfile raises on an archive it cannot make sense of: it has more kinds of
-        # error than it documents (a ValueError for a size too large to seek to, for one)
-        raise ArchiveError(f"cannot unpack {archive}: {_said(exc)}") from exc
     finally:
         if tmp is not None:
             shutil.rmtree(tmp, ignore_errors=True)
