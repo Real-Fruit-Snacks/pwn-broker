@@ -80,7 +80,7 @@ Left out: the version line and the launch checks above `New box`, the `New crede
 - **/etc/hosts.** One line per target, marked with the box ID, kept in step with the target and removed at `finish`. Other lines are never changed. [Guide](docs/guide.md#the-hosts-file)
 - **Recording.** `record [target]` in any terminal records that window with a pinned asciinema 3.2.1 and writes a timed text copy beside it, for grep. `replay` plays one back. [Guide](docs/guide.md#recording)
 - **VPN.** `vpn start`, `stop`, `status` and `log` for OpenVPN. The `.ovpn` file is copied into the box and never archived. [Guide](docs/guide.md#vpn)
-- **Tools.** `tool install` from [`pwn-shop`](https://github.com/Real-Fruit-Snacks/pwn-shop): kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng, peass-ng, chisel, godpotato and runascs. The Python ones bring their own Python, so Kali's is never used or shadowed. `finish` takes them off again. [Guide](docs/guide.md#tools)
+- **Tools.** `tool install` from [`pwn-shop`](https://github.com/Real-Fruit-Snacks/pwn-shop): kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng, peass-ng, chisel, godpotato, runascs, rusthound-ce, git-dumper, snaffler, lazagne and cdk. The Python ones bring their own Python, so Kali's is never used or shadowed. `finish` takes them off again. [Guide](docs/guide.md#tools)
 - **Finish, export, import.** `finish` archives the box to `~/pwn-broker/wrapped/` and closes it, `export` writes a snapshot and keeps working, and `pwn-broker import` unpacks either. [Guide](docs/guide.md#finish-export-and-import)
 
 `help` at the prompt lists every command; the [guide](docs/guide.md#every-command) has them all in one table.
