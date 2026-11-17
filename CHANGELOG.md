@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.2
 
 `finish` prints a line for each tool it takes off, as it does for a runtime: `ok    kerbrute 1.0.3 removed`, or `ok    kerbrute 1.0.3 kept; forest still uses it` when another unfinished box has the tool. It used to say nothing about the tools after the summary.
 
