@@ -119,6 +119,8 @@ The full list. The README carries the ones you are most likely to meet.
 - A password typed on a command line in a recorded window is recorded, and goes into the archive. One typed at a hidden prompt is not.
 - The `[rec]` prefix is for zsh and bash only. Any other shell records without it.
 - `finish` refuses while a window is recording for the box. Exit those windows first.
+- Checking an archive reads its whole manifest into memory. The largest one accepted is 64 MiB, which is what a box of about 250,000 files makes: that took 8 seconds and 370 MiB to read on the test machine. One of the same size written to be slow took 23 seconds and 1.5 GiB. Import an archive from someone else with that in mind.
+- `finish` looks at every file's size and time once more before it removes the folder. A file written in the moment between that look and the removal is still lost; stop what writes into the box first.
 - Only `tun` interfaces count as a VPN, and there is no setting for it.
 - Only OpenVPN files can be started, and the app keeps track of one VPN at a time: `vpn stop` before starting another file.
 - An archive holds no copy of the VPN file, only its name and SHA-256. Keep the `.ovpn` file yourself.

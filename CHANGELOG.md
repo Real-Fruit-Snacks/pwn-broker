@@ -4,6 +4,26 @@
 
 `finish` prints a line for each tool it takes off, as it does for a runtime: `ok    kerbrute 1.0.3 removed`, or `ok    kerbrute 1.0.3 kept; forest still uses it` when another unfinished box has the tool. It used to say nothing about the tools after the summary.
 
+Fixed, in `finish`, `export` and `import`:
+
+- `finish` deleted files that were made or changed after the archive was written: a scan still running in another terminal, say. Only the note was looked at again. Now every file's size and time is, and the folder is kept, with a line naming a file that changed.
+- `import` over a box that was already there deleted the old box before it knew the new one could be opened. An archive with a `box.toml` that could not be read left a broken folder in its place. The new box is now loaded where it was unpacked, and the old one is not touched until that works.
+- A tool's data in the home folder could be deleted with no copy kept, when a file in it was named like one of the app's own temporary files (`.pwn-broker-*.tmp`): it counted as copied, and the archive leaves that name out. Such a file is now left where it is, and the folder with it.
+- A file name that is not UTF-8, which loot from a Windows share often has, stopped every command with `unexpected error`. The file is now left out of the box's list with a `warn` line and is still archived under the name it has.
+- A box that held two names for one file (a hard link) could not be exported or finished: the second name was written as a link and the check then missed it. Each name is now packed as a file.
+- A `box.toml`, target, credential or file record with a value of the wrong kind (`started = "yesterday"`) was loaded and broke the list of boxes at every launch. It is now refused where it is read, so the box is listed as one that cannot be read.
+- Importing a box that is already here under another folder name is refused. Tools are held by a box's id, so finishing either one took the other's tools off the machine.
+
+What `import` accepts, made stricter. An archive the app wrote is not affected, up to 300,000 files and folders.
+
+- An archive entry that is a sparse file is refused: 300 bytes could stand for 16 GiB.
+- An extended header or long name of more than 64 KiB is refused before it is read. One of 800 MB, in an archive of 815 KB, cost 3.2 GiB of memory.
+- More than 300,000 entries, a name longer than 4,096 bytes, or a global extended header is refused, and the entries are checked as they are read. `export` and `finish` refuse a box of more files and folders than that, before writing anything.
+- `import` checks that the archive fits in the free space before it unpacks.
+- A `manifest.toml` or `box.toml` nested too deeply is refused with a message, not a Python error.
+
+A tool package's command or name `config`, `local` or `cache` no longer lets it claim what is inside `.config`, `.local` or `.cache`: a command named `config` could list `.config/google-chrome` as its own data, to be copied into the box and deleted at `finish`. No published package is affected.
+
 ## v0.1.1
 
 Fixed: `finish` refused with "the note has unsaved changes" after vim had saved the note by itself, on losing focus or after a pause, and went on refusing until `:w` was typed. The note was saved; only the mark that says so was left standing.
