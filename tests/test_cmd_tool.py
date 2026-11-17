@@ -37,7 +37,7 @@ def shop(tmp_path, session, monkeypatch):
     entries = []
     for version in ("1.0.2", "1.0.3"):
         _zip, entry = toolkit.make_entry(
-            folder, {"version": version, "examples": [EXAMPLE], "data": {"home": [".kerb"]}}
+            folder, {"version": version, "examples": [EXAMPLE], "data": {"home": [".kerbrute"]}}
         )
         entries.append(entry)
     _zip, ligolo = toolkit.make_entry(
@@ -236,7 +236,7 @@ def test_info_for_an_installed_tool_fills_the_examples(session, shop):
     joined = "\n".join(lines(run(session, "tool info kerbrute"), "field"))
     folder = toolstate.load_installed(session.paths)["kerbrute"].folder
     assert folder in joined
-    assert ".kerb" in joined
+    assert ".kerbrute" in joined
     assert (
         "kerbrute userenum -d HTB.LOCAL --dc 10.10.10.161 forest.htb.local <lhost> {nope} {0}"
         in joined
@@ -454,8 +454,8 @@ def test_remove_keeps_the_files_while_a_box_cannot_be_read(session, shop):
 
 
 def kerb_result(shop):
-    (shop.home / ".kerb").mkdir()
-    (shop.home / ".kerb" / "found.txt").write_text("result")
+    (shop.home / ".kerbrute").mkdir()
+    (shop.home / ".kerbrute" / "found.txt").write_text("result")
 
 
 def test_remove_by_the_last_user_moves_the_home_data_into_the_box(session, shop):
@@ -467,14 +467,14 @@ def test_remove_by_the_last_user_moves_the_home_data_into_the_box(session, shop)
     console.confirm = lambda q, default=False: shown.extend(console.lines) or original(q, default)
     session.console = console
     dispatch(session, "tool remove kerbrute")
-    assert shown == [("field", f"home  {shop.home / '.kerb'}   (will be deleted)")]
-    copy = session.box.path / "tooldata" / "kerbrute" / "home" / ".kerb" / "found.txt"
+    assert shown == [("field", f"home  {shop.home / '.kerbrute'}   (will be deleted)")]
+    copy = session.box.path / "tooldata" / "kerbrute" / "home" / ".kerbrute" / "found.txt"
     assert copy.read_text() == "result"
-    assert not (shop.home / ".kerb").exists()
+    assert not (shop.home / ".kerbrute").exists()
     assert lines(console, "ok")[-1] == "kerbrute removed; its files are deleted"
     assert lines(console, "warn") == []
     run(session, "tool install kerbrute")
-    assert toolstate.load_installed(session.paths)["kerbrute"].home == {".kerb": False}
+    assert toolstate.load_installed(session.paths)["kerbrute"].home == {".kerbrute": False}
 
 
 def test_remove_keeps_home_data_another_box_still_uses(session, shop, other):
@@ -483,7 +483,7 @@ def test_remove_keeps_home_data_another_box_still_uses(session, shop, other):
     kerb_result(shop)
     console = run(session, "tool remove kerbrute", "y")
     assert lines(console, "info") == []
-    assert (shop.home / ".kerb" / "found.txt").read_text() == "result"
+    assert (shop.home / ".kerbrute" / "found.txt").read_text() == "result"
     assert not (session.box.path / "tooldata").exists()
 
 
@@ -492,9 +492,9 @@ def test_remove_keeps_a_home_path_that_was_there_before(session, shop):
     run(session, "tool install kerbrute")
     console = run(session, "tool remove kerbrute", "y")
     assert lines(console, "warn") == [
-        f"{shop.home / '.kerb'}   existed before kerbrute was installed; kept"
+        f"{shop.home / '.kerbrute'}   existed before kerbrute was installed; kept"
     ]
-    assert (shop.home / ".kerb" / "found.txt").read_text() == "result"
+    assert (shop.home / ".kerbrute" / "found.txt").read_text() == "result"
     assert not (session.box.path / "tooldata").exists()
 
 
@@ -507,8 +507,8 @@ def test_remove_keeps_a_home_path_not_copied_in_full(session, shop, monkeypatch)
 
     monkeypatch.setattr(toolhooks.tooldata.shutil, "copy2", denied)
     console = run(session, "tool remove kerbrute", "y")
-    assert lines(console, "warn") == [f"{shop.home / '.kerb'} was not copied in full; kept"]
-    assert (shop.home / ".kerb" / "found.txt").exists()
+    assert lines(console, "warn") == [f"{shop.home / '.kerbrute'} was not copied in full; kept"]
+    assert (shop.home / ".kerbrute" / "found.txt").exists()
     assert toolstate.load_installed(session.paths) == {}
 
 

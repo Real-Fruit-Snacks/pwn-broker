@@ -44,7 +44,17 @@ def user(tmp_path, monkeypatch):
 
 @pytest.fixture
 def shop(tmp_path):
-    zip_path, entry = toolkit.make_entry(tmp_path / "pkg", {"data": {"home": [".kerb", ".old"]}})
+    zip_path, entry = toolkit.make_entry(
+        tmp_path / "pkg",
+        {
+            # a tool may claim only a folder named after itself or one of its commands
+            "command": [
+                {"name": "kerbrute", "type": "binary", "path": "files/kerbrute"},
+                {"name": "old", "type": "binary", "path": "files/kerbrute"},
+            ],
+            "data": {"home": [".kerbrute", ".old"]},
+        },
+    )
     toolkit.write_index(tmp_path / "index", [entry])
     (tmp_path / "index" / entry.file).write_bytes(zip_path.read_bytes())
     return SimpleNamespace(zip=zip_path, entry=entry, folder=tmp_path / "index")
@@ -52,7 +62,7 @@ def shop(tmp_path):
 
 @pytest.fixture
 def tooled(session, shop, user, registered):
-    # kerbrute installed for the box; ~/.old existed before the install, ~/.kerb did not
+    # kerbrute installed for the box; ~/.old existed before the install, ~/.kerbrute did not
     (user / ".old").write_text("before")
     session.settings = replace(session.settings, tools_index=str(shop.folder))
     toolinstall.install(
@@ -60,8 +70,8 @@ def tooled(session, shop, user, registered):
         installed={}, unfinished={session.box.id: session.box.name},
         home=user, console=FakeConsole(), now=NOW, on_path=lambda n: None,
     )  # fmt: skip
-    (user / ".kerb").mkdir()
-    (user / ".kerb" / "found.txt").write_text("result")
+    (user / ".kerbrute").mkdir()
+    (user / ".kerbrute" / "found.txt").write_text("result")
     return session
 
 
@@ -165,7 +175,7 @@ def test_summary_is_empty_for_a_box_without_tools(session, registered):
 def test_summary_lists_tools_and_home_paths(tooled, user):
     assert toolhooks.summary(tooled) == [
         ("tools", "kerbrute 1.0.3   (will be removed)"),
-        ("home", f"{user / '.kerb'}   (will be deleted)"),
+        ("home", f"{user / '.kerbrute'}   (will be deleted)"),
     ]
 
 
@@ -182,7 +192,7 @@ def test_summary_lists_no_home_path_another_box_still_uses(tooled, other):
 def test_pre_pack_copies_tool_data_into_the_box(tooled):
     toolhooks.pre_pack(tooled)
     data = tooled.box.path / "tooldata" / "kerbrute" / "home"
-    assert (data / ".kerb" / "found.txt").read_text() == "result"
+    assert (data / ".kerbrute" / "found.txt").read_text() == "result"
     assert not (data / ".old").exists()
 
 
@@ -217,7 +227,7 @@ def test_undo_releases_the_tool_and_deletes_new_home_paths(tooled, user):
     toolhooks.pre_pack(tooled)
     toolhooks.undo(tooled)
     assert load_installed(tooled.paths) == {}
-    assert not (user / ".kerb").exists()
+    assert not (user / ".kerbrute").exists()
     assert (user / ".old").read_text() == "before"
     assert [t.name for t in load_box(tooled.box.path).tools] == ["kerbrute"]
     assert any(".old" in t for t in lines(tooled, "warn"))
@@ -235,7 +245,7 @@ def test_undo_leaves_a_tool_and_its_data_to_another_unfinished_box(tooled, other
     toolstate.save_installed(tooled.paths, {"kerbrute": item})
     toolhooks.undo(tooled)
     assert load_installed(tooled.paths)["kerbrute"].users == [other.id]
-    assert (user / ".kerb").exists()
+    assert (user / ".kerbrute").exists()
 
 
 def test_undo_tries_every_tool_then_raises(tooled, shop, user, monkeypatch):
@@ -445,10 +455,10 @@ def test_finish_end_to_end(tooled, user):
     assert path is not None and path.exists()
     before_question = [t for k, t in shown if k == "field"]
     assert "tools  kerbrute 1.0.3   (will be removed)" in before_question
-    assert f"home  {user / '.kerb'}   (will be deleted)" in before_question
-    assert any(n.endswith("tooldata/kerbrute/home/.kerb/found.txt") for n in archive_names(path))
+    assert f"home  {user / '.kerbrute'}   (will be deleted)" in before_question
+    assert any(n.endswith("tooldata/kerbrute/home/.kerbrute/found.txt") for n in archive_names(path))
     assert load_installed(tooled.paths) == {}
-    assert not (user / ".kerb").exists() and (user / ".old").exists()
+    assert not (user / ".kerbrute").exists() and (user / ".old").exists()
     assert any(".old" in t for t in lines(tooled, "warn"))
     assert load_box(tooled.box.path).status == "finished"
 
@@ -492,16 +502,16 @@ def test_finish_rolls_back_when_collecting_fails(tooled, user, monkeypatch, erro
     assert len(failed) == 1 and str(error) in failed[0]
     assert load_box(tooled.box.path).status == "active"
     assert "kerbrute" in load_installed(tooled.paths)
-    assert (user / ".kerb" / "found.txt").exists()
+    assert (user / ".kerbrute" / "found.txt").exists()
 
 
 def test_export_collects_and_removes_nothing(tooled, user):
     path = export_box(tooled, fix=lambda p: 0)
     assert path is not None
-    assert any(n.endswith("tooldata/kerbrute/home/.kerb/found.txt") for n in archive_names(path))
+    assert any(n.endswith("tooldata/kerbrute/home/.kerbrute/found.txt") for n in archive_names(path))
     assert "kerbrute" in load_installed(tooled.paths)
     assert load_box(tooled.box.path).tools
-    assert (user / ".kerb" / "found.txt").exists()
+    assert (user / ".kerbrute" / "found.txt").exists()
     assert load_box(tooled.box.path).status == "active"
 
 
@@ -513,7 +523,7 @@ def test_export_stops_when_collecting_fails(tooled, user, monkeypatch):
     assert export_box(tooled, fix=lambda p: 0) is None
     failed = lines(tooled, "fail")
     assert len(failed) == 1 and "the disk is full" in failed[0]
-    assert "kerbrute" in load_installed(tooled.paths) and (user / ".kerb").exists()
+    assert "kerbrute" in load_installed(tooled.paths) and (user / ".kerbrute").exists()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
@@ -620,7 +630,7 @@ def test_finishing_one_box_keeps_the_tool_for_a_box_that_cannot_be_read(tooled, 
     break_box(other.path)
     toolhooks.undo(tooled)
     assert load_installed(tooled.paths)["kerbrute"].users == [other.id]
-    assert (user / ".kerb" / "found.txt").exists()
+    assert (user / ".kerbrute" / "found.txt").exists()
     assert any(".old" in t for t in lines(tooled, "warn"))
 
 
@@ -644,7 +654,7 @@ def test_a_loaded_finished_box_still_does_not_count_while_another_is_unreadable(
     toolhooks.pre_pack(tooled)
     toolhooks.undo(tooled)
     assert load_installed(tooled.paths) == {}
-    assert not (user / ".kerb").exists()
+    assert not (user / ".kerbrute").exists()
 
 
 def test_leftovers_make_no_offer_while_a_box_cannot_be_read(tooled, other):
@@ -715,31 +725,31 @@ def deny_copy(monkeypatch, name):
 
 
 def test_finish_keeps_a_home_folder_that_was_not_copied_in_full(tooled, user, monkeypatch):
-    (user / ".kerb" / "locked.txt").write_text("root's")
-    deny_copy(monkeypatch, ".kerb/locked.txt")
+    (user / ".kerbrute" / "locked.txt").write_text("root's")
+    deny_copy(monkeypatch, ".kerbrute/locked.txt")
     say(tooled, "y", "n")
     path = finish_box(tooled, **SAVED)
     assert path is not None
-    assert (user / ".kerb" / "locked.txt").read_text() == "root's"
-    assert (user / ".kerb" / "found.txt").exists()
-    assert f"{user / '.kerb'} was not copied in full; kept" in lines(tooled, "warn")
+    assert (user / ".kerbrute" / "locked.txt").read_text() == "root's"
+    assert (user / ".kerbrute" / "found.txt").exists()
+    assert f"{user / '.kerbrute'} was not copied in full; kept" in lines(tooled, "warn")
     names = archive_names(path)
-    assert any(n.endswith("tooldata/kerbrute/home/.kerb/found.txt") for n in names)
+    assert any(n.endswith("tooldata/kerbrute/home/.kerbrute/found.txt") for n in names)
     assert not any(n.endswith("locked.txt") for n in names)
     assert load_installed(tooled.paths) == {}
 
 
 def test_undo_deletes_nothing_when_nothing_was_copied_first(tooled, user):
     toolhooks.undo(tooled)
-    assert (user / ".kerb" / "found.txt").exists()
-    assert f"{user / '.kerb'} was not copied in full; kept" in lines(tooled, "warn")
+    assert (user / ".kerbrute" / "found.txt").exists()
+    assert f"{user / '.kerbrute'} was not copied in full; kept" in lines(tooled, "warn")
     assert load_installed(tooled.paths) == {}
 
 
 def test_pre_pack_remembers_only_what_was_copied_in_full(tooled, user, monkeypatch):
     assert tooled.copied_in_full == set()
     toolhooks.pre_pack(tooled)
-    assert tooled.copied_in_full == {user / ".kerb"}
+    assert tooled.copied_in_full == {user / ".kerbrute"}
     deny_copy(monkeypatch, "found.txt")
     toolhooks.pre_pack(tooled)
     assert tooled.copied_in_full == set()
@@ -750,21 +760,21 @@ def test_a_reinstall_keeps_the_earlier_installs_copy_in_the_box(tooled, shop, us
     # as on a second VM: the tool and its home data are not there until installed again
     wipe(tooled)
     tooled.box.tools = []
-    shutil.rmtree(user / ".kerb")
+    shutil.rmtree(user / ".kerbrute")
     later = NOW.replace(year=NOW.year + 1)
     toolinstall.install(
         tooled.paths, tooled.box, shop.entry, shop.zip,
         installed={}, unfinished={tooled.box.id: tooled.box.name},
         home=user, console=FakeConsole(), now=later, on_path=lambda n: None,
     )  # fmt: skip
-    (user / ".kerb").mkdir()
-    (user / ".kerb" / "second.txt").write_text("second run")
+    (user / ".kerbrute").mkdir()
+    (user / ".kerbrute" / "second.txt").write_text("second run")
     say(tooled, "y", "n")
     path = finish_box(tooled, **SAVED)
     names = archive_names(path)
-    assert any(n.endswith("tooldata/kerbrute/home-1/.kerb/found.txt") for n in names)
-    assert any(n.endswith("tooldata/kerbrute/home/.kerb/second.txt") for n in names)
-    assert not (user / ".kerb").exists()
+    assert any(n.endswith("tooldata/kerbrute/home-1/.kerbrute/found.txt") for n in names)
+    assert any(n.endswith("tooldata/kerbrute/home/.kerbrute/second.txt") for n in names)
+    assert not (user / ".kerbrute").exists()
 
 
 # ---- root's home
@@ -788,33 +798,33 @@ def install_kerbrute(session, shop, user):
 
 
 def test_a_path_that_was_in_roots_home_before_is_kept(session, shop, user, rootdir, registered):
-    (rootdir / ".kerb").mkdir()
-    (rootdir / ".kerb" / "mine.txt").write_text("root had it")
+    (rootdir / ".kerbrute").mkdir()
+    (rootdir / ".kerbrute" / "mine.txt").write_text("root had it")
     install_kerbrute(session, shop, user)
-    assert load_installed(session.paths)["kerbrute"].root_home == {".kerb": True, ".old": False}
-    (user / ".kerb").mkdir()
-    (user / ".kerb" / "found.txt").write_text("user run")
+    assert load_installed(session.paths)["kerbrute"].root_home == {".kerbrute": True, ".old": False}
+    (user / ".kerbrute").mkdir()
+    (user / ".kerbrute" / "found.txt").write_text("user run")
     say(session, "y", "n")
     path = finish_box(session, **SAVED)
     names = archive_names(path)
-    assert any(n.endswith("tooldata/kerbrute/home/.kerb/found.txt") for n in names)
-    assert (rootdir / ".kerb" / "mine.txt").read_text() == "root had it"
-    assert not (user / ".kerb").exists()
-    assert f"{rootdir / '.kerb'}   existed before kerbrute was installed; kept" in lines(session, "warn")
+    assert any(n.endswith("tooldata/kerbrute/home/.kerbrute/found.txt") for n in names)
+    assert (rootdir / ".kerbrute" / "mine.txt").read_text() == "root had it"
+    assert not (user / ".kerbrute").exists()
+    assert f"{rootdir / '.kerbrute'}   existed before kerbrute was installed; kept" in lines(session, "warn")
 
 
 def test_a_path_made_in_roots_home_after_install_is_collected_and_deleted(
     session, shop, user, rootdir, registered
 ):
     install_kerbrute(session, shop, user)
-    (rootdir / ".kerb").mkdir()
-    (rootdir / ".kerb" / "found.txt").write_text("sudo run")
+    (rootdir / ".kerbrute").mkdir()
+    (rootdir / ".kerbrute" / "found.txt").write_text("sudo run")
     say(session, "y", "n")
     path = finish_box(session, **SAVED)
     assert any(
-        n.endswith("tooldata/kerbrute/home-root/.kerb/found.txt") for n in archive_names(path)
+        n.endswith("tooldata/kerbrute/home-root/.kerbrute/found.txt") for n in archive_names(path)
     )
-    assert not (rootdir / ".kerb").exists()
+    assert not (rootdir / ".kerbrute").exists()
 
 
 def test_finish_warns_when_roots_home_cannot_be_read(tooled, monkeypatch):
@@ -832,12 +842,12 @@ def test_a_user_whose_home_is_roots_sees_no_difference(session, shop, tmp_path, 
     monkeypatch.setattr(toolhooks.tooldata, "_root_home", lambda: home)
     install_kerbrute(session, shop, home)
     assert load_installed(session.paths)["kerbrute"].root_home == {}
-    (home / ".kerb").mkdir()
-    (home / ".kerb" / "found.txt").write_text("result")
+    (home / ".kerbrute").mkdir()
+    (home / ".kerbrute" / "found.txt").write_text("result")
     say(session, "y", "n")
     path = finish_box(session, **SAVED)
-    assert any(n.endswith("tooldata/kerbrute/home/.kerb/found.txt") for n in archive_names(path))
-    assert not (home / ".kerb").exists()
+    assert any(n.endswith("tooldata/kerbrute/home/.kerbrute/found.txt") for n in archive_names(path))
+    assert not (home / ".kerbrute").exists()
     assert not any("root's home" in t for t in lines(session, "warn"))
 
 
@@ -980,10 +990,10 @@ def test_a_removed_orphans_home_paths_are_named_not_deleted(tooled, user):
     console = FakeConsole(["y"])
     toolhooks.leftovers(tooled.paths, console)
     assert load_installed(tooled.paths) == {}
-    assert (user / ".kerb" / "found.txt").exists()
+    assert (user / ".kerbrute" / "found.txt").exists()
     assert (
         "warn",
-        f"{user / '.kerb'} was left by kerbrute; remove it by hand if it is not needed",
+        f"{user / '.kerbrute'} was left by kerbrute; remove it by hand if it is not needed",
     ) in console.lines
 
 
@@ -1590,15 +1600,15 @@ def test_reopening_gives_each_tool_a_new_install_time_in_its_row(tooled, pyshop)
 def test_tool_data_from_before_a_reopen_is_kept_beside_the_new(tooled, user):
     toolhooks.pre_pack(tooled)  # the first finish copies the data in
     wipe(tooled)  # reopened on a machine without the tool
-    shutil.rmtree(user / ".kerb")
+    shutil.rmtree(user / ".kerbrute")
     tooled.clock = lambda: NOW + timedelta(days=2)
     say(tooled, "y")
     toolhooks.restore(tooled)
     assert tooled.box.id in load_installed(tooled.paths)["kerbrute"].users
-    (user / ".kerb").mkdir()
-    (user / ".kerb" / "second.txt").write_text("second run")
+    (user / ".kerbrute").mkdir()
+    (user / ".kerbrute" / "second.txt").write_text("second run")
     toolhooks.pre_pack(tooled)
     data = tooled.box.path / "tooldata" / "kerbrute"
-    assert (data / "home-1" / ".kerb" / "found.txt").read_text() == "result"
-    assert (data / "home" / ".kerb" / "second.txt").read_text() == "second run"
-    assert not (data / "home" / ".kerb" / "found.txt").exists()
+    assert (data / "home-1" / ".kerbrute" / "found.txt").read_text() == "result"
+    assert (data / "home" / ".kerbrute" / "second.txt").read_text() == "second run"
+    assert not (data / "home" / ".kerbrute" / "found.txt").exists()

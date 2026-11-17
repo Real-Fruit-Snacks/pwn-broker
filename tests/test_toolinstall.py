@@ -391,10 +391,10 @@ def test_install_binary(paths, box, tmp_path):
 
 
 def test_install_records_home_paths(paths, box, tmp_path):
-    (tmp_path / "user" / ".there").mkdir(parents=True)
-    zip_path, entry = build(tmp_path, data={"home": [".there", ".absent"]})
+    (tmp_path / "user" / ".kerbrute").mkdir(parents=True)
+    zip_path, entry = build(tmp_path, data={"home": [".kerbrute", ".cache/kerbrute"]})
     item, _c, _i = do_install(paths, box, entry, zip_path, tmp_path)
-    assert item.home == {".there": True, ".absent": False}
+    assert item.home == {".kerbrute": True, ".cache/kerbrute": False}
 
 
 def test_needs_root_and_uploads_print_lines(paths, box, tmp_path):

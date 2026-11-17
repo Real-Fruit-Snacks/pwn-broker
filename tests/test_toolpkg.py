@@ -776,18 +776,24 @@ SHARED = (
 )
 def test_home_entries_that_are_shared_places_are_refused(entry):
     data = both_manifest()
-    data["data"] = {"home": [".kerb", entry]}
+    data["data"] = {"home": [".kerbrute", entry]}
     with pytest.raises(ToolError, match=f"data.home: {entry!r}"):
         parse_manifest(data)
 
 
-@pytest.mark.parametrize(
-    "entry", [".config/kerbrute", ".local/share/kerbrute", ".cache/kerbrute", ".sshx", "desktop", ".Config"]
-)
+@pytest.mark.parametrize("entry", [".config/kerbrute", ".local/share/kerbrute", ".cache/kerbrute"])
 def test_home_entries_inside_shared_places_are_allowed(entry):
     data = both_manifest()
     data["data"] = {"home": [entry]}
     assert parse_manifest(data).home == [entry]
+
+
+@pytest.mark.parametrize("entry", [".sshx", "desktop", ".Config"])
+def test_home_entries_that_only_look_shared_are_still_not_the_tools_own(entry):
+    data = both_manifest()
+    data["data"] = {"home": [entry]}
+    with pytest.raises(ToolError, match="is not this tool's own folder"):
+        parse_manifest(data)
 
 
 # ---- names with dots
@@ -1197,10 +1203,50 @@ def test_data_home_may_not_claim_what_holds_keys_or_runs_at_login(entry):
 
 
 @pytest.mark.parametrize(
-    "entry", [".kerbrute", ".ligolo-proxy", ".config/certipy", ".local/share/certipy", ".cache/kerbrute"]
-)
-def test_data_home_may_claim_a_tools_own_folder(entry):
+    "entry",
+    [
+        ".kerbrute", ".kerbrute/sub/deeper", ".config/kerbrute", ".config/kerbrute/settings.toml",
+        ".local/share/kerbrute", ".local/state/kerbrute", ".cache/kerbrute", ".Kerbrute",
+    ],
+)  # fmt: skip
+def test_data_home_may_claim_a_folder_named_after_the_tool(entry):
     assert parse_manifest(sample_manifest(data={"home": [entry]})).home == [entry]
+
+
+@pytest.mark.parametrize("entry", [".ligolo-proxy", ".config/ligolo-proxy", ".cache/Ligolo-Proxy/x"])
+def test_data_home_may_claim_a_folder_named_after_one_of_its_commands(entry):
+    data = sample_manifest(
+        name="ligolo-ng",
+        command=[{"name": "ligolo-proxy", "type": "binary", "path": "files/kerbrute"}],
+        data={"home": [entry]},
+    )
+    assert parse_manifest(data).home == [entry]
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        ".ligolo-proxy", ".config/certipy", ".local/share/other", ".kerb", ".kerbrutex",
+        ".kerbrute-data", "kerbrute", "kerbrute/data", "Documents/kerbrute", ".config/sub/kerbrute",
+        ".config/.kerbrute", ".local/kerbrute", ".Config/kerbrute", ".tool", ".config",
+        ".xyz/kerbrute", "..kerbrute", ".",
+    ],
+)  # fmt: skip
+def test_data_home_may_not_claim_a_folder_that_is_not_the_tools_own(entry):
+    # finish moves what is there into the box and deletes it from the home folder, so a tool
+    # may only name a folder that is plainly its own
+    expect_error(sample_manifest(data={"home": [entry]}), "data.home")
+
+
+def test_a_tool_named_like_a_private_place_still_may_not_claim_it():
+    for name, entry in (("ssh", ".ssh"), ("aws", ".aws/credentials"), ("vim", ".vim")):
+        data = sample_manifest(
+            name=name,
+            command=[{"name": "x-" + name, "type": "binary", "path": "files/kerbrute"}],
+            data={"home": [entry]},
+        )
+        with pytest.raises(ToolError, match="is shared with everything else"):
+            parse_manifest(data)
 
 
 # ---- round 2: sizes, the limit on one read, folders made closed

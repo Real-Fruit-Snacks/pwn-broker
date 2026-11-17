@@ -216,6 +216,30 @@ _SHARED_HOME = frozenset(
     ".gitconfig .git-credentials .netrc .pgpass "
     "Desktop Documents Downloads Music Pictures Public Templates Videos".split()
 )
+# where programs keep a folder of their own, by their own name
+_HOME_PARENTS = (".config", ".local/share", ".local/state", ".cache")
+HOME_RULE = (
+    "has to be .<name>, or <name> under .config, .local/share, .local/state or .cache, "
+    "where <name> is the tool's name or one of its commands'"
+)
+
+
+def own_home_folder(entry: str, names: set[str]) -> bool:
+    """Whether a path under the home folder is a folder named after the tool.
+
+    The two lists above cannot name every place that is someone else's, so a tool may claim
+    only what is plainly its own: `.kerbrute`, or `kerbrute` under one of _HOME_PARENTS, and
+    anything inside it. `names` is the tool's name and its commands', in lower case.
+    """
+    parts = entry.split("/")
+    if parts[0][:1] == "." and parts[0][1:].lower() in names:
+        return True
+    for parent in _HOME_PARENTS:
+        above = parent.split("/")
+        if parts[: len(above)] == above and len(parts) > len(above):
+            if parts[len(above)].lower() in names:
+                return True
+    return False
 
 
 def _text(table: dict, key: str, label: str, *, required: bool = True) -> str:
@@ -447,6 +471,8 @@ def parse_manifest(data: dict) -> Manifest:
             raise ToolError(
                 f"data.home: {entry!r} is shared with everything else in the home folder"
             )
+        if not own_home_folder(entry, {name, *(c.name.lower() for c in commands)}):
+            raise ToolError(f"data.home: {entry!r} is not this tool's own folder; it {HOME_RULE}")
 
     return Manifest(
         name=name,
