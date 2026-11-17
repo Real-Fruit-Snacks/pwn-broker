@@ -511,3 +511,31 @@ call Put('syntax', b:current_syntax)
 """)
     assert got["filetype"] == "pwnnote" and got["syntax"] == "pwnnote"
     assert got["markdown"] == []
+
+
+def test_comma_h_lists_the_note_keys(box, note, work):
+    got = run_vim(box.path, work, r"""
+call Put('map', maparg(',h', 'n'))
+call Put('lines', Script('HelpLines'))
+call Script('Help')
+call Put('popups', len(popup_list()))
+let ids = popup_list()
+if !empty(ids)
+  call Put('shown', getbufline(winbufnr(ids[0]), 1, '$'))
+  call Put('title', popup_getoptions(ids[0]).title)
+  " vim's own events, such as the idle CursorHold the save and reload hang on, leave it open
+  call Put('idle', Script('HelpKey', ids[0], "\x80\xfd`"))
+  call Put('still', len(popup_list()))
+  " a typed key closes it
+  call Script('HelpKey', ids[0], 'x')
+  call Put('after', len(popup_list()))
+endif
+""")
+    assert "Help()" in got["map"]
+    keys = [line.split()[0] for line in got["lines"] if line[:1] in (",", "F", "z")]
+    assert keys == [",h", "F8", "za", "zo", "zR"]
+    assert got["popups"] == 1
+    assert got["shown"] == got["lines"] + ["", "any key closes this"]
+    assert got["title"] == " note keys "
+    assert got["idle"] == 0 and got["still"] == 1
+    assert got["after"] == 0

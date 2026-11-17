@@ -64,6 +64,46 @@ endfunction
 nnoremap <silent> <F8> <Cmd>call <SID>NewFold(0)<CR>
 inoremap <silent> <F8> <Cmd>call <SID>NewFold(1)<CR>
 
+" ,h: what this vimrc adds to vim, and the fold keys the note is built around
+function! s:HelpLines() abort
+  return [
+        \ ',h       this list',
+        \ 'F8       new empty fold below the cursor, in normal or insert mode',
+        \ 'za       open or close the fold under the cursor',
+        \ 'zo  zc   open, close the fold under the cursor',
+        \ 'zR  zM   open, close every fold',
+        \ '',
+        \ 'The note saves itself after a second without typing and when the',
+        \ 'window loses focus; [+] in the status line means it has not yet.',
+        \ 'When the app redraws the box at the top, the note reloads by',
+        \ 'itself and the cursor and folds stay where they were.',
+        \ ]
+endfunction
+
+" a typed key closes the list; vim's own events (an idle CursorHold, focus, the mouse moving) reach
+" the filter too, as K_SPECIAL KS_EXTRA, and are passed on
+function! s:HelpKey(id, key) abort
+  if a:key[:1] ==# "\x80\xfd"
+    return 0
+  endif
+  call popup_close(a:id)
+  return 1
+endfunction
+
+function! s:Help() abort
+  let l:lines = s:HelpLines()
+  if !exists('*popup_create')
+    echo join(l:lines, "\n")
+    return
+  endif
+  call popup_create(l:lines + ['', 'any key closes this'], {
+        \ 'title': ' note keys ', 'padding': [0, 1, 0, 1], 'border': [],
+        \ 'highlight': 'Folded', 'borderhighlight': ['Comment'],
+        \ 'mapping': 0, 'filter': function('s:HelpKey'),
+        \ })
+endfunction
+nnoremap <silent> <Leader>h <Cmd>call <SID>Help()<CR>
+
 " Defined before filetype detection is switched on, so it runs first and markdown is never set.
 " Detection goes on before syntax: ":syntax on" would otherwise run detection on the note's
 " buffer by itself, without this group.

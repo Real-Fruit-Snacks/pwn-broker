@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+`,h` in the note's vim lists the keys the note has: `F8` for a new fold, the fold keys, and how the note saves and reloads by itself. Any key closes the list.
+
 ## v0.1.3
 
 The installer prints its `ok` and `fail` lines in the app's colours. Three lines in the middle of an install come from the app and were green, while the installer's own were plain, so one install looked like two programs. Piped output, `NO_COLOR` and a terminal with no colour still get plain text.
