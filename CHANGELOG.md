@@ -14,10 +14,10 @@ Fixed, in `finish`, `export` and `import`:
 - A `box.toml`, target, credential or file record with a value of the wrong kind (`started = "yesterday"`) was loaded and broke the list of boxes at every launch. It is now refused where it is read, so the box is listed as one that cannot be read.
 - Importing a box that is already here under another folder name is refused. Tools are held by a box's id, so finishing either one took the other's tools off the machine.
 
-What `import` accepts, made stricter. An archive the app wrote is not affected, up to 300,000 files and folders.
+What `import` accepts, made stricter. An archive the app wrote is not affected, up to 300,000 files and folders or a manifest of 64 MiB, which is about 190,000 to 300,000 files depending on how long their paths are.
 
 - An archive entry that is a sparse file is refused: 300 bytes could stand for 16 GiB.
-- An extended header or long name of more than 64 KiB is refused before it is read. One of 800 MB, in an archive of 815 KB, cost 3.2 GiB of memory. So is an entry with more header than its name needs: a sparse file's map is read a block at a time for as long as the archive says there is more, and a header of thousands of short records is slow to read.
+- An extended header or long name of more than 64 KiB is refused before it is read. One of 800 MB, in an archive of 815 KB, cost 3.2 GiB of memory. So is an entry with more header than its name needs: a sparse file's map is read a block at a time for as long as the archive says there is more, and a header of hundreds of short records is slow to read, so an entry may have 16.
 - A manifest that lists a file twice is refused. Each row was hashed, so 8,000 rows naming one file, in an archive of 5 KB, took 13 seconds.
 - Whatever goes wrong reading an archive is one `fail` line. A size too large to seek to was a Python error.
 - More than 300,000 entries, a name longer than 4,096 bytes, a global extended header, a file or folder entry that names a link target, a folder that gives a size, an owner number above 4,294,967,295, or a top folder whose name starts with a dot is refused, and the entries are checked as they are read. 10,000 entries with a 60,000-byte link target each, in an archive of 1.5 MB, cost 599 MiB. `export` and `finish` refuse a box of more files and folders than that, before writing anything.

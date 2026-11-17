@@ -33,11 +33,14 @@ _MAX_NAMES_BYTES = 64 * 1024 * 1024
 # What may be read between one entry and the next: its headers. As the app writes them an
 # entry costs 1.5 KiB, and one with a long or non-ASCII name that much and its name again.
 # _ENTRY_HEADER_BYTES stops the reading of one entry; once its name is known, it may have
-# cost _HEADER_ROOM and twice its name. Thousands of short records in a header are slow to
-# read, so the room is what an honest entry needs and little more.
+# cost _HEADER_ROOM and twice its name. What makes a header slow to read is the number of
+# records in it, each of which ends a line: the app writes eight at most (path, time, size,
+# owner and group by number and by name, and the character set), so an entry may have
+# _HEADER_LINES line ends in its headers, and two more for each one in its name.
 _ENTRY_HEADER_BYTES = 16 * 1024
-_MAX_OWNER = 2**32 - 1
 _HEADER_ROOM = 2048
+_HEADER_LINES = 16
+_MAX_OWNER = 2**32 - 1
 
 
 class ArchiveError(Exception):
@@ -250,8 +253,10 @@ class _Capped:
 
     def __init__(self, fh) -> None:
         self._fh = fh
-        # header bytes read since the last entry, while the entries are being read
+        # header bytes, and line ends in them, read since the last entry, while the entries
+        # are being read
         self.entry_bytes = 0
+        self.entry_lines = 0
         self._headers = True
 
     def read(self, size: int = -1) -> bytes:
@@ -262,12 +267,14 @@ class _Capped:
             # a sparse entry's map is read a block at a time, for as long as the archive says
             # there is more of it, and no single read is large
             self.entry_bytes += len(data)
+            self.entry_lines += data.count(b"\n")
             if self.entry_bytes > _ENTRY_HEADER_BYTES:
                 raise ArchiveError(_TOO_MUCH_HEADER)
         return data
 
     def next_entry(self) -> None:
         self.entry_bytes = 0
+        self.entry_lines = 0
 
     def entries_read(self) -> None:
         # from here on only file data is read
@@ -339,6 +346,8 @@ def _members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
         member.uname = member.gname = ""
         name_bytes = len(member.name.encode("utf-8", "surrogateescape"))
         if tar.fileobj.entry_bytes > _HEADER_ROOM + 2 * name_bytes:
+            raise ArchiveError(_TOO_MUCH_HEADER)
+        if tar.fileobj.entry_lines > _HEADER_LINES + 2 * member.name.count("\n"):
             raise ArchiveError(_TOO_MUCH_HEADER)
         names += name_bytes
         if len(members) == MAX_ENTRIES or names > _MAX_NAMES_BYTES:

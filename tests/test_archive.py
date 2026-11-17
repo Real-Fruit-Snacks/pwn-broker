@@ -1238,7 +1238,8 @@ def test_a_sparse_map_that_goes_on_block_after_block_is_refused(tmp_path, monkey
     monkeypatch.setattr(archive._Capped, "read", lambda self, size=-1: read.append(size) or real(self, size))
     with pytest.raises(ArchiveError, match="more header than a box's archive ever has"):
         verify(dest)
-    assert sum(read) < 512 * 1024
+    # stopped at what one entry may read, not at the end of the chain
+    assert sum(read) < 32 * 1024
 
 
 def test_a_sparse_map_in_an_extended_header_that_goes_on_is_refused(tmp_path):
@@ -1272,6 +1273,7 @@ def test_an_entry_with_more_header_than_its_name_needs_is_refused(tmp_path, monk
         verify(dest)
     # it was under what stops the reading of one entry: the room for its name refused it
     monkeypatch.setattr(archive, "_HEADER_ROOM", 16 * 1024)
+    monkeypatch.setattr(archive, "_HEADER_LINES", 1000)
     verify(dest)
 
 
@@ -1488,3 +1490,65 @@ def test_a_move_into_place_that_fails_is_an_archive_error(filled, tmp_path, monk
     with pytest.raises(ArchiveError, match="cannot unpack .*: no"):
         unpack(dest, tmp_path / "active")
     assert list((tmp_path / "active").iterdir()) == []
+
+
+# --- records in an extended header: what makes one slow to read ---
+
+
+def filling_the_room(tar):
+    # a 256-byte name leaves room for 2,560 bytes of header: a path record and 200 of six bytes
+    # a folder first, so that nothing is read on the way to the entry but its own headers
+    first = tarfile.TarInfo("b/first")
+    first.type = tarfile.DIRTYPE
+    tar.addfile(first)
+    name = "b/" + "n" * 254
+    record = b"6 a=b\n"
+    path = f"path={name}\n".encode()
+    length = len(path) + 3
+    length += len(str(length)) - 2
+    body = f"{length} ".encode() + path + record * 200
+    head = tarfile.TarInfo("PaxHeader")
+    head.type = tarfile.XHDTYPE
+    head.size = len(body)
+    tar.addfile(head, io.BytesIO(body))
+    info = tarfile.TarInfo("b/short")
+    info.type = tarfile.DIRTYPE
+    tar.addfile(info)
+
+
+def test_an_entry_whose_header_fits_its_room_but_holds_hundreds_of_records_is_refused(tmp_path, monkeypatch):
+    dest = formatted_archive(tmp_path / "f.tar.gz", filling_the_room, format=tarfile.USTAR_FORMAT)
+    with tarfile.open(dest) as tar:
+        assert tar.getnames()[-1] == "b/" + "n" * 254
+    with pytest.raises(ArchiveError, match="more header than a box's archive ever has"):
+        verify(dest)
+    # the bytes fit: it is the count of records that refused it
+    monkeypatch.setattr(archive, "_HEADER_LINES", 400)
+    verify(dest)
+
+
+@pytest.mark.parametrize(
+    "name", ["b/two\nlines \u00e9", "b/" + "a\n" * 40 + "\u00e9", "b/" + "l\n" * 300]
+)
+def test_a_name_with_line_ends_in_it_is_within_its_room(tmp_path, name):
+    def build(tar):
+        info = tarfile.TarInfo(name)
+        info.mtime = 1794830000.123456
+        info.uid, info.gid = 2**31, 2**31
+        info.uname, info.gname = "\u00fcser", "gr\u00fcp"
+        tar.addfile(info)
+
+    dest = formatted_archive(tmp_path / "n.tar.gz", build, format=tarfile.PAX_FORMAT)
+    with archive._open(dest) as tar:
+        assert [m.name for m in archive._members(tar)][-1] == name
+
+
+def test_a_size_below_zero_is_refused(tmp_path):
+    info = tarfile.TarInfo("b/sub")
+    info.type = tarfile.DIRTYPE
+    block = patched(info.tobuf(tarfile.GNU_FORMAT), {124: b"\xff" * 12})
+    dest = raw_tar(tmp_path / "neg.tar.gz", block)
+    with tarfile.open(dest) as tar:
+        assert tar.getmember("b/sub").size == -1
+    with pytest.raises(ArchiveError, match="has a size no file or folder has"):
+        verify(dest)
