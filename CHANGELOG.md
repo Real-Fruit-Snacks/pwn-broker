@@ -17,12 +17,12 @@ Fixed, in `finish`, `export` and `import`:
 What `import` accepts, made stricter. An archive the app wrote is not affected, up to 300,000 files and folders.
 
 - An archive entry that is a sparse file is refused: 300 bytes could stand for 16 GiB.
-- An extended header or long name of more than 64 KiB is refused before it is read. One of 800 MB, in an archive of 815 KB, cost 3.2 GiB of memory. So is an entry whose headers go on for more than 256 KiB: a sparse file's map is read a block at a time for as long as the archive says there is more.
-- A manifest that lists a file twice is refused. Each row was hashed, so 8,000 rows naming one file, in an archive of 5 KB, took 19 seconds.
+- An extended header or long name of more than 64 KiB is refused before it is read. One of 800 MB, in an archive of 815 KB, cost 3.2 GiB of memory. So is an entry with more header than its name needs: a sparse file's map is read a block at a time for as long as the archive says there is more, and a header of thousands of short records is slow to read.
+- A manifest that lists a file twice is refused. Each row was hashed, so 8,000 rows naming one file, in an archive of 5 KB, took 13 seconds.
 - Whatever goes wrong reading an archive is one `fail` line. A size too large to seek to was a Python error.
 - More than 300,000 entries, a name longer than 4,096 bytes, a global extended header, a file or folder entry that names a link target, or a top folder whose name starts with a dot is refused, and the entries are checked as they are read. 10,000 entries with a 60,000-byte link target each, in an archive of 1.5 MB, cost 599 MiB. `export` and `finish` refuse a box of more files and folders than that, before writing anything.
 - `import` checks that the archive fits in the free space before it unpacks.
-- A `manifest.toml` or `box.toml` nested too deeply is refused with a message, not a Python error, and none of a box's files is read past 256 MiB.
+- A `manifest.toml` or `box.toml` nested too deeply is refused with a message, not a Python error, and none of a box's files is read past 64 MiB.
 - `import` over a box closes that box's note window only once the new box has been unpacked and loaded. An archive that was refused used to close it first.
 
 A tool package's command or name `config`, `local` or `cache` no longer lets it claim what is inside `.config`, `.local` or `.cache`: a command named `config` could list `.config/google-chrome` as its own data, to be copied into the box and deleted at `finish`. No published package is affected.

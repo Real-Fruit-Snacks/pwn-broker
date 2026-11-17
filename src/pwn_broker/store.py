@@ -53,9 +53,10 @@ def write_toml(path: Path, data: dict) -> None:
     write_text(path, tomli_w.dumps(data))
 
 
-# The most of one of a box's files that is read: four times the largest manifest an archive
-# may hold, which lists the same files. A megabyte of gzip unpacks to a gigabyte of box.toml.
-MAX_TOML_BYTES = 256 * 1024 * 1024
+# The most of one of a box's files that is read, and so the largest manifest an archive may
+# hold: about 250,000 files' worth of records. A megabyte of gzip unpacks to a gigabyte of
+# box.toml, and each megabyte read costs about ten of memory.
+MAX_TOML_BYTES = 64 * 1024 * 1024
 
 
 def read_toml(path: Path) -> dict:

@@ -1259,16 +1259,46 @@ def test_a_sparse_map_in_an_extended_header_that_goes_on_is_refused(tmp_path):
         verify(dest)
 
 
-def test_the_header_allowance_is_for_each_entry_and_for_them_all(tmp_path, monkeypatch):
+def with_many_short_records(tar):
+    # a header of nothing but short records: each is cheap to write and slow to read
+    info = tarfile.TarInfo("b/x")
+    info.pax_headers = {f"k{n}": "v" for n in range(400)}
+    tar.addfile(info)
+
+
+def test_an_entry_with_more_header_than_its_name_needs_is_refused(tmp_path, monkeypatch):
+    dest = formatted_archive(tmp_path / "r.tar.gz", with_many_short_records, format=tarfile.PAX_FORMAT)
+    with pytest.raises(ArchiveError, match="more header than a box's archive ever has"):
+        verify(dest)
+    # it was under what stops the reading of one entry: the room for its name refused it
+    monkeypatch.setattr(archive, "_HEADER_ROOM", 16 * 1024)
+    verify(dest)
+
+
+def test_the_header_allowance_is_for_each_entry_not_for_them_all(tmp_path, monkeypatch):
     files = {f"f{n}": b"x" for n in range(40)}
     dest = hand_archive(tmp_path / "x.tar.gz", files)
-    verify(dest)
     # forty entries read more than any one entry may, and are read
     monkeypatch.setattr(archive, "_ENTRY_HEADER_BYTES", 2048)
     verify(dest)
-    monkeypatch.setattr(archive, "_ALL_HEADER_BYTES", 8192)
-    with pytest.raises(ArchiveError, match="more header than a box's archive ever has"):
-        verify(dest)
+
+
+@pytest.mark.parametrize("form", [tarfile.PAX_FORMAT])
+@pytest.mark.parametrize(
+    "name",
+    ["b/" + "d" * 250 + "/" + "e" * 250, "b/" + "/".join(["n" * 250] * 16), "b/" + "\u00e9" * 2000, "b/x"],
+)
+def test_an_entry_as_the_app_writes_it_is_within_its_header_room(tmp_path, form, name):
+    def build(tar):
+        info = tarfile.TarInfo(name)
+        info.size = 1
+        info.mtime = 1794830000.123456
+        info.uname, info.gname = "kali", "kali"
+        tar.addfile(info, io.BytesIO(b"x"))
+
+    dest = formatted_archive(tmp_path / "h.tar.gz", build, format=form)
+    with archive._open(dest) as tar:
+        assert [m.name for m in archive._members(tar)][-1] == name
 
 
 def test_file_data_does_not_count_as_header(filled, tmp_path, monkeypatch):
@@ -1279,7 +1309,6 @@ def test_file_data_does_not_count_as_header(filled, tmp_path, monkeypatch):
     dest = tmp_path / "out.tar.gz"
     pack(filled, dest)
     monkeypatch.setattr(archive, "_ENTRY_HEADER_BYTES", 8192)
-    monkeypatch.setattr(archive, "_ALL_HEADER_BYTES", 64 * 1024)
     verify(dest)
     assert (unpack(dest, tmp_path / "elsewhere") / "big.bin").stat().st_size == 1_024_000
 
@@ -1323,7 +1352,7 @@ def test_a_file_listed_twice_in_the_manifest_is_refused_before_anything_is_hashe
 def test_the_entries_keep_none_of_their_extended_header_records(tmp_path):
     def build(tar):
         info = tarfile.TarInfo("b/x")
-        info.pax_headers = {"comment": "c" * 2000, "another": "d" * 2000}
+        info.pax_headers = {"comment": "c" * 300, "another": "d" * 300}
         tar.addfile(info)
 
     dest = formatted_archive(tmp_path / "r.tar.gz", build, format=tarfile.PAX_FORMAT)
@@ -1340,15 +1369,15 @@ def test_unpacking_reads_no_more_than_a_piece_at_a_time(tmp_path):
 
 
 def test_a_file_entry_that_names_a_link_target_is_refused(tmp_path):
-    # tarfile keeps it on the entry, and an extended header can make it 64 KiB long
+    # tarfile keeps it on the entry: a file or folder has no use for one
     def build(tar):
         info = tarfile.TarInfo("b/x")
-        info.linkname = "l" * 60_000
+        info.linkname = "l" * 300
         tar.addfile(info)
 
     dest = formatted_archive(tmp_path / "l.tar.gz", build, format=tarfile.PAX_FORMAT)
     with tarfile.open(dest) as tar:
-        assert len(tar.getmember("b/x").linkname) == 60_000 and tar.getmember("b/x").isreg()
+        assert len(tar.getmember("b/x").linkname) == 300 and tar.getmember("b/x").isreg()
     for check in (verify, peek_folder, lambda path: unpack(path, tmp_path / "active")):
         with pytest.raises(ArchiveError, match="names a link target"):
             check(dest)
@@ -1357,13 +1386,13 @@ def test_a_file_entry_that_names_a_link_target_is_refused(tmp_path):
 def test_the_entries_keep_no_owner_names(tmp_path):
     def build(tar):
         info = tarfile.TarInfo("b/x")
-        info.uname = "u" * 30_000
-        info.gname = "g" * 30_000
+        info.uname = "u" * 300
+        info.gname = "g" * 300
         tar.addfile(info)
 
     dest = formatted_archive(tmp_path / "o.tar.gz", build, format=tarfile.PAX_FORMAT)
     with tarfile.open(dest) as tar:
-        assert len(tar.getmember("b/x").uname) == 30_000
+        assert len(tar.getmember("b/x").uname) == 300
     with archive._open(dest) as tar:
         assert {(m.uname, m.gname) for m in archive._members(tar)} == {("", "")}
     verify(dest)

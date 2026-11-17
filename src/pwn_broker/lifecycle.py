@@ -188,8 +188,8 @@ def _changed_since(session: Session, archived: list[FileRecord], unlisted: _Seen
     changed = {
         rel for rel, seen in (listed | odd).items() if rel not in _REWRITTEN and packed.get(rel) != seen
     }
-    # a file or folder that cannot be looked at now may be new too
-    changed.update(rel for rel in unread if rel not in packed)
+    # what cannot be looked at now may be new, or changed
+    changed.update(unread)
     return sorted(changed)
 
 

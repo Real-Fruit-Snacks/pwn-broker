@@ -1145,3 +1145,22 @@ def test_import_refuses_an_archive_whose_folder_starts_with_a_dot(session, tmp_p
     [line] = [t for k, t in console.lines if k == "fail"]
     assert line == "import failed: archive's folder '.hidden' starts with a dot, which a box's never does"
     assert sorted(p.name for p in session.paths.active.iterdir()) == [session.box.path.name]
+
+
+def test_finish_keeps_the_folder_when_the_command_history_cannot_be_looked_at_again(session, monkeypatch):
+    stand_in, signalled = window()
+    (session.box.path / ".history").write_text("+status\n")
+    answers(session, "y", "y")
+    real = lifecycle.os.lstat
+    asked = []
+
+    def lstat(path, *args, **kwargs):
+        if asked and str(path).endswith(".history"):
+            raise PermissionError("no")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(lifecycle.os, "lstat", lstat)
+    at_the_remove_question(session, lambda: asked.append(1))
+    assert finish_box(session, **SAVED, **stand_in) is not None
+    assert session.box.path.exists() and signalled == []
+    assert kinds(session, "warn") == [".history changed after the archive was made; the folder was kept"]

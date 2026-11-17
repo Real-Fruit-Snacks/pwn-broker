@@ -17,22 +17,26 @@ from pathlib import Path
 from pwn_broker.filescan import BOX_PRIVATE_FOLDERS, NOTE_SWAP, ROOT_TRANSIENT_FILES, is_temp_name, sha256_file
 from pwn_broker.model import Box, FileRecord
 from pwn_broker.paths import AppPaths
-from pwn_broker.store import SCHEMA, write_toml
+from pwn_broker.store import MAX_TOML_BYTES, SCHEMA, write_toml
 
 MANIFEST = "manifest.toml"
 # the most an archive is read at once: see _Capped
 _PIECE = 64 * 1024
 _MIB = 1024 * 1024
-_MANIFEST_LIMIT = 64 * 1024 * 1024
+# the manifest lists the same files as the box's files.toml, and is read as it is
+_MANIFEST_LIMIT = MAX_TOML_BYTES
 # What an archive may hold. A box of more files than this could not be listed in a manifest
 # of that size anyway, and every entry costs memory while the archive is checked.
 MAX_ENTRIES = 300_000
 MAX_NAME_BYTES = 4096
 _MAX_NAMES_BYTES = 64 * 1024 * 1024
-# What may be read between one entry and the next, and before the last: the headers. A file
-# with a long path costs about 6 KiB of them, most files 1.5 KiB.
-_ENTRY_HEADER_BYTES = 256 * 1024
-_ALL_HEADER_BYTES = MAX_ENTRIES * 4096
+# What may be read between one entry and the next: its headers. As the app writes them an
+# entry costs 1.5 KiB, and one with a long or non-ASCII name that much and its name again.
+# _ENTRY_HEADER_BYTES stops the reading of one entry; once its name is known, it may have
+# cost _HEADER_ROOM and twice its name. Thousands of short records in a header are slow to
+# read, so the room is what an honest entry needs and little more.
+_ENTRY_HEADER_BYTES = 16 * 1024
+_HEADER_ROOM = 2048
 
 
 class ArchiveError(Exception):
@@ -229,6 +233,9 @@ def _top_folder(members: Iterable[tarfile.TarInfo]) -> str:
     return top
 
 
+_TOO_MUCH_HEADER = "archive has more header than a box's archive ever has"
+
+
 class _Capped:
     """The unzipped archive as tarfile reads it, 64 KiB at a time at most.
 
@@ -242,9 +249,8 @@ class _Capped:
 
     def __init__(self, fh) -> None:
         self._fh = fh
-        # header bytes read since the last entry, and in all, while the entries are being read
-        self._entry = 0
-        self._all = 0
+        # header bytes read since the last entry, while the entries are being read
+        self.entry_bytes = 0
         self._headers = True
 
     def read(self, size: int = -1) -> bytes:
@@ -254,14 +260,13 @@ class _Capped:
         if self._headers:
             # a sparse entry's map is read a block at a time, for as long as the archive says
             # there is more of it, and no single read is large
-            self._entry += len(data)
-            self._all += len(data)
-            if self._entry > _ENTRY_HEADER_BYTES or self._all > _ALL_HEADER_BYTES:
-                raise ArchiveError("archive has more header than a box's archive ever has")
+            self.entry_bytes += len(data)
+            if self.entry_bytes > _ENTRY_HEADER_BYTES:
+                raise ArchiveError(_TOO_MUCH_HEADER)
         return data
 
     def next_entry(self) -> None:
-        self._entry = 0
+        self.entry_bytes = 0
 
     def entries_read(self) -> None:
         # from here on only file data is read
@@ -331,7 +336,10 @@ def _members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
         # which such a record may make as long as a header may be; nothing here reads them
         member.pax_headers = {}
         member.uname = member.gname = ""
-        names += len(member.name.encode("utf-8", "surrogateescape"))
+        name_bytes = len(member.name.encode("utf-8", "surrogateescape"))
+        if tar.fileobj.entry_bytes > _HEADER_ROOM + 2 * name_bytes:
+            raise ArchiveError(_TOO_MUCH_HEADER)
+        names += name_bytes
         if len(members) == MAX_ENTRIES or names > _MAX_NAMES_BYTES:
             raise ArchiveError(f"archive has more than {MAX_ENTRIES} entries, or names too long to hold")
         members.append(member)
