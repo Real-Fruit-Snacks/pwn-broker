@@ -5,7 +5,7 @@ from pwn_broker import hostflow
 from pwn_broker.boxes import add_target
 from pwn_broker.console import FakeConsole
 from pwn_broker.hosts import Wanted
-from pwn_broker.store import load_box
+from pwn_broker.store import load_box, save_box
 
 QUESTION = "add dc01's hostnames to /etc/hosts?"
 
@@ -586,4 +586,109 @@ def test_leftovers_prints_the_line_when_the_removal_fails(session, launch):
         ("warn", "/etc/hosts was not changed: cp exited 1"),
         ("info", "remove this line yourself:"),
         ("raw", "10.10.10.7 g.htb  # pwn-broker ghost-id"),
+    ]
+
+
+# ---- import
+
+IMPORT_QUESTION = "this box wants these lines in /etc/hosts. add them?"
+NOT_WRITTEN = "no lines written. add one later with: host file on <target>"
+
+
+def test_import_asks_nothing_for_a_box_without_lines(session):
+    session.console = FakeConsole([])
+    hostflow.on_import(session)
+    assert session.console.asked == [] and session.console.lines == []
+
+
+def test_import_shows_the_lines_and_on_no_the_box_forgets_them(session):
+    session.box.hosts = ["dc01"]
+    session.console = FakeConsole(["n"])
+    hostflow.on_import(session)
+    assert session.console.asked == [IMPORT_QUESTION]
+    assert session.console.lines == [
+        ("field", "hosts  10.10.10.161 forest.htb.local"),
+        ("info", NOT_WRITTEN),
+    ]
+    assert session.box.hosts == [] and _recorded(session) == []
+    assert _text(session) == LOCALHOST
+    # opening the box afterwards writes nothing
+    hostflow.on_open(session)
+    assert _text(session) == LOCALHOST
+
+
+def test_import_defaults_to_no(session):
+    session.box.hosts = ["dc01"]
+    session.console = FakeConsole([""])
+    hostflow.on_import(session)
+    assert session.box.hosts == [] and _text(session) == LOCALHOST
+
+
+def test_import_on_yes_keeps_the_lines_for_opening_to_write(session):
+    session.box.hosts = ["dc01"]
+    save_box(session.box)
+    session.console = FakeConsole(["y"])
+    hostflow.on_import(session)
+    assert _recorded(session) == ["dc01"]
+    # the question writes nothing itself; opening the box does, as for any box
+    assert _text(session) == LOCALHOST
+    hostflow.on_open(session)
+    assert _text(session) == LOCALHOST + _lines((session.box.id, "10.10.10.161 forest.htb.local"))
+
+
+def test_import_ctrl_c_at_the_question_is_a_no(session):
+    session.box.hosts = ["dc01"]
+    session.console = FakeConsole([])
+    hostflow.on_import(session)
+    assert session.console.asked == [IMPORT_QUESTION]
+    assert _recorded(session) == [] and _text(session) == LOCALHOST
+
+
+def test_import_asks_nothing_when_the_lines_are_already_there(session):
+    # imported over a box of my own whose lines were written before
+    session.box.hosts = ["dc01"]
+    _put(session, LOCALHOST + _lines((session.box.id, "10.10.10.161 forest.htb.local")))
+    session.console = FakeConsole([])
+    hostflow.on_import(session)
+    assert session.console.asked == [] and session.box.hosts == ["dc01"]
+
+
+def test_import_asks_when_the_lines_there_differ(session):
+    session.box.hosts = ["dc01"]
+    _put(session, LOCALHOST + _lines((session.box.id, "10.10.10.200 forest.htb.local")))
+    session.console = FakeConsole(["n"])
+    hostflow.on_import(session)
+    assert session.console.asked == [IMPORT_QUESTION]
+
+
+def test_import_marks_a_name_under_a_public_top_level_domain(session):
+    dc01 = session.targets[0]
+    dc01.hostnames = ["forest.htb.local", "github.com", "dc01.HTB", "deb.debian.org"]
+    session.box.hosts = ["dc01"]
+    session.console = FakeConsole(["n"])
+    hostflow.on_import(session)
+    assert session.console.lines[0] == (
+        "field",
+        "hosts  10.10.10.161 forest.htb.local github.com dc01.HTB deb.debian.org"
+        "   (not a lab name: github.com, deb.debian.org)",
+    )
+
+
+@pytest.mark.parametrize("name", ["dc.lab.vl", "sequel.htb", "megabank.local", "web.corp", "box.thm"])
+def test_import_marks_no_lab_name(session, name):
+    session.targets[0].hostnames = [name]
+    session.box.hosts = ["dc01"]
+    session.console = FakeConsole(["n"])
+    hostflow.on_import(session)
+    assert session.console.lines[0] == ("field", f"hosts  10.10.10.161 {name}")
+
+
+def test_import_lists_one_line_per_target(session):
+    _add(session, "web", ["10.10.10.5"], ["web.htb"])
+    session.box.hosts = ["dc01", "web"]
+    session.console = FakeConsole(["n"])
+    hostflow.on_import(session)
+    assert session.console.lines[:2] == [
+        ("field", "hosts  10.10.10.161 forest.htb.local"),
+        ("field", "  10.10.10.5 web.htb"),
     ]

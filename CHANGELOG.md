@@ -4,6 +4,8 @@
 
 `,h` in the note's vim lists the keys the note has: `F8` for a new fold, the fold keys, and how the note saves and reloads by itself. Any key closes the list.
 
+Fixed: opening an imported box wrote its `/etc/hosts` lines with `sudo` without asking. The names come from the archive, so a box from someone else could point any name, `github.com` say, at any address. `import` now shows the lines and asks `this box wants these lines in /etc/hosts. add them? [y/N]`, and names any hostname that is not under a lab domain. On no the box keeps no lines; `host file on` adds one later. Importing over a box whose lines are already in the file asks nothing.
+
 ## v0.1.3
 
 The installer prints its `ok` and `fail` lines in the app's colours. Three lines in the middle of an install come from the app and were green, while the installer's own were plain, so one install looked like two programs. Piped output, `NO_COLOR` and a terminal with no colour still get plain text.

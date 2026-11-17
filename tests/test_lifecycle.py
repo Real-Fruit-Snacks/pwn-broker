@@ -1164,3 +1164,27 @@ def test_finish_keeps_the_folder_when_the_command_history_cannot_be_looked_at_ag
     assert finish_box(session, **SAVED, **stand_in) is not None
     assert session.box.path.exists() and signalled == []
     assert kinds(session, "warn") == [".history changed after the archive was made; the folder was kept"]
+
+
+def test_import_runs_import_hooks_before_restore_hooks(session, tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(lifecycle, "IMPORT_HOOKS", [lambda s: seen.append(("import", s.box.path))])
+    monkeypatch.setattr(lifecycle, "RESTORE_HOOKS", [lambda s: seen.append(("restore", s.box.path))])
+    archive = export_box(session, **NOFIX)
+    box = import_box(fresh_home(tmp_path), Settings(), FakeConsole(), archive, lambda: NOW)
+    assert seen == [("import", box.path), ("restore", box.path)]
+
+
+def test_an_imported_box_whose_lines_are_declined_opens_without_them(session, tmp_path, monkeypatch):
+    from pwn_broker import hostflow
+
+    monkeypatch.setattr(lifecycle, "IMPORT_HOOKS", [hostflow.on_import])
+    monkeypatch.setattr(lifecycle, "RESTORE_HOOKS", [])
+    session.box.hosts = ["dc01"]
+    save_box(session.box)
+    archive = export_box(session, **NOFIX)
+    console = FakeConsole(["n"])
+    box = import_box(fresh_home(tmp_path), Settings(), console, archive, lambda: NOW)
+    assert box is not None
+    assert console.asked == ["this box wants these lines in /etc/hosts. add them?"]
+    assert load_box(box.path).hosts == []

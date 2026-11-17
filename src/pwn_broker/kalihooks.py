@@ -56,6 +56,7 @@ def register() -> None:
         (lifecycle.SUMMARY_HOOKS, hostflow.summary),
         (lifecycle.UNDO_HOOKS, hostflow.undo),
         (lifecycle.UNDO_HOOKS, vpn_question),
+        (lifecycle.IMPORT_HOOKS, hostflow.on_import),
     ):
         if hook not in hooks:
             hooks.append(hook)

@@ -214,7 +214,7 @@ A target with an IP and a hostname can have one line in `/etc/hosts`, its first 
 10.10.10.161 forest.htb.local  # pwn-broker 6f9c1e0a-52c1-4b7e-9d0c-1a2b3c4d5e6f
 ```
 
-`target add` (at launch, in the prompt or from `record`) and `target edit` ask `add dc01's hostnames to /etc/hosts? [Y/n]` when the target has both and no line yet. The default is yes. After that the line follows the target: `target edit`, `host add` and `host remove` rewrite it without asking, `target remove` takes it out, and `finish` removes the box's lines after the archive is verified. `quit` leaves them in place. Opening a box puts its lines back if they are missing. At launch, lines left by a box that is finished or no longer on disk are offered for removal.
+`target add` (at launch, in the prompt or from `record`) and `target edit` ask `add dc01's hostnames to /etc/hosts? [Y/n]` when the target has both and no line yet. The default is yes. After that the line follows the target: `target edit`, `host add` and `host remove` rewrite it without asking, `target remove` takes it out, and `finish` removes the box's lines after the archive is verified. `quit` leaves them in place. Opening a box puts its lines back if they are missing. `import` asks first, since the names come from the archive: it shows the lines and asks `this box wants these lines in /etc/hosts. add them? [y/N]`, naming any hostname that is not under a lab domain such as `.htb` or `.local` (`(not a lab name: github.com)`). On no, the box keeps no lines until you add one with `host file on`. At launch, lines left by a box that is finished or no longer on disk are offered for removal.
 
 ```
 forest/web01 > host add crm.board.htb dev.board.htb

@@ -22,7 +22,7 @@ from pwn_broker.toolpkg import ToolError, machine_arch
 from pwn_broker.toolstate import load_installed
 
 SAVED = dict(fix=lambda path: 0, unsaved=lambda box: False)
-HOOK_LISTS = ("BLOCK_HOOKS", "SUMMARY_HOOKS", "PRE_PACK_HOOKS", "UNDO_HOOKS", "RESTORE_HOOKS")
+HOOK_LISTS = ("BLOCK_HOOKS", "SUMMARY_HOOKS", "PRE_PACK_HOOKS", "UNDO_HOOKS", "RESTORE_HOOKS", "IMPORT_HOOKS")
 
 
 @pytest.fixture

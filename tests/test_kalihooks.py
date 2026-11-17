@@ -7,7 +7,7 @@ from pwn_broker.console import FakeConsole
 from pwn_broker.lifecycle import finish_box
 
 SAVED = dict(fix=lambda path: 0, unsaved=lambda box: False)
-HOOK_LISTS = ("BLOCK_HOOKS", "SUMMARY_HOOKS", "PRE_PACK_HOOKS", "UNDO_HOOKS", "RESTORE_HOOKS")
+HOOK_LISTS = ("BLOCK_HOOKS", "SUMMARY_HOOKS", "PRE_PACK_HOOKS", "UNDO_HOOKS", "RESTORE_HOOKS", "IMPORT_HOOKS")
 MARKED = "10.10.10.161 forest.htb.local  # pwn-broker "
 
 
@@ -28,6 +28,7 @@ def test_register_adds_each_hook_once(monkeypatch):
     assert lifecycle.SUMMARY_HOOKS == [hostflow.summary]
     assert lifecycle.UNDO_HOOKS == [hostflow.undo, kalihooks.vpn_question]
     assert lifecycle.RESTORE_HOOKS == []
+    assert lifecycle.IMPORT_HOOKS == [hostflow.on_import]
 
 
 def test_finish_removes_the_boxes_lines_and_keeps_every_other_line(session, registered):

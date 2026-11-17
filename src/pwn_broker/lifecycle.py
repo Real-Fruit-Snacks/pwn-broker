@@ -40,6 +40,8 @@ SUMMARY_HOOKS: list[Callable[[Session], list[tuple[str, str]]]] = []
 PRE_PACK_HOOKS: list[Callable[[Session], None]] = []
 UNDO_HOOKS: list[Callable[[Session], None]] = []
 RESTORE_HOOKS: list[Callable[[Session], None]] = []
+# run by import only, before RESTORE_HOOKS: what the archive asks for that a box of my own would not
+IMPORT_HOOKS: list[Callable[[Session], None]] = []
 
 _FAILURES = (ArchiveError, StoreError, OSError, ToolError)
 _SHOWN = 10
@@ -413,6 +415,8 @@ def import_box(
         if box.status == "finished":
             reopen_box(box)
         session = load_session(paths, settings, console, box, clock)
+        for hook in IMPORT_HOOKS:
+            hook(session)
         for hook in RESTORE_HOOKS:
             hook(session)
     except _FAILURES as exc:

@@ -300,6 +300,61 @@ def on_open(session: Session) -> None:
         sync(session)
 
 
+def _in_place(session: Session, want: list[hosts.Wanted]) -> bool:
+    # the file already holds exactly these lines, as after importing over a box of my own
+    try:
+        text = hosts.read(session.hosts_path)
+        return hosts.rewrite(text, session.box.id, want).text == text
+    except hosts.HostsError:
+        return False
+
+
+# top-level labels labs use that no public domain has; a name under any other could be a real site
+LAB_SUFFIXES = frozenset(
+    {"htb", "local", "lan", "internal", "corp", "home", "lab", "localdomain", "localhost",
+     "test", "example", "invalid", "arpa", "vl", "thm", "offsec"}
+)  # fmt: skip
+
+
+def _public(names: list[str]) -> list[str]:
+    return [name for name in names if name.lower().rsplit(".", 1)[-1] not in LAB_SUFFIXES]
+
+
+def on_import(session: Session) -> None:
+    """Ask before an imported box's lines go into the file.
+
+    The names come from the archive, and opening the box would write them with sudo, so a box
+    from someone else could point any name anywhere. On no, or Ctrl-C, the box forgets its lines,
+    so they are not written when it is opened later either.
+    """
+    box, console = session.box, session.console
+    if not box.hosts:
+        return
+    want = wanted(session)
+    if not want or _in_place(session, want):
+        return
+    rows = []
+    for n, entry in enumerate(want):
+        line = f"{entry.ip} {' '.join(entry.names)}"
+        public = _public(entry.names)
+        if public:
+            line += f"   (not a lab name: {', '.join(public)})"
+        rows.append(("hosts" if n == 0 else "", line))
+    console.fields(rows)
+    try:
+        if console.confirm(f"this box wants these lines in {FILE}. add them?", default=False):
+            return
+    except Cancelled:
+        pass
+    box.hosts = []
+    try:
+        save_box(box)
+    except Exception as exc:  # the import itself is done; say what will happen
+        console.warn(f"the box still lists its {FILE} lines and will write them when opened: {exc}")
+        return
+    console.info("no lines written. add one later with: host file on <target>")
+
+
 def leftovers(
     paths: AppPaths,
     console: Console,
