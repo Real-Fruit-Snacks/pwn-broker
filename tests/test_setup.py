@@ -210,7 +210,7 @@ def test_vimrc_basics():
         "set nomodeline", "set nobackup nowritebackup noswapfile", "set nonumber",
         'let mapleader = ","', "set foldmethod=marker",
         "set foldmarker=##########@@@@@@@@@@,@@@@@@@@@@##########", "set noautoread",
-        "set updatetime=1000", "autocmd FocusLost,CursorHold,CursorHoldI * silent! update",
+        "set updatetime=1000", "autocmd FocusLost,CursorHold,CursorHoldI * ++nested silent! update",
         "autocmd FocusGained * silent! checktime", "autocmd FileChangedShell notes.md call s:Changed()",
     ):
         assert line in [row.strip() for row in text.splitlines()], line

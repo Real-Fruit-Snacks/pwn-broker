@@ -418,6 +418,24 @@ call Put('state', readfile(expand('%:p:h') . '/.note-state'))
     assert (box.path / "notes.md").read_text(encoding="utf-8").endswith("one more line\n")
 
 
+@pytest.mark.parametrize("event", ["FocusLost", "CursorHold", "CursorHoldI"])
+def test_a_save_the_vimrc_makes_by_itself_clears_the_unsaved_mark(box, note, work, event):
+    # the vimrc saves the note when its window loses focus or goes quiet. That save has to count
+    # as one: finish refuses a note whose mark says it has unsaved changes
+    got = run_vim(box.path, work, rf"""
+normal! Gotyped by hand
+doautocmd <nomodeline> TextChanged
+call Put('typed', readfile(expand('%:p:h') . '/.note-state'))
+doautocmd <nomodeline> {event}
+call Put('modified', &modified)
+call Put('saved', readfile(expand('%:p:h') . '/.note-state'))
+""")
+    assert got["typed"] == ["1"]
+    assert got["modified"] == 0
+    assert (box.path / "notes.md").read_text(encoding="utf-8").endswith("typed by hand\n")
+    assert got["saved"] == ["0"]
+
+
 IP_YES = ["10.10.10.161", "10.10.10.0/24", "(10.10.10.161)", "10.10.10.161:445", "http://10.10.10.161/", "0.0.0.0/0", "255.255.255.255/32"]
 IP_NO = ["1.2.3.4.5", "999.999.999.999", "10.10.10.256", "1.2.3.4.5.6"]
 PLACEHOLDER_YES = ["<DomainUser>", "<IP>", "<Target Host>", "<Password_1>", "<Dc-01 Name>"]

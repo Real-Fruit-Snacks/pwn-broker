@@ -220,7 +220,9 @@ augroup pwn_broker
   autocmd!
   autocmd TextChanged,TextChangedI notes.md call s:Mark(1)
   autocmd BufWritePost notes.md call s:Mark(0)
-  autocmd FocusLost,CursorHold,CursorHoldI * silent! update
+  " ++nested: a command run by an autocommand sets off no autocommands of its own unless asked to,
+  " and this save has to run BufWritePost below, or the mark would go on saying "unsaved"
+  autocmd FocusLost,CursorHold,CursorHoldI * ++nested silent! update
   autocmd FocusGained * silent! checktime
   autocmd FileChangedShell notes.md call s:Changed()
   autocmd FileChangedShellPost notes.md call s:Restore()

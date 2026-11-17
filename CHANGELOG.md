@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Fixed: `finish` refused with "the note has unsaved changes" after vim had saved the note by itself, on losing focus or after a pause, and went on refusing until `:w` was typed. The note was saved; only the mark that says so was left standing.
+
 What a tool package is checked for, made stricter. No published package is affected.
 
 - A package's commands may not take the name of a program the app runs itself: `chown` and `x-terminal-emulator` were missing, so with `/opt/pwn-broker/bin` first on PATH the app would have run a package's copy, as root when the app is. More names that ask for a password, manage the system, fetch something to run, or that other programs start to show or edit something (`less`, `pager`, `editor`) are reserved too, and so are Python and pip under a versioned name such as `python3.13` or `python3.13t`.
