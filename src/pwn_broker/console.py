@@ -68,8 +68,13 @@ def _yes_no(answer: str, default: bool) -> bool | None:
     return None
 
 
-# C0 controls but tab, DEL and C1 controls: none of them may move the cursor or change the terminal
-_CONTROLS = {code: "?" for code in [*range(0x20), 0x7F, *range(0x80, 0xA0)] if code != 0x09}
+# C0 controls but tab, DEL and C1 controls: none of them may move the cursor or change the terminal.
+# And the surrogates, which stand for the bytes of a file name that is not UTF-8 and cannot be written.
+_CONTROLS = {
+    code: "?"
+    for code in [*range(0x20), 0x7F, *range(0x80, 0xA0), *range(0xD800, 0xE000)]
+    if code != 0x09
+}
 _CELL_CONTROLS = {**_CONTROLS, 0x09: " "}
 
 

@@ -6,7 +6,8 @@ from datetime import timedelta
 
 import pytest
 
-from helpers import NOW
+from helpers import NOW, odd_name
+from pwn_broker.store import save_files
 from pwn_broker import filescan
 from pwn_broker.filescan import is_app_file, scan, sha256_file
 
@@ -349,3 +350,15 @@ def test_a_cast_whose_window_closed_is_hashed_on_the_next_scan(box, live_cast):
     [r] = [r for r in scan(box, first, now=NOW, live={}) if r.path == CAST]
     assert r.sha256 == hashlib.sha256(live_cast.read_bytes()).hexdigest()
     assert r.size == live_cast.stat().st_size
+
+
+def test_a_file_whose_name_is_not_utf8_is_skipped_with_a_reason_and_the_rest_is_recorded(box, loot):
+    if odd_name(loot) is None:
+        pytest.skip("no file here can have a name that is not UTF-8")
+    (loot / "ok.txt").write_text("fine")
+    skipped = []
+    result = scan(box, [], now=NOW, on_skip=lambda p, why: skipped.append(why))
+    assert [r.path for r in result if "loot" in r.path] == ["targets/dc01/loot/ok.txt"]
+    assert skipped == ["its name is not UTF-8, so it is not listed"]
+    # what it returns can be written
+    save_files(box, result)

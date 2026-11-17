@@ -9,7 +9,7 @@ from dataclasses import replace
 import pytest
 import tomli_w
 
-from helpers import NOW
+from helpers import NOW, odd_name
 from pwn_broker import lifecycle
 from pwn_broker.archive import ArchiveError, archive_path, verify
 from pwn_broker.config import Settings
@@ -976,3 +976,16 @@ def test_import_of_a_new_box_that_cannot_be_opened_leaves_nothing(paths, tmp_pat
     assert import_box(paths, Settings(), console, archive, lambda: NOW) is None
     assert [k for k, _ in console.lines] == ["fail"]
     assert not paths.active.exists() or list(paths.active.iterdir()) == []
+
+
+def test_export_and_finish_go_through_with_a_file_whose_name_is_not_utf8(session):
+    if odd_name(session.box.path) is None:
+        pytest.skip("no file here can have a name that is not UTF-8")
+    assert export_box(session, **NOFIX) is not None
+    assert any("its name is not UTF-8, so it is not listed" in line for line in kinds(session, "warn"))
+    answers(session, "y", "n")
+    archive = finish_box(session, **SAVED)
+    assert archive is not None
+    with tarfile.open(archive) as tar:
+        names = [os.fsencode(name) for name in tar.getnames()]
+    assert os.fsencode(session.box.path.name) + b"/caf\xe9 \xff.txt" in names

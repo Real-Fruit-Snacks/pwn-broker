@@ -53,6 +53,14 @@ def sha256_head(path: Path, size: int) -> str:
     return digest.hexdigest()
 
 
+def _is_utf8(text: str) -> bool:
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _reason(exc: OSError) -> str:
     return "disappeared" if isinstance(exc, FileNotFoundError) else "cannot read"
 
@@ -94,6 +102,12 @@ def scan(
             full = Path(root) / name
             rel = full.relative_to(box.path).as_posix()
             if is_app_file(rel):
+                continue
+            if not _is_utf8(rel):
+                # files.toml and the manifest are UTF-8 and cannot hold the name. The file is
+                # still packed, under the name it has.
+                if on_skip is not None:
+                    on_skip(rel, "its name is not UTF-8, so it is not listed")
                 continue
             try:
                 st = os.lstat(full)

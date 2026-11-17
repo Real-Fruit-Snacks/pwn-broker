@@ -10,7 +10,7 @@ from dataclasses import replace as dc_replace
 import pytest
 import tomli_w
 
-from helpers import NOW
+from helpers import NOW, odd_name
 from pwn_broker import archive
 from pwn_broker.archive import (
     ArchiveError,
@@ -976,3 +976,17 @@ def test_unpack_checks_the_folder_before_it_replaces_anything(filled, tmp_path):
     assert seen == [(True, "hello", True)]
     assert (old / "work.txt").read_text() == "mine"
     assert sorted(p.name for p in active.iterdir()) == [filled.path.name]
+
+
+def test_a_file_whose_name_is_not_utf8_is_packed_and_unpacked_under_that_name(filled, tmp_path):
+    if odd_name(filled.path / "targets/dc01/loot") is None:
+        pytest.skip("no file here can have a name that is not UTF-8")
+    records = scan(filled, [], now=NOW)
+    save_files(filled, records)
+    write_manifest(filled, records, kind="exported", now=NOW)
+    dest = tmp_path / "out.tar.gz"
+    assert pack(filled, dest) == []
+    verify(dest)
+    folder = unpack(dest, tmp_path / "elsewhere")
+    with open(os.path.join(os.fsencode(folder / "targets/dc01/loot"), b"caf\xe9 \xff.txt"), "rb") as fh:
+        assert fh.read() == b"loot"

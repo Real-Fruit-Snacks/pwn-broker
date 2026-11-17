@@ -926,3 +926,12 @@ def test_fake_confirm_records_a_gap_before_and_after():
     c = FakeConsole(["y"])
     c.confirm("go?")
     assert c.events == [("gap", ""), ("confirm", "go?"), ("gap", "")]
+
+
+def test_a_name_that_is_not_utf8_is_written_with_question_marks(monkeypatch):
+    # os.fsdecode gives such a name with surrogates in it, which no stream can write
+    name = b"loot/caf\xe9 \xff.txt".decode("utf-8", "surrogateescape")
+    c, out = screen(monkeypatch)
+    c.warn(f"{name}   not listed")
+    assert "loot/caf? ?.txt   not listed" in out.getvalue()
+    out.getvalue().encode("utf-8")
