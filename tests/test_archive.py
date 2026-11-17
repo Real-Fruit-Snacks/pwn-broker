@@ -923,7 +923,7 @@ def test_the_stand_in_sparse_archive_is_one_tarfile_reads_as_sparse(tmp_path):
 
 def test_verify_refuses_a_sparse_entry_before_reading_it(tmp_path, monkeypatch):
     dest = sparse_archive(tmp_path / "s.tar.gz")
-    monkeypatch.setattr(tarfile.TarFile, "extractfile", raising(AssertionError("read")))
+    monkeypatch.setattr(archive, "_pieces", raising(AssertionError("read")))
     with pytest.raises(ArchiveError, match="sparse"):
         verify(dest)
 
@@ -1018,3 +1018,185 @@ def test_unpack_counts_only_what_the_files_hold(filled, tmp_path, monkeypatch):
         archive.shutil, "disk_usage", lambda path: shutil._ntuple_diskusage(needed, 0, needed)
     )
     assert (unpack(dest, tmp_path / "active") / "notes.md").read_text() == "hello"
+
+
+# --- what reading an archive may cost ---
+
+
+def formatted_archive(dest, build, **options):
+    with tarfile.open(dest, "w:gz", **options) as tar:
+        add_dir(tar, "b")
+        add_bytes(tar, "b/manifest.toml", manifest_bytes([]))
+        build(tar)
+    return dest
+
+
+def with_a_long_record(tar):
+    info = tarfile.TarInfo("b/x")
+    info.pax_headers = {"comment": "x" * (2 * 1024 * 1024)}
+    tar.addfile(info)
+
+
+def with_a_long_name(tar):
+    tar.addfile(tarfile.TarInfo("b/" + "a" * (2 * 1024 * 1024)))
+
+
+def with_a_record_under_a_megabyte(tar):
+    info = tarfile.TarInfo("b/x")
+    info.pax_headers = {"comment": "x" * (200 * 1024)}
+    tar.addfile(info)
+
+
+@pytest.mark.parametrize(
+    ("build", "options"),
+    [
+        (with_a_long_record, dict(format=tarfile.PAX_FORMAT)),
+        (with_a_long_name, dict(format=tarfile.GNU_FORMAT)),
+        (with_a_long_name, dict(format=tarfile.PAX_FORMAT)),
+        (with_a_record_under_a_megabyte, dict(format=tarfile.PAX_FORMAT)),
+    ],
+)
+def test_a_header_longer_than_64_kib_is_refused_without_being_read(tmp_path, monkeypatch, build, options):
+    dest = formatted_archive(tmp_path / "h.tar.gz", build, **options)
+    assert dest.stat().st_size < 64 * 1024
+    asked = []
+    real = archive._Capped.read
+
+    def read(self, size=-1):
+        asked.append(size)
+        return real(self, size)
+
+    monkeypatch.setattr(archive._Capped, "read", read)
+    for check in (verify, peek_folder, lambda path: unpack(path, tmp_path / "active")):
+        with pytest.raises(ArchiveError, match="header longer than 64 KiB"):
+            check(dest)
+    # each of the three stopped at the first read that asked for more
+    assert sorted(asked)[-3] > 64 * 1024 and sorted(asked)[-4] <= 64 * 1024
+    assert not (tmp_path / "active").exists() or list((tmp_path / "active").iterdir()) == []
+
+
+@pytest.mark.parametrize("form", [tarfile.PAX_FORMAT, tarfile.GNU_FORMAT])
+def test_a_name_longer_than_a_path_may_be_is_refused(tmp_path, form):
+    dest = formatted_archive(
+        tmp_path / "n.tar.gz", lambda tar: tar.addfile(tarfile.TarInfo("b/" + "a" * 5000)), format=form
+    )
+    with pytest.raises(ArchiveError, match="name longer than a path may be"):
+        verify(dest)
+
+
+def test_an_archive_with_a_global_extended_header_is_refused(tmp_path):
+    dest = formatted_archive(
+        tmp_path / "g.tar.gz",
+        lambda tar: add_bytes(tar, "b/x", b"x"),
+        format=tarfile.PAX_FORMAT,
+        pax_headers={"comment": "for every entry"},
+    )
+    with pytest.raises(ArchiveError, match="global extended header"):
+        verify(dest)
+
+
+def test_entries_past_the_limit_are_refused_before_the_rest_is_read(tmp_path, monkeypatch):
+    monkeypatch.setattr(archive, "MAX_ENTRIES", 5)
+    dest = hand_archive(tmp_path / "many.tar.gz", {f"f{n}": b"x" for n in range(40)})
+    seen = []
+    real = archive._check_member
+    monkeypatch.setattr(archive, "_check_member", lambda member: seen.append(member.name) or real(member))
+    with pytest.raises(ArchiveError, match="more than 5 entries"):
+        verify(dest)
+    assert len(seen) == 6
+
+
+def test_an_archive_at_the_limit_is_read(tmp_path, monkeypatch):
+    files = {f"f{n}": b"x" for n in range(3)}
+    dest = hand_archive(tmp_path / "few.tar.gz", files)
+    monkeypatch.setattr(archive, "MAX_ENTRIES", 5)
+    verify(dest)
+    assert sorted(p.name for p in unpack(dest, tmp_path / "active").iterdir()) == [
+        "f0", "f1", "f2", "manifest.toml",
+    ]  # fmt: skip
+
+
+def test_names_too_long_together_are_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(archive, "_MAX_NAMES_BYTES", 2000)
+    dest = hand_archive(tmp_path / "long.tar.gz", {"d/" + "a" * 200 + str(n): b"x" for n in range(20)})
+    with pytest.raises(ArchiveError, match="names too long to hold"):
+        verify(dest)
+
+
+def test_pack_refuses_a_box_of_more_files_than_an_archive_holds(filled, tmp_path, monkeypatch):
+    monkeypatch.setattr(archive, "MAX_ENTRIES", 3)
+    dest = tmp_path / "out.tar.gz"
+    with pytest.raises(ArchiveError, match="an archive holds 3 at most"):
+        pack(filled, dest)
+    assert not dest.exists() and not part_of(dest).exists()
+
+
+def test_what_pack_writes_has_no_header_the_limits_refuse(filled, tmp_path):
+    # a long path and a name that is not ASCII both get an extended header of their own
+    deep = filled.path / "targets" / ("d" * 200) / ("e" * 200)
+    deep.mkdir(parents=True)
+    (deep / ("f" * 180 + " caf\u00e9.txt")).write_text("x")
+    records = scan(filled, [], now=NOW)
+    save_files(filled, records)
+    write_manifest(filled, records, kind="exported", now=NOW)
+    dest = tmp_path / "out.tar.gz"
+    pack(filled, dest)
+    verify(dest)
+    folder = unpack(dest, tmp_path / "elsewhere")
+    assert (folder / "targets" / ("d" * 200) / ("e" * 200) / ("f" * 180 + " caf\u00e9.txt")).read_text() == "x"
+
+
+def test_a_file_larger_than_any_one_read_is_verified_and_unpacked(filled, tmp_path):
+    # larger than the pieces the archive is read in, and than Python's own buffer in any version
+    data = bytes(range(256)) * 1200 + b"end"
+    (filled.path / "big.bin").write_bytes(data)
+    records = scan(filled, [], now=NOW)
+    save_files(filled, records)
+    write_manifest(filled, records, kind="exported", now=NOW)
+    dest = tmp_path / "out.tar.gz"
+    pack(filled, dest)
+    verify(dest)
+    assert (unpack(dest, tmp_path / "elsewhere") / "big.bin").read_bytes() == data
+
+
+def test_verify_notices_one_changed_byte_deep_in_a_large_file(tmp_path):
+    data = bytes(range(256)) * 1200
+    changed = data[:200_000] + b"X" + data[200_001:]
+    dest = hand_archive(tmp_path / "x.tar.gz", {"big.bin": changed}, listed=[record("big.bin", data)])
+    with pytest.raises(ArchiveError, match="checksum differs"):
+        verify(dest)
+
+
+@posix_only
+def test_pack_refuses_what_a_folder_swapped_for_a_link_would_bring_in(filled, tmp_path, monkeypatch):
+    # between the walk and the read a folder is swapped for a link to one outside the box
+    loot = filled.path / "targets/dc01/loot"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "SAM.bak").write_bytes(b"\x00\x01binary")
+    (outside / "secret.txt").write_text("not the box's")
+    real = archive._entries
+
+    def swapped(root):
+        found, special = real(root)
+        loot.rename(loot.with_name("loot.was"))
+        loot.symlink_to(outside)
+        found.append(("targets/dc01/loot/secret.txt", loot / "secret.txt"))
+        return sorted(found, key=lambda e: e[0]), special
+
+    monkeypatch.setattr(archive, "_entries", swapped)
+    dest = tmp_path / "out.tar.gz"
+    with pytest.raises(ArchiveError, match="no longer inside the box"):
+        pack(filled, dest)
+    assert not dest.exists() and not part_of(dest).exists()
+
+
+@posix_only
+def test_pack_follows_a_link_on_the_way_to_the_box_itself(filled, tmp_path):
+    # the folder that holds the boxes may sit behind a link (a home folder on another disk, say)
+    link = tmp_path / "through"
+    link.symlink_to(filled.path.parent)
+    dest = tmp_path / "out.tar.gz"
+    pack(dc_replace(filled, path=link / filled.path.name), dest)
+    verify(dest)
+    assert "targets/dc01/loot/SAM.bak" in inside(dest)

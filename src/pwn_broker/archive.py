@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import os
 import secrets
@@ -7,7 +8,8 @@ import tarfile
 import tempfile
 import tomllib
 import zlib
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime
 from fnmatch import fnmatchcase
@@ -19,9 +21,15 @@ from pwn_broker.paths import AppPaths
 from pwn_broker.store import SCHEMA, write_toml
 
 MANIFEST = "manifest.toml"
-_CHUNK = 1024 * 1024
+# the most an archive is read at once: see _Capped
+_PIECE = 64 * 1024
 _MIB = 1024 * 1024
 _MANIFEST_LIMIT = 64 * 1024 * 1024
+# What an archive may hold. A box of more files than this could not be listed in a manifest
+# of that size anyway, and every entry costs memory while the archive is checked.
+MAX_ENTRIES = 300_000
+MAX_NAME_BYTES = 4096
+_MAX_NAMES_BYTES = 64 * 1024 * 1024
 _READ_ERRORS = (tarfile.TarError, OSError, EOFError, zlib.error)
 
 
@@ -118,7 +126,14 @@ class _Head:
         return data
 
 
-def _info(tar: tarfile.TarFile, full: Path, arcname: str, rel: str) -> tarfile.TarInfo:
+def _info(tar: tarfile.TarFile, full: Path, arcname: str, rel: str, root: str) -> tarfile.TarInfo:
+    # A folder on the way that was swapped for a link since the walk would lead out of the box,
+    # and what is there would be packed as the box's. The folder is resolved again just before
+    # the entry is read: that narrows the gap to the read itself, it does not close it.
+    above = rel.rpartition("/")[0]
+    expected = os.path.join(root, *above.split("/")) if above else root
+    if rel and os.path.realpath(full.parent) != expected:
+        raise ArchiveError(f"{rel} is no longer inside the box: a folder on the way to it is now a link")
     info = tar.gettarinfo(full, arcname=arcname)
     if info is None:
         raise ArchiveError(f"{rel} is not a file or folder that can be packed")
@@ -131,8 +146,8 @@ def _info(tar: tarfile.TarFile, full: Path, arcname: str, rel: str) -> tarfile.T
     return info
 
 
-def _add(tar: tarfile.TarFile, full: Path, arcname: str, rel: str) -> None:
-    info = _info(tar, full, arcname, rel)
+def _add(tar: tarfile.TarFile, full: Path, arcname: str, rel: str, root: str) -> None:
+    info = _info(tar, full, arcname, rel, root)
     if info.isreg():
         with open(full, "rb") as fh:
             # tarfile fails on its own if the file is cut short while it is read
@@ -141,8 +156,10 @@ def _add(tar: tarfile.TarFile, full: Path, arcname: str, rel: str) -> None:
         tar.addfile(info)
 
 
-def _add_cut(tar: tarfile.TarFile, full: Path, arcname: str, rel: str, size: int) -> None:
-    info = _info(tar, full, arcname, rel)
+def _add_cut(
+    tar: tarfile.TarFile, full: Path, arcname: str, rel: str, root: str, size: int
+) -> None:
+    info = _info(tar, full, arcname, rel, root)
     if info.size < size:
         raise ArchiveError(f"{rel} is shorter than the {size} bytes recorded for it")
     info.size = size
@@ -162,13 +179,19 @@ def pack(box: Box, dest: Path, cut: Mapping[str, int] | None = None) -> list[str
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
         entries, special = _entries(box.path)
+        root = os.path.realpath(box.path)
+        if len(entries) > MAX_ENTRIES:
+            # said before an archive that could not be read back is written
+            raise ArchiveError(
+                f"the box holds {len(entries)} files and folders, and an archive holds {MAX_ENTRIES} at most"
+            )
         with tarfile.open(part, "w:gz") as tar:
             for rel, full in entries:
                 arcname = f"{top}/{rel}" if rel else top
                 if rel in cut:
-                    _add_cut(tar, full, arcname, rel, cut[rel])
+                    _add_cut(tar, full, arcname, rel, root, cut[rel])
                 else:
-                    _add(tar, full, arcname, rel)
+                    _add(tar, full, arcname, rel, root)
         verify(part)
         os.replace(part, dest)
     except BaseException as exc:
@@ -201,17 +224,86 @@ def _top_folder(members: Iterable[tarfile.TarInfo]) -> str:
     return top
 
 
-def _open(archive: Path) -> tarfile.TarFile:
+class _Capped:
+    """The unzipped archive as tarfile reads it, 64 KiB at a time at most.
+
+    tarfile reads an extended header or a long name whole, or a megabyte of it at a time, at
+    whatever length the archive gives for it, and a megabyte of gzip can give one of a gigabyte.
+    Everything a box's archive really holds is read in smaller pieces: its headers are a few
+    kilobytes, and file data is read _PIECE at a time, by _pieces here and by tarfile when it
+    unpacks (copybufsize). tarfile's own reader for one entry is not used: it asks for as much
+    as Python's default buffer holds, which is more than this from Python 3.14 on.
+    """
+
+    def __init__(self, fh) -> None:
+        self._fh = fh
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0 or size > _PIECE:
+            raise ArchiveError("archive has a header longer than 64 KiB, which a box's archive never has")
+        return self._fh.read(size)
+
+    def seek(self, *args) -> int:
+        return self._fh.seek(*args)
+
+    def tell(self) -> int:
+        return self._fh.tell()
+
+
+@contextmanager
+def _open(archive: Path) -> Iterator[tarfile.TarFile]:
     try:
-        return tarfile.open(archive, "r:gz")
-    except _READ_ERRORS as exc:
+        unzipped = gzip.GzipFile(archive)
+    except OSError as exc:
         raise ArchiveError(f"{archive}: cannot open as a gzip tar ({exc})") from exc
+    with unzipped:
+        try:
+            tar = tarfile.open(fileobj=_Capped(unzipped), mode="r:", copybufsize=_PIECE)
+        except _READ_ERRORS as exc:
+            raise ArchiveError(f"{archive}: cannot open as a gzip tar ({exc})") from exc
+        with tar:
+            yield tar
+
+
+def _pieces(tar: tarfile.TarFile, member: tarfile.TarInfo) -> Iterator[bytes]:
+    # the entry's data, straight from the archive. No entry is sparse (_check_member), so its
+    # data is one run of member.size bytes.
+    tar.fileobj.seek(member.offset_data)
+    left = member.size
+    while left:
+        piece = tar.fileobj.read(min(_PIECE, left))
+        if not piece:
+            raise ArchiveError(f"archive ends inside {member.name!r}")
+        left -= len(piece)
+        yield piece
+
+
+def _members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
+    """Every entry of the archive, each one checked as it is read.
+
+    Read one at a time, not all first: an archive of nothing but entries is refused at the
+    limit, before the rest of it is held in memory.
+    """
+    members: list[tarfile.TarInfo] = []
+    names = 0
+    for member in tar:
+        if tar.pax_headers:
+            # its records are copied onto every entry that follows
+            raise ArchiveError("archive has a global extended header, which a box's archive never has")
+        _check_member(member)
+        # tarfile keeps the records of each entry's own extended header; nothing here reads them
+        member.pax_headers = {}
+        names += len(member.name.encode("utf-8", "surrogateescape"))
+        if len(members) == MAX_ENTRIES or names > _MAX_NAMES_BYTES:
+            raise ArchiveError(f"archive has more than {MAX_ENTRIES} entries, or names too long to hold")
+        members.append(member)
+    return members
 
 
 def peek_folder(archive: Path) -> str:
     try:
         with _open(archive) as tar:
-            return _top_folder(tar)
+            return _top_folder(_members(tar))
     except ArchiveError:
         raise
     except _READ_ERRORS as exc:
@@ -224,9 +316,9 @@ def _manifest_rows(tar: tarfile.TarFile, member: tarfile.TarInfo | None) -> list
     if member.size > _MANIFEST_LIMIT:
         raise ArchiveError(f"{MANIFEST} is too large ({member.size} bytes)")
     try:
-        data = tomllib.loads(tar.extractfile(member).read().decode("utf-8"))
-    except RecursionError as exc:
-        raise ArchiveError(f"{MANIFEST} is nested too deeply to read") from exc
+        data = tomllib.loads(b"".join(_pieces(tar, member)).decode("utf-8"))
+    except (RecursionError, MemoryError) as exc:
+        raise ArchiveError(f"{MANIFEST} is nested too deeply, or too large, to read") from exc
     except ValueError as exc:  # not UTF-8, not TOML, or a number too long to read
         raise ArchiveError(f"{MANIFEST} cannot be read ({exc})") from exc
     rows = data.get("file", [])
@@ -248,9 +340,7 @@ def _manifest_rows(tar: tarfile.TarFile, member: tarfile.TarInfo | None) -> list
 def verify(archive: Path) -> None:
     try:
         with _open(archive) as tar:
-            members = tar.getmembers()
-            for member in members:
-                _check_member(member)
+            members = _members(tar)
             top = _top_folder(members)
             by_name = {m.name: m for m in members}
             rows = _manifest_rows(tar, by_name.get(f"{top}/{MANIFEST}"))
@@ -268,9 +358,8 @@ def verify(archive: Path) -> None:
             # archive order, so the gzip stream is only ever read forwards
             for member, path, checksum in sorted(wanted, key=lambda w: w[0].offset_data):
                 digest = hashlib.sha256()
-                with tar.extractfile(member) as fh:
-                    while chunk := fh.read(_CHUNK):
-                        digest.update(chunk)
+                for piece in _pieces(tar, member):
+                    digest.update(piece)
                 if digest.hexdigest() != checksum:
                     raise ArchiveError(f"{path}: checksum differs from the manifest")
     except ArchiveError:
@@ -289,6 +378,8 @@ def _check_member(member: tarfile.TarInfo) -> None:
     parts = name.split("/")
     if name.startswith("/") or (_backslash_separates() and "\\" in name) or ".." in parts:
         raise ArchiveError(f"archive entry {name!r} would write outside the destination")
+    if len(name.encode("utf-8", "surrogateescape")) > MAX_NAME_BYTES:
+        raise ArchiveError(f"archive entry {name[:60]!r}... has a name longer than a path may be")
     if not (member.isreg() or member.isdir()):
         raise ArchiveError(f"archive entry {name!r} is not a regular file or folder")
     if member.issparse():
@@ -323,9 +414,7 @@ def unpack(
     tmp: Path | None = None
     try:
         with _open(archive) as tar:
-            members = tar.getmembers()
-            for member in members:
-                _check_member(member)
+            members = _members(tar)
             top = _top_folder(members)
             final = active / top
             if os.path.lexists(final) and not replace:
