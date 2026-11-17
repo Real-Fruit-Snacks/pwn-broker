@@ -11,7 +11,7 @@ import pytest
 import tomli_w
 
 from helpers import NOW, odd_name
-from pwn_broker import archive
+from pwn_broker import archive, store
 from pwn_broker.archive import (
     ArchiveError,
     archive_path,
@@ -1552,3 +1552,35 @@ def test_a_size_below_zero_is_refused(tmp_path):
         assert tar.getmember("b/sub").size == -1
     with pytest.raises(ArchiveError, match="has a size no file or folder has"):
         verify(dest)
+
+
+def test_an_owner_number_below_zero_is_refused(tmp_path):
+    info = tarfile.TarInfo("b/sub")
+    info.type = tarfile.DIRTYPE
+    for at in (108, 116):
+        block = patched(info.tobuf(tarfile.GNU_FORMAT), {at: b"\xff" * 8})
+        dest = raw_tar(tmp_path / f"neg{at}.tar.gz", block)
+        with tarfile.open(dest) as tar:
+            member = tar.getmember("b/sub")
+            assert -1 in (member.uid, member.gid)
+        with pytest.raises(ArchiveError, match="has an owner number no user or group has"):
+            verify(dest)
+
+
+def test_one_long_record_that_is_more_than_the_name_needs_is_refused(tmp_path, monkeypatch):
+    # one line, so the count of records does not see it: the room in bytes does
+    def build(tar):
+        info = tarfile.TarInfo("b/x")
+        info.pax_headers = {"comment": "c" * 1500}
+        tar.addfile(info)
+
+    dest = formatted_archive(tmp_path / "c.tar.gz", build, format=tarfile.PAX_FORMAT)
+    with pytest.raises(ArchiveError, match="more header than a box's archive ever has"):
+        verify(dest)
+    monkeypatch.setattr(archive, "_HEADER_ROOM", 4096)
+    verify(dest)
+
+
+def test_the_manifest_may_be_as_large_as_the_file_records_and_no_larger():
+    assert archive._MANIFEST_LIMIT == store.MAX_TOML_BYTES == 64 * 1024 * 1024
+    assert (archive._HEADER_ROOM, archive._HEADER_LINES, archive._ENTRY_HEADER_BYTES) == (2048, 16, 16 * 1024)
