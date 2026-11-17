@@ -22,12 +22,44 @@ PWN_BROKER_OPT sets the install folder, an absolute path (default /opt/pwn-broke
 HELP
 }
 
+# The app's colours for a status line (theme.py: Mint for ok, Raspberry for fail, and its text
+# colour), at the depth the app picks for the same terminal, so these lines and the ones
+# `pwn-broker setup` prints in the middle look alike. Sets WORD, TEXT and OFF for stream $1 and
+# status $2. All three are empty when the stream is not a terminal, when NO_COLOR is set, and
+# on a terminal with no colour.
+paint() {
+    WORD="" TEXT="" OFF=""
+    [ -t "$1" ] || return 0
+    [ -z "${NO_COLOR-}" ] || return 0
+    case "${TERM-}" in dumb | unknown) return 0 ;; esac
+    depth=16
+    case "${TERM-}" in *-256color | *-kitty) depth=256 ;; esac
+    case "${COLORTERM-}" in truecolor | 24bit) depth=full ;; esac
+    case "$depth:$2" in
+        full:ok) word="38;2;61;220;151" ;;
+        full:fail) word="38;2;240;98;146" ;;
+        256:ok) word="38;5;78" ;;
+        256:fail) word="38;5;204" ;;
+        16:ok) word="92" ;;
+        *) word="91" ;;
+    esac
+    case "$depth" in
+        full) text="38;2;232;230;225" ;;
+        256) text="38;5;253" ;;
+        *) text="97" ;;
+    esac
+    esc="$(printf '\033')"
+    WORD="${esc}[${word}m" TEXT="${esc}[${text}m" OFF="${esc}[0m"
+}
+
 ok() {
-    printf 'ok    %s\n' "$1"
+    paint 1 ok
+    printf '%sok%s%s    %s%s\n' "$WORD" "$OFF" "$TEXT" "$1" "$OFF"
 }
 
 fail() {
-    printf 'fail  %s\n' "$1" >&2
+    paint 2 fail
+    printf '%sfail%s%s  %s%s\n' "$WORD" "$OFF" "$TEXT" "$1" "$OFF" >&2
     exit 1
 }
 
@@ -99,7 +131,8 @@ finish() {
         put_back app
         put_back python
         if [ "$KEPT" -eq 1 ]; then
-            printf 'fail  %s\n' "could not put the previous install back. it is in $WORK" >&2 || true
+            paint 2 fail
+            printf '%sfail%s%s  %s%s\n' "$WORD" "$OFF" "$TEXT" "could not put the previous install back. it is in $WORK" "$OFF" >&2 || true
             return 0
         fi
         if [ "$PUT_BACK" -eq 1 ]; then

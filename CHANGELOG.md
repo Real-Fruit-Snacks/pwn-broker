@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+The installer prints its `ok` and `fail` lines in the app's colours. Three lines in the middle of an install come from the app and were green, while the installer's own were plain, so one install looked like two programs. Piped output, `NO_COLOR` and a terminal with no colour still get plain text.
+
 Fixed: the summary `finish` shows before it asks said `(will be removed)` for every tool in the box's record, whatever `finish` then did.
 
 - A tool another unfinished box has is now listed as `kerbrute 1.0.3   (will be kept; forest still uses it)`, which is what the line after the archive has said since 0.1.2.

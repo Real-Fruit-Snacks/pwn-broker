@@ -339,6 +339,107 @@ def ok_lines(result):
     return [row for row in result.stdout.splitlines() if row.startswith("ok")]
 
 
+def on_a_terminal(rig, *args, **extra_env):
+    """What the installer writes when its output is a terminal, both streams on one."""
+    import pty
+
+    env = {
+        k: v for k, v in os.environ.items() if k not in ("NO_COLOR", "COLORTERM", "TERM", "FORCE_COLOR")
+    }
+    env.update(PWN_BROKER_OPT=rig.opt_text, HOME=rig.home.as_posix(), **extra_env)
+    ours, theirs = pty.openpty()
+    try:
+        done = subprocess.run(
+            [rig.shell, str(SCRIPT), *args], stdin=subprocess.DEVNULL, stdout=theirs, stderr=theirs, env=env
+        )
+    finally:
+        os.close(theirs)
+    written = b""
+    try:
+        while piece := os.read(ours, 65536):
+            written += piece
+    except OSError:  # the other end is closed: everything was read
+        pass
+    finally:
+        os.close(ours)
+    return done.returncode, written.decode().replace("\r\n", "\n").splitlines()
+
+
+def broken_release(rig):
+    release = rig.tmp / "plain" / RELEASE_NAME
+    release.parent.mkdir()
+    release.write_bytes(b"not a release")
+    return release
+
+
+# the escape codes the app writes for the same colours at each depth (theme.py through rich)
+DEPTHS = {
+    "full": ("38;2;61;220;151", "38;2;240;98;146", "38;2;232;230;225"),
+    "256": ("38;5;78", "38;5;204", "38;5;253"),
+    "16": ("92", "91", "97"),
+}
+TERMINALS = [
+    ("full", {"TERM": "xterm-256color", "COLORTERM": "truecolor"}),
+    ("full", {"TERM": "xterm", "COLORTERM": "24bit"}),
+    ("256", {"TERM": "xterm-256color"}),
+    ("256", {"TERM": "xterm-kitty"}),
+    ("16", {"TERM": "xterm"}),
+    ("16", {"TERM": "linux", "COLORTERM": "yes"}),
+]
+
+
+@not_on_windows
+@pytest.mark.parametrize(("depth", "terminal"), TERMINALS)
+def test_on_a_terminal_the_status_lines_have_the_app_s_colours(rig, depth, terminal):
+    mint, raspberry, text = DEPTHS[depth]
+    release = broken_release(rig)
+    status, lines = on_a_terminal(rig, "--from", str(release), "--no-path", **terminal)
+    assert status == 1
+    off = "\x1b[0m"
+    assert lines[0] == f"\x1b[{mint}mok{off}\x1b[{text}m    install folder {rig.opt_text}{off}"
+    assert lines[1].startswith(f"\x1b[{mint}mok{off}\x1b[{text}m    release file {RELEASE_NAME}, SHA-256 ")
+    said = f"{RELEASE_NAME} is not a pwn-broker release file"
+    assert lines[2:] == [f"\x1b[{raspberry}mfail{off}\x1b[{text}m  {said}{off}"]
+
+
+@not_on_windows
+def test_the_installer_s_colours_are_the_ones_the_app_writes():
+    from rich.color import ColorSystem
+    from rich.style import Style
+
+    from pwn_broker import theme
+
+    systems = {"full": ColorSystem.TRUECOLOR, "256": ColorSystem.EIGHT_BIT, "16": ColorSystem.STANDARD}
+    for depth, codes in DEPTHS.items():
+        for code, color in zip(codes, (theme.MINT, theme.RASPBERRY, theme.TEXT), strict=True):
+            assert Style(color=color).render("x", color_system=systems[depth]) == f"\x1b[{code}mx\x1b[0m"
+
+
+@not_on_windows
+@pytest.mark.parametrize(
+    "terminal",
+    [
+        {"TERM": "xterm-256color", "COLORTERM": "truecolor", "NO_COLOR": "1"},
+        {"TERM": "dumb", "COLORTERM": "truecolor"},
+        {"TERM": "unknown"},
+    ],
+)
+def test_on_a_terminal_without_colour_the_status_lines_are_plain(rig, terminal):
+    release = broken_release(rig)
+    status, lines = on_a_terminal(rig, "--from", str(release), "--no-path", **terminal)
+    assert status == 1
+    assert lines[0] == f"ok    install folder {rig.opt_text}"
+    assert lines[2:] == [f"fail  {RELEASE_NAME} is not a pwn-broker release file"]
+
+
+def test_off_a_terminal_the_status_lines_are_plain_whatever_the_terminal(rig):
+    release = broken_release(rig)
+    result = rig.run("--from", sh_path(release), "--no-path", TERM="xterm-256color", COLORTERM="truecolor")
+    assert result.returncode == 1
+    assert "\x1b" not in result.stdout + result.stderr
+    assert result.stdout.splitlines()[0] == f"ok    install folder {rig.opt_text}"
+
+
 def test_a_full_install_runs_every_step_in_order(rig):
     result = rig.install()
     assert result.returncode == 0, result.stderr

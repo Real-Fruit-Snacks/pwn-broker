@@ -350,6 +350,7 @@ Built on `prompt_toolkit` for the prompt and `rich` for tables.
 - No emoji, no gradients, no banner art. Sentence case.
 - The status bar shows the box, the current target and its IP, the number of targets and the time on the box.
 - `NO_COLOR` is respected. Terminals without full colour get the nearest match.
+- `install.sh` prints its `ok` and `fail` lines in the same colours, chosen by the same rule: Mint and Raspberry for the word and the text colour for the rest, at the terminal's depth, and plain when the output is not a terminal, with `NO_COLOR`, or when `TERM` is `dumb`. The lines `pwn-broker setup` prints in the middle of an install then look like the installer's own.
 
 **Feel.**
 
