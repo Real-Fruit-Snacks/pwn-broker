@@ -218,6 +218,10 @@ _SHARED_HOME = frozenset(
 )
 # where programs keep a folder of their own, by their own name
 _HOME_PARENTS = (".config", ".local/share", ".local/state", ".cache")
+# the first part of every place named above, in lower case
+_NOT_OWN = frozenset(
+    place.split("/")[0].lower() for place in (*_PRIVATE_HOME, *_SHARED_HOME, *_HOME_PARENTS)
+)
 HOME_RULE = (
     "has to be .<name>, or <name> under .config, .local/share, .local/state or .cache, "
     "where <name> is the tool's name or one of its commands'"
@@ -232,7 +236,9 @@ def own_home_folder(entry: str, names: set[str]) -> bool:
     anything inside it. `names` is the tool's name and its commands', in lower case.
     """
     parts = entry.split("/")
-    if parts[0][:1] == "." and parts[0][1:].lower() in names:
+    # .config is not the folder of a command named config: a place the lists name, or one that
+    # leads to one, is nobody's own whatever the tool is called
+    if parts[0][:1] == "." and parts[0][1:].lower() in names and parts[0].lower() not in _NOT_OWN:
         return True
     for parent in _HOME_PARENTS:
         above = parent.split("/")

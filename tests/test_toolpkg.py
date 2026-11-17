@@ -1435,3 +1435,47 @@ def test_the_count_of_folders_stops_at_the_limit(tmp_path, monkeypatch):
     finally:
         tracemalloc.stop()
     assert peak < 20 * 1024 * 1024
+
+
+@pytest.mark.parametrize(
+    ("command", "entry"),
+    [
+        ("config", ".config/google-chrome"),
+        ("config", ".config/rclone/rclone.conf"),
+        ("Config", ".config/xfce4"),
+        ("local", ".local/share/kwalletd"),
+        ("local", ".local/lib/python3.13/site-packages"),
+        ("cache", ".cache/huggingface"),
+        ("cache", ".Cache/huggingface"),
+        ("bashrc", ".bashrc/x"),
+        ("gnupg", ".GnuPG/private-keys-v1.d"),
+    ],
+)
+def test_a_command_named_like_a_shared_place_does_not_own_what_is_inside_it(command, entry):
+    data = sample_manifest(
+        command=[{"name": command, "type": "binary", "path": "files/kerbrute"}],
+        data={"home": [entry]},
+    )
+    expect_error(data, "data.home")
+
+
+@pytest.mark.parametrize("name", ["config", "local", "cache"])
+def test_a_tool_named_like_a_shared_place_does_not_own_what_is_inside_it(name):
+    data = sample_manifest(
+        name=name,
+        command=[{"name": "x-" + name, "type": "binary", "path": "files/kerbrute"}],
+        data={"home": [f".{name}/BraveSoftware"]},
+    )
+    expect_error(data, "data.home")
+
+
+@pytest.mark.parametrize(
+    ("command", "entry"),
+    [("config", ".config/config"), ("cache", ".cache/cache/x"), ("local", ".local/share/local")],
+)
+def test_a_command_named_like_a_shared_place_still_owns_its_folder_inside_one(command, entry):
+    data = sample_manifest(
+        command=[{"name": command, "type": "binary", "path": "files/kerbrute"}],
+        data={"home": [entry]},
+    )
+    assert parse_manifest(data).home == [entry]
