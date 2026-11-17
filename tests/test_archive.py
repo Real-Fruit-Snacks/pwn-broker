@@ -1337,3 +1337,43 @@ def test_unpacking_reads_no_more_than_a_piece_at_a_time(tmp_path):
     dest = hand_archive(tmp_path / "x.tar.gz", {"a": b"x"})
     with archive._open(dest) as tar:
         assert tar.copybufsize == archive._PIECE == 64 * 1024
+
+
+def test_a_file_entry_that_names_a_link_target_is_refused(tmp_path):
+    # tarfile keeps it on the entry, and an extended header can make it 64 KiB long
+    def build(tar):
+        info = tarfile.TarInfo("b/x")
+        info.linkname = "l" * 60_000
+        tar.addfile(info)
+
+    dest = formatted_archive(tmp_path / "l.tar.gz", build, format=tarfile.PAX_FORMAT)
+    with tarfile.open(dest) as tar:
+        assert len(tar.getmember("b/x").linkname) == 60_000 and tar.getmember("b/x").isreg()
+    for check in (verify, peek_folder, lambda path: unpack(path, tmp_path / "active")):
+        with pytest.raises(ArchiveError, match="names a link target"):
+            check(dest)
+
+
+def test_the_entries_keep_no_owner_names(tmp_path):
+    def build(tar):
+        info = tarfile.TarInfo("b/x")
+        info.uname = "u" * 30_000
+        info.gname = "g" * 30_000
+        tar.addfile(info)
+
+    dest = formatted_archive(tmp_path / "o.tar.gz", build, format=tarfile.PAX_FORMAT)
+    with tarfile.open(dest) as tar:
+        assert len(tar.getmember("b/x").uname) == 30_000
+    with archive._open(dest) as tar:
+        assert {(m.uname, m.gname) for m in archive._members(tar)} == {("", "")}
+    verify(dest)
+    assert (unpack(dest, tmp_path / "active") / "x").exists()
+
+
+@pytest.mark.parametrize("top", [".x", ".import-abc", ".forest.replaced-0a1b2c3d"])
+def test_an_archive_whose_folder_starts_with_a_dot_is_refused(tmp_path, top):
+    dest = hand_archive(tmp_path / "dot.tar.gz", {"a": b"x"}, top=top)
+    for check in (verify, peek_folder, lambda path: unpack(path, tmp_path / "active")):
+        with pytest.raises(ArchiveError, match="starts with a dot"):
+            check(dest)
+    assert not (tmp_path / "active").exists() or list((tmp_path / "active").iterdir()) == []

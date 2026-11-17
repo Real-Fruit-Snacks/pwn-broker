@@ -558,3 +558,23 @@ def test_a_whole_number_of_seconds_is_still_a_file_time(box):
     row = {"path": "a.txt", "target": "", "first_seen": NOW, "size": 1, "mtime": 2, "sha256": "ab"}
     write_toml(box.path / "files.toml", {"schema": 1, "file": [row]})
     assert load_files(box)[0].mtime == 2
+
+
+def test_a_time_from_before_1970_is_refused_and_one_from_a_clock_never_set_is_read(box):
+    rewrite(box.path / "box.toml", set_to("started", NOW.replace(year=1970)))
+    assert load_box(box.path).started.year == 1970
+    rewrite(box.path / "box.toml", set_to("started", NOW.replace(year=1969)))
+    with pytest.raises(StoreError, match="invalid content"):
+        load_box(box.path)
+
+
+def test_a_file_too_large_to_be_one_of_a_boxes_is_not_read(box, monkeypatch):
+    monkeypatch.setattr(store, "MAX_TOML_BYTES", (box.path / "box.toml").stat().st_size - 1)
+    monkeypatch.setattr(store.tomllib, "loads", lambda text: pytest.fail("read"))
+    with pytest.raises(StoreError, match="it is larger than"):
+        load_box(box.path)
+
+
+def test_a_file_at_the_size_limit_is_read(box, monkeypatch):
+    monkeypatch.setattr(store, "MAX_TOML_BYTES", (box.path / "box.toml").stat().st_size)
+    assert load_box(box.path).id == box.id

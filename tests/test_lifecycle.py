@@ -1102,3 +1102,43 @@ def test_finish_removes_the_folder_when_a_file_whose_name_is_not_utf8_did_not_ch
     answers(session, "y", "y")
     assert finish_box(session, **SAVED, close=lambda paths, box: False) is not None
     assert not session.box.path.exists()
+
+
+def test_finish_keeps_the_folder_when_the_command_history_grew_after_the_archive(session):
+    stand_in, signalled = window()
+    history = session.box.path / ".history"
+    history.write_text("+status\n")
+    answers(session, "y", "y")
+    at_the_remove_question(session, lambda: history.write_text("+status\n+cred add admin\n"))
+    assert finish_box(session, **SAVED, **stand_in) is not None
+    assert history.exists() and signalled == []
+    assert kinds(session, "warn") == [".history changed after the archive was made; the folder was kept"]
+
+
+def test_finish_removes_the_folder_when_the_command_history_did_not_change(session):
+    (session.box.path / ".history").write_text("+status\n+finish\n")
+    answers(session, "y", "y")
+    assert finish_box(session, **SAVED, close=lambda paths, box: False) is not None
+    assert not session.box.path.exists()
+
+
+def test_an_import_that_is_refused_closes_no_window(session, tmp_path):
+    stand_in, signalled = window(open_now=False)
+    archive = boxless_archive(tmp_path / "x.tar.gz", session.box.path.name, {"readme": b"hello"})
+    console = FakeConsole(["y"])
+    assert import_box(session.paths, Settings(), console, archive, lambda: NOW, **stand_in) is None
+    assert signalled == [] and load_box(session.box.path).id == session.box.id
+
+
+def test_an_import_that_replaces_a_box_closes_its_window_once_the_new_one_opens(session):
+    stand_in, signalled = window(open_now=False)
+    archive = export_box(session, **NOFIX)
+    box = import_box(session.paths, Settings(), FakeConsole(["y"]), archive, lambda: NOW, **stand_in)
+    assert box is not None and signalled == [session.box.path]
+
+
+def test_import_refuses_an_archive_whose_folder_starts_with_a_dot(session, tmp_path):
+    archive = renamed_copy(export_box(session, **NOFIX), tmp_path / "copy.tar.gz", ".hidden")
+    console = FakeConsole()
+    assert import_box(session.paths, Settings(), console, archive, lambda: NOW) is None
+    assert sorted(p.name for p in session.paths.active.iterdir()) == [session.box.path.name]

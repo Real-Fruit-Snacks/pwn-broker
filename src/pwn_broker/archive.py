@@ -213,6 +213,9 @@ def _top_folder(members: Iterable[tarfile.TarInfo]) -> str:
         first = member.name.split("/", 1)[0]
         if first in ("", ".", ".."):
             raise ArchiveError(f"archive entry {member.name!r} is not inside a folder")
+        if first.startswith("."):
+            # the app's own temporary folders in active/ start with one, and no list shows such a folder
+            raise ArchiveError(f"archive's folder {first[:60]!r} starts with a dot, which a box's never does")
         if top is None:
             top = first
         elif first != top:
@@ -324,8 +327,10 @@ def _members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
             # its records are copied onto every entry that follows
             raise ArchiveError("archive has a global extended header, which a box's archive never has")
         _check_member(member)
-        # tarfile keeps the records of each entry's own extended header; nothing here reads them
+        # tarfile keeps the records of each entry's own extended header, and the owner's names,
+        # which such a record may make as long as a header may be; nothing here reads them
         member.pax_headers = {}
+        member.uname = member.gname = ""
         names += len(member.name.encode("utf-8", "surrogateescape"))
         if len(members) == MAX_ENTRIES or names > _MAX_NAMES_BYTES:
             raise ArchiveError(f"archive has more than {MAX_ENTRIES} entries, or names too long to hold")
@@ -422,6 +427,9 @@ def _check_member(member: tarfile.TarInfo) -> None:
         raise ArchiveError(f"archive entry {name[:60]!r}... has a name longer than a path may be")
     if not (member.isreg() or member.isdir()):
         raise ArchiveError(f"archive entry {name!r} is not a regular file or folder")
+    if member.linkname:
+        # kept on every entry, and an extended header can make it as long as a header may be
+        raise ArchiveError(f"archive entry {name[:60]!r} names a link target, which a file or folder has none of")
     if member.issparse():
         # a few hundred bytes can stand for any number of gigabytes of zeros
         raise ArchiveError(f"archive entry {name!r} is a sparse file, which a box's archive never holds")

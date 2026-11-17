@@ -135,13 +135,15 @@ _REWRITTEN = frozenset({"box.toml"})
 
 
 _Seen = dict[str, tuple[int, float]]
+_HISTORY = ".history"
 
 
 def _look(session: Session) -> tuple[_Seen, _Seen, list[str]]:
     """The size and time of every file in the box, with none of them read.
 
-    Returns the files the records list, the files they cannot (a name that is not UTF-8), and
-    what could not be looked at. A link or special file is in none of them: it is never archived.
+    Returns the files the records list, the files the archive holds that they do not (a name
+    that is not UTF-8, and the box's command history), and what could not be looked at. A link
+    or special file is in none of them: it is never archived.
     """
     unlisted: _Seen = {}
     unread: list[str] = []
@@ -159,6 +161,15 @@ def _look(session: Session) -> tuple[_Seen, _Seen, list[str]]:
 
     # a limit below any size: no file is hashed, only its size and time are taken
     found = scan(session.box, [], now=session.clock(), limit=-1, on_skip=on_skip)
+    # the app's own file that is packed and that a second prompt on the box can still add to
+    try:
+        st = os.lstat(session.box.path / _HISTORY)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        unread.append(_HISTORY)
+    else:
+        unlisted[_HISTORY] = (st.st_size, st.st_mtime)
     return {r.path: (r.size, r.mtime) for r in found}, unlisted, unread
 
 
@@ -389,11 +400,14 @@ def import_box(
             replace = console.confirm(f"a box named {folder} is already here. replace it?")
             if not replace:
                 return None
-            _close_replaced(paths, console, folder, unsaved, close)
+
         def check(unpacked: Path) -> None:
             twin = _same_box_elsewhere(paths, _opens(unpacked).id, folder)
             if twin is not None:
                 raise ArchiveError(f"this box is already here as {twin}, under another folder name")
+            if replace:
+                # only now that the new box is known to open: a refused archive closes no window
+                _close_replaced(paths, console, folder, unsaved, close)
 
         box = load_box(unpack(archive, paths.active, replace=replace, check=check))
         if box.status == "finished":

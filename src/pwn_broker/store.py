@@ -53,8 +53,15 @@ def write_toml(path: Path, data: dict) -> None:
     write_text(path, tomli_w.dumps(data))
 
 
+# The most of one of a box's files that is read: four times the largest manifest an archive
+# may hold, which lists the same files. A megabyte of gzip unpacks to a gigabyte of box.toml.
+MAX_TOML_BYTES = 256 * 1024 * 1024
+
+
 def read_toml(path: Path) -> dict:
     try:
+        if path.stat().st_size > MAX_TOML_BYTES:
+            raise StoreError(f"cannot read {path}: it is larger than {MAX_TOML_BYTES // 1048576} MiB")
         return tomllib.loads(path.read_text(encoding="utf-8"))
     except RecursionError as exc:
         raise StoreError(f"cannot read {path}: it is nested too deeply") from exc
@@ -117,7 +124,7 @@ def _is_a(value, kind) -> bool:
         return False
     if kind is datetime:
         # a year the app can still convert between time zones
-        return isinstance(value, datetime) and 1980 <= value.year < 9000
+        return isinstance(value, datetime) and 1970 <= value.year < 9000
     if kind is float:
         return isinstance(value, (int, float))
     if kind is list:
@@ -138,7 +145,10 @@ def _aware(value):
     # every time the app writes carries its offset. One written by hand without it is taken as
     # local time, so that it can be put in order with the others.
     if isinstance(value, datetime) and value.tzinfo is None:
-        return value.astimezone()
+        try:
+            return value.astimezone()
+        except (OverflowError, OSError, ValueError) as exc:
+            raise TypeError("a time without an offset is too early to take as local time") from exc
     return value
 
 
