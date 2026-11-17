@@ -990,3 +990,31 @@ def test_a_file_whose_name_is_not_utf8_is_packed_and_unpacked_under_that_name(fi
     folder = unpack(dest, tmp_path / "elsewhere")
     with open(os.path.join(os.fsencode(folder / "targets/dc01/loot"), b"caf\xe9 \xff.txt"), "rb") as fh:
         assert fh.read() == b"loot"
+
+
+def test_unpack_refuses_an_archive_that_would_not_fit_and_writes_nothing(filled, tmp_path, monkeypatch):
+    dest = tmp_path / "out.tar.gz"
+    pack(filled, dest)
+    active = tmp_path / "active"
+    asked = []
+
+    def disk_usage(path):
+        asked.append(path)
+        return shutil._ntuple_diskusage(100, 97, 3)
+
+    monkeypatch.setattr(archive.shutil, "disk_usage", disk_usage)
+    monkeypatch.setattr(tarfile.TarFile, "extractall", raising(AssertionError("unpacked")))
+    with pytest.raises(ArchiveError, match="unpacks to 1 MiB and .* has 0 MiB free"):
+        unpack(dest, active)
+    assert asked == [active] and list(active.iterdir()) == []
+
+
+def test_unpack_counts_only_what_the_files_hold(filled, tmp_path, monkeypatch):
+    dest = tmp_path / "out.tar.gz"
+    pack(filled, dest)
+    with tarfile.open(dest) as tar:
+        needed = sum(m.size for m in tar.getmembers() if m.isreg())
+    monkeypatch.setattr(
+        archive.shutil, "disk_usage", lambda path: shutil._ntuple_diskusage(needed, 0, needed)
+    )
+    assert (unpack(dest, tmp_path / "active") / "notes.md").read_text() == "hello"

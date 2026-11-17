@@ -20,6 +20,7 @@ from pwn_broker.store import SCHEMA, write_toml
 
 MANIFEST = "manifest.toml"
 _CHUNK = 1024 * 1024
+_MIB = 1024 * 1024
 _MANIFEST_LIMIT = 64 * 1024 * 1024
 _READ_ERRORS = (tarfile.TarError, OSError, EOFError, zlib.error)
 
@@ -295,6 +296,16 @@ def _check_member(member: tarfile.TarInfo) -> None:
         raise ArchiveError(f"archive entry {name!r} is a sparse file, which a box's archive never holds")
 
 
+def _check_room(members: list[tarfile.TarInfo], active: Path) -> None:
+    # a megabyte of gzip can hold a gigabyte of zeros: known before the disk is full, not after
+    needed = sum(member.size for member in members if member.isreg())
+    free = shutil.disk_usage(active).free
+    if needed > free:
+        raise ArchiveError(
+            f"the archive unpacks to {needed // _MIB + 1} MiB and {active} has {free // _MIB} MiB free"
+        )
+
+
 def unpack(
     archive: Path,
     active: Path,
@@ -320,6 +331,7 @@ def unpack(
             if os.path.lexists(final) and not replace:
                 raise ArchiveError(f"{final} already exists")
             active.mkdir(parents=True, exist_ok=True)
+            _check_room(members, active)
             tmp = Path(tempfile.mkdtemp(prefix=".import-", dir=active))
             tar.extractall(tmp, filter=tarfile.data_filter)
         if check is not None:
