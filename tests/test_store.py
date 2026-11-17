@@ -1,6 +1,6 @@
 import os
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from helpers import NASTY, NOW, make_cred
@@ -578,3 +578,18 @@ def test_a_file_too_large_to_be_one_of_a_boxes_is_not_read(box, monkeypatch):
 def test_a_file_at_the_size_limit_is_read(box, monkeypatch):
     monkeypatch.setattr(store, "MAX_TOML_BYTES", (box.path / "box.toml").stat().st_size)
     assert load_box(box.path).id == box.id
+
+
+def test_a_time_with_no_offset_that_cannot_be_taken_as_local_time_is_a_store_error(box, monkeypatch):
+    # what astimezone raises differs by platform for a time near the start of 1970, so it is stood in for
+    class TooEarly(datetime):
+        def astimezone(self, tz=None):
+            raise OverflowError("timestamp out of range for platform time_t")
+
+    early = TooEarly(1970, 1, 1)
+    with pytest.raises(TypeError, match="too early to take as local time"):
+        store._aware(early)
+    real = store.read_toml
+    monkeypatch.setattr(store, "read_toml", lambda path: {**real(path), "started": early})
+    with pytest.raises(StoreError, match="invalid content"):
+        load_box(box.path)

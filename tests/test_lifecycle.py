@@ -1141,4 +1141,7 @@ def test_import_refuses_an_archive_whose_folder_starts_with_a_dot(session, tmp_p
     archive = renamed_copy(export_box(session, **NOFIX), tmp_path / "copy.tar.gz", ".hidden")
     console = FakeConsole()
     assert import_box(session.paths, Settings(), console, archive, lambda: NOW) is None
+    # refused for its name, before it is taken for the box that is already here
+    [line] = [t for k, t in console.lines if k == "fail"]
+    assert line == "import failed: archive's folder '.hidden' starts with a dot, which a box's never does"
     assert sorted(p.name for p in session.paths.active.iterdir()) == [session.box.path.name]
