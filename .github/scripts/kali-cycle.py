@@ -1383,12 +1383,17 @@ def step_finish(s: State) -> None:
 def step_import(s: State) -> None:
     s.logged = len(tool_log())
     # cli.start prints no header for an import
+    # hostflow.on_import shows the lines the archive asks for and asks before any is written:
+    # finish took them out, so they are not in place. The names are under .local, a lab domain,
+    # so none is marked
     t = launch(
         "import",
         [str(BIN / "pwn-broker"), "import", str(s.finished)],
-        field_row("tools", f"{TOOL} {TOOL_VERSION}, {PY_TOOL} {PY_VERSION}", RESTORE_LONGEST),
+        field_row("hosts", f"{s.ip} {HOSTNAME} {LATER}", "hosts"),
         header=False,
     )
+    t.answer(confirm("this box wants these lines in /etc/hosts. add them?", False), "y", "the import's /etc/hosts question")
+    t.wait(field_row("tools", f"{TOOL} {TOOL_VERSION}, {PY_TOOL} {PY_VERSION}", RESTORE_LONGEST), "the tools row")
     # toolhooks._restore asks first and installs in the box's order, a runtime before the tool
     # that requires it; lifecycle.import_box reports after its hooks; cli.start's
     # hostflow.on_open puts the line back, then opens the note: none is open since finish closed it
