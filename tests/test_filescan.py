@@ -7,9 +7,9 @@ from datetime import timedelta
 import pytest
 
 from helpers import NOW, odd_name
-from pwn_broker.store import save_files
 from pwn_broker import filescan
 from pwn_broker.filescan import is_app_file, scan, sha256_file
+from pwn_broker.store import save_files
 
 
 @pytest.fixture
