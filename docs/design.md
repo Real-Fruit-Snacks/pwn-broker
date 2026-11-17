@@ -1419,6 +1419,7 @@ Making the environment runs the runtime's interpreter. That is the one new thing
 
 - One build of a runtime is on the machine at a time, shared by every tool that requires it.
 - A runtime is needed while any installed tool requires it. The app works that out from the installed tools; a runtime has no list of users of its own.
+- `finish` says what became of each tool the box held: `ok    kerbrute 1.0.3 removed` when its files were deleted, `ok    kerbrute 1.0.3 kept; forest still uses it` when another unfinished box has it. A tool the box no longer held gets no line.
 - At `finish` and at `tool remove`, after the tools are gone, any runtime no installed tool requires is removed: `ok    python-3.13 3.13.18 removed (runtime)`. While a box folder cannot be read, it may hold a tool that requires the runtime, so nothing is removed and a `warn` line names the box. The launch checks offer to remove a runtime no installed tool requires, and the check for files left behind covers runtimes too.
 - `box.toml` records, with each tool, the runtime it was built on: name, version, build and SHA-256. It is a note of what ran, not a pin: any build of a runtime serves any tool built for its series.
 - `import`, and reopening a finished box, install the tools again as now, and with them whatever runtime they require: the one already on the machine, or the latest build in the index. When that is not the build the box recorded, the app says so and carries on: `ok    certipy now runs on python-3.13 3.13.18-2; this box used 3.13.18-1 before`.

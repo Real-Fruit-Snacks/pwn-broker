@@ -415,11 +415,20 @@ def _undo_one(
 ) -> None:
     box, name = session.box, record.name
     item = installed.get(name)
+    held = item is not None and box.id in item.users
     doomed: list[Path] = []
     if item is not None:
         others = _others(item, box.id, unfinished)
         doomed = home_to_delete(session.console, item, homes, others, session.copied_in_full)
-    release_tool(session, record, "finish", installed=installed, unfinished=unfinished)
+    gone = release_tool(session, record, "finish", installed=installed, unfinished=unfinished)
+    # said before the home data goes, so a failure there does not hide what was done
+    after = installed.get(name)
+    if gone:
+        session.console.ok(f"{name} {record.version} removed")
+    elif held and after is not None and after.users:
+        users = [unfinished.get(u, "another box") for u in after.users]
+        verb = "still uses" if len(users) == 1 else "still use"
+        session.console.ok(f"{name} {record.version} kept; {', '.join(users)} {verb} it")
     tooldata.delete(doomed, homes)
 
 

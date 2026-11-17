@@ -409,7 +409,7 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 `finish` shows a summary (the box, its targets, its files, the archive's path, the `/etc/hosts` lines and tools it will remove) and asks `finish this box? [y/N]`. Then it:
 
 - writes `~/pwn-broker/wrapped/<box folder>.finished.tar.gz`, and a copy to `copy_to` if that is set;
-- removes the box's `/etc/hosts` lines after the archive is verified, takes off the tools and runtimes no other unfinished box uses, and asks whether to stop the app's VPN if it is still up (the default keeps it);
+- removes the box's `/etc/hosts` lines after the archive is verified, takes off the tools and runtimes no other unfinished box uses, with a line for each (`ok    kerbrute 1.0.3 removed`, or `ok    kerbrute 1.0.3 kept; forest still uses it` for a tool another box has), and asks whether to stop the app's VPN if it is still up (the default keeps it);
 - asks `remove working folder? [y/N]`, and on yes closes the note window and removes the folder, unless the note has unsaved changes, changed since the archive was made, or its window did not close.
 
 It refuses while a window is recording for the box or one of the box's tools is running, and names them. A box whose archive already exists asks `replace the existing archive?`, which is only ever asked about the same box.

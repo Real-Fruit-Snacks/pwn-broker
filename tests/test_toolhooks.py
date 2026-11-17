@@ -248,6 +248,33 @@ def test_undo_leaves_a_tool_and_its_data_to_another_unfinished_box(tooled, other
     assert (user / ".kerbrute").exists()
 
 
+def test_undo_says_each_tool_it_removed(tooled):
+    toolhooks.undo(tooled)
+    assert lines(tooled, "ok") == ["kerbrute 1.0.3 removed"]
+
+
+def test_undo_says_which_box_keeps_a_tool(tooled, other):
+    item = load_installed(tooled.paths)["kerbrute"]
+    item.users.append(other.id)
+    toolstate.save_installed(tooled.paths, {"kerbrute": item})
+    toolhooks.undo(tooled)
+    assert lines(tooled, "ok") == ["kerbrute 1.0.3 kept; Cascade still uses it"]
+
+
+def test_undo_says_nothing_for_a_tool_the_box_did_not_hold(tooled, other):
+    item = load_installed(tooled.paths)["kerbrute"]
+    item.users = [other.id]
+    toolstate.save_installed(tooled.paths, {"kerbrute": item})
+    toolhooks.undo(tooled)
+    assert lines(tooled, "ok") == []
+
+
+def test_undo_says_nothing_for_a_tool_that_was_already_gone(tooled):
+    wipe(tooled)
+    toolhooks.undo(tooled)
+    assert lines(tooled, "ok") == []
+
+
 def test_undo_tries_every_tool_then_raises(tooled, shop, user, monkeypatch):
     other_command = [{"name": "other-tool", "type": "binary", "path": "files/kerbrute"}]
     zip2, entry2 = toolkit.make_entry(

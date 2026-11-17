@@ -1,6 +1,6 @@
 # What has been tested
 
-Everything pwn-broker 0.1.0 has been run on, with the counts, versions and dates, and everything it has not. The [README](../README.md#tested-on) has the short list. The checks still to run by hand on a real Kali desktop are in [kali-checks.md](kali-checks.md).
+Everything pwn-broker has been run on, up to 0.1.1, with the counts, versions and dates, and everything it has not. The [README](../README.md#tested-on) has the short list. The checks still to run by hand on a real Kali desktop are in [kali-checks.md](kali-checks.md).
 
 ## Unit tests
 
@@ -15,7 +15,7 @@ Everything pwn-broker 0.1.0 has been run on, with the counts, versions and dates
 - **`installer`**: `sh -n`, `dash -n` and shellcheck pass on `install.sh` and `.github/scripts/kali-cycle.sh`. The release file was installed twice into a temporary install folder and home. `pwn-broker --version` printed `pwn-broker 0.1.0`; `app/bin/python` is Python 3.13.18 and resolves to `python/bin/python3.13` in the install folder; `app/bin/asciinema --version` printed `asciinema 3.2.1`; `bin/record --help` printed `usage: record [target]`; the second run printed `PATH line already in` and left one PATH line.
 - **`installer`, with no Python and no network**: inside `debian:stable-slim` started with `--network none`, where the only network interface was `lo` and no `python` or `python3` was on PATH or in `/usr/bin` or `/usr/local/bin`, `sh install.sh --from <file>` ran to its last line as root, and `pwn-broker --version` and `asciinema --version` worked.
 - **`recording`**, on Ubuntu 24.04: the job installs the release file, and the three real-asciinema tests pass against the installed `app/bin/asciinema`. `record` records a real bash session and a real zsh session through a pseudo-terminal, and the test checks the `[rec dc01]` prefix, the recording marker, the `.cast` header and the text copy. Both sessions are recorded, and both show that asciinema writes the recording to disk as it happens, not at the end.
-- **The release workflow** (`.github/workflows/release.yml`): once by hand on `main` as a dry run that publishes nothing (run 43855237616), then for the tag `v0.1.0` (run 43863175415, commit f63e7a6). Both built the release file from the locks, installed it, and ran the unit suite against the release's own wheels on the installed Python. The tag's run then compared the release file, `install.sh` and the notes with the SHA-256 values the build recorded, and published `pwn-broker-0.1.0-linux-x86_64.tar.gz` (46,657,018 bytes), `SHA256SUMS.txt` and `install.sh`.
+- **The release workflow** (`.github/workflows/release.yml`): once by hand on `main` as a dry run that publishes nothing (run 43855237616), then for the tag `v0.1.0` (run 43863175415, commit f63e7a6). Both built the release file from the locks, installed it, and ran the unit suite against the release's own wheels on the installed Python. The tag's run then compared the release file, `install.sh` and the notes with the SHA-256 values the build recorded, and published `pwn-broker-0.1.0-linux-x86_64.tar.gz` (46,657,018 bytes), `SHA256SUMS.txt` and `install.sh`. The same again for `v0.1.1`: a dry run on `main` (run 44006917496), then the tag (run 44007195718, commit ab208b9), which published `pwn-broker-0.1.1-linux-x86_64.tar.gz` (46,667,263 bytes) with the SHA-256 the dry run had recorded for the same commit.
 - **`kali`**: one whole box in the official Kali image (`kalilinux/kali-rolling`, Kali 2026.3 at the time, with Python 3.14.10, zsh 5.9.2 and OpenVPN 2.7.8), as root.
   - After the packages were installed with the network on, the container was taken off its only network (`docker inspect` showed none; inside, only `lo`, `github.com` did not resolve, a connection to 1.1.1.1:443 failed). With the network off, `sh install.sh --from` the release file printed every `ok` line: the app's Python was 3.13.18 at `/opt/pwn-broker/python/bin/python3.13` while Kali's was 3.14.10 at `/usr/bin/python3.14`, and root's `.zshrc` was Kali's own plus the one PATH line.
   - The network was connected again, then the unit suite ran on Kali's own Python with the installed asciinema (3062 passed, 2 skipped, warnings treated as errors), and the whole box cycle ran on the app's bundled Python and ended with status 0.
@@ -68,6 +68,13 @@ At commit cf585e7.
 - On that install a new box was made and `tool install` ran for `kerbrute`, `pspy`, `certipy`, `targetedkerberoast`, `ligolo-ng` and `peass-ng`, each from the published index. `certipy` brought the `python-3.13` runtime; `status` showed 6 tools.
 - `kerbrute version`, `certipy -h`, `targetedKerberoast -h` and `ligolo-proxy -h` each started and printed their own first lines, and the ten upload files were in `/opt/pwn-broker/upload`. Kali's `python3` was still `/usr/bin/python3`, 3.14.7.
 - `finish` listed the six tools and the runtime as to be removed, wrote the archive and removed the folder. Afterwards `bin/` held only `pwn-broker` and `record`, `upload/` was empty, `tools.log` had an install and a finish line for each of the seven packages, and neither the note's vim nor its qterminal window was left.
+
+`v0.1.1`, over the `v0.1.0` install of the normal user below, in Kali 2026.2 under WSL 2 with no display.
+
+- The same `curl` line upgraded the install: `pwn-broker --version` printed `pwn-broker 0.1.1`, and nothing under `/opt/pwn-broker` belonged to anyone but that user.
+- A new box, then `tool install kerbrute` and `tool install git-dumper` from the published index of fourteen tools; `git-dumper` brought the `python-3.13` runtime, and `tool list` showed all fourteen with those two installed.
+- `finish` listed both tools and the runtime as to be removed, wrote the archive and removed the folder. Afterwards `bin/` held only `pwn-broker` and `record`, `tools/` only `installed.toml`, and `tools.log` had a finish line for each tool and for the runtime.
+- With the installed `vimrc`, a real vim in tmux marked the note unsaved after an edit and cleared the mark when it saved by itself six seconds later, which is the fix in this release.
 
 ### A normal user with `sudo`
 
