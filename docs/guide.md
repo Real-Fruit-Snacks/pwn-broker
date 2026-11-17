@@ -406,7 +406,7 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 
 ## Finish, export and import
 
-`finish` shows a summary (the box, its targets, its files, the archive's path, the `/etc/hosts` lines and tools it will remove) and asks `finish this box? [y/N]`. Then it:
+`finish` shows a summary (the box, its targets, its files, the archive's path, the `/etc/hosts` lines and tools it will remove) and asks `finish this box? [y/N]`. A tool another unfinished box has is listed as `(will be kept; forest still uses it)`, and a tool that was not installed again when the box was imported or reopened is not listed, since there is nothing to remove. Then it:
 
 - writes `~/pwn-broker/wrapped/<box folder>.finished.tar.gz`, and a copy to `copy_to` if that is set;
 - removes the box's `/etc/hosts` lines after the archive is verified, takes off the tools and runtimes no other unfinished box uses, with a line for each (`ok    kerbrute 1.0.3 removed`, or `ok    kerbrute 1.0.3 kept; forest still uses it` for a tool another box has), and asks whether to stop the app's VPN if it is still up (the default keeps it);

@@ -183,7 +183,69 @@ def test_summary_lists_no_home_path_another_box_still_uses(tooled, other):
     item = load_installed(tooled.paths)["kerbrute"]
     item.users.append(other.id)
     toolstate.save_installed(tooled.paths, {"kerbrute": item})
-    assert toolhooks.summary(tooled) == [("tools", "kerbrute 1.0.3   (will be removed)")]
+    assert toolhooks.summary(tooled) == [
+        ("tools", "kerbrute 1.0.3   (will be kept; Cascade still uses it)")
+    ]
+
+
+def test_summary_names_every_box_that_keeps_a_tool(tooled, other, paths):
+    from pwn_broker.boxes import create_box
+
+    third = create_box(
+        paths, name="Sauna", platform="htb", day=NOW.date(), os_name="windows",
+        difficulty="easy", now=NOW, new_id=lambda: "id-third",
+    )  # fmt: skip
+    item = load_installed(tooled.paths)["kerbrute"]
+    item.users += [other.id, third.id]
+    toolstate.save_installed(tooled.paths, {"kerbrute": item})
+    assert toolhooks.summary(tooled) == [
+        ("tools", "kerbrute 1.0.3   (will be kept; Cascade, Sauna still use it)")
+    ]
+
+
+def test_summary_leaves_out_a_tool_the_machine_does_not_have(tooled):
+    wipe(tooled)  # reopened or imported, and the offer to install the tools again declined
+    assert toolhooks.summary(tooled) == []
+
+
+def test_summary_leaves_out_a_tool_only_another_box_holds(tooled, other):
+    item = load_installed(tooled.paths)["kerbrute"]
+    item.users = [other.id]
+    toolstate.save_installed(tooled.paths, {"kerbrute": item})
+    assert toolhooks.summary(tooled) == []
+
+
+def test_summary_lists_a_tool_no_box_holds_that_finish_will_remove(tooled, user):
+    # a removal that failed left its files and its row, with no box on it; this finish takes it off
+    item = load_installed(tooled.paths)["kerbrute"]
+    item.users = []
+    toolstate.save_installed(tooled.paths, {"kerbrute": item})
+    assert toolhooks.summary(tooled) == [
+        ("tools", "kerbrute 1.0.3   (will be removed)"),
+        ("home", f"{user / '.kerbrute'}   (will be deleted)"),
+    ]
+    say(tooled, "y", "n")
+    assert finish_box(tooled, **SAVED) is not None
+    assert "kerbrute 1.0.3 removed" in lines(tooled, "ok")
+    assert load_installed(tooled.paths) == {}
+
+
+def test_summary_keeps_home_data_while_a_box_that_cannot_be_read_may_use_the_tool(tooled, other):
+    item = load_installed(tooled.paths)["kerbrute"]
+    item.users.append(other.id)
+    toolstate.save_installed(tooled.paths, {"kerbrute": item})
+    break_box(other.path)
+    assert toolhooks.summary(tooled) == [
+        ("tools", "kerbrute 1.0.3   (will be kept; a box that cannot be read still uses it)")
+    ]
+
+
+def test_finish_after_a_declined_reinstall_shows_no_tools_in_its_summary(tooled):
+    wipe(tooled)
+    say(tooled, "y", "n")
+    assert finish_box(tooled, **SAVED) is not None
+    assert not [t for k, t in tooled.console.lines if k == "field" and "kerbrute" in t]
+    assert not [t for t in lines(tooled, "ok") if "kerbrute" in t]
 
 
 # ---- pre_pack

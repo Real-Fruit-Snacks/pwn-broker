@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Fixed: the summary `finish` shows before it asks said `(will be removed)` for every tool in the box's record, whatever `finish` then did.
+
+- A tool another unfinished box has is now listed as `kerbrute 1.0.3   (will be kept; forest still uses it)`, which is what the line after the archive has said since 0.1.2.
+- A tool the machine does not have is not listed. That is the case after `import` or a reopen where the offer to install the tools again was declined.
+- While a box folder cannot be read, a tool's data in the home folder was listed as `(will be deleted)` though `finish` keeps it. It is no longer listed.
+
 ## v0.1.2
 
 `finish` prints a line for each tool it takes off, as it does for a runtime: `ok    kerbrute 1.0.3 removed`, or `ok    kerbrute 1.0.3 kept; forest still uses it` when another unfinished box has the tool. It used to say nothing about the tools after the summary.

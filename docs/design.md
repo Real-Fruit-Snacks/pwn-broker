@@ -1431,6 +1431,7 @@ Making the environment runs the runtime's interpreter. That is the one new thing
 - `tool info <tool>` gains a line: `requires    python-3.13 (34 MB, not installed)`. It names what the build this box has installed requires, or, when the box does not have the tool, what the latest build requires.
 - `tool install` and `tool remove` refuse a runtime's name: `python-3.13 is a runtime; it is installed with the tools that need it`.
 - `finish`'s summary lists the runtimes it will remove beside the tools: `runtimes  python-3.13 3.13.18   (will be removed)`.
+- The summary says of each tool what `finish` will then do with it, judged the way the removal is. A tool another unfinished box has reads `tools  kerbrute 1.0.3   (will be kept; forest still uses it)`, and its data in the home folder is not listed. A tool the box records but does not hold has no row: one the machine lacks because the offer to install it again was declined, or one only other boxes hold.
 
 **In pwn-shop.**
 

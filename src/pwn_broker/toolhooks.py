@@ -319,9 +319,27 @@ def block(
     return None
 
 
-def _one_per_row(label: str, items: list[str], note: str) -> list[tuple[str, str]]:
+def _one_per_row(label: str, items: list[str]) -> list[tuple[str, str]]:
     # the label once, on the first row; a long list never wraps in the middle of a name
-    return [(label if n == 0 else "", f"{item}   {note}") for n, item in enumerate(items)]
+    return [(label if n == 0 else "", item) for n, item in enumerate(items)]
+
+
+def _still_used(users: list[str]) -> str:
+    verb = "still uses" if len(users) == 1 else "still use"
+    return f"{', '.join(users)} {verb} it"
+
+
+def _fate(item: Installed | None, box_id: str, holding: dict[str, str]) -> str | None:
+    # what finish will do with one of the box's tools, as undo does it; None when it does nothing:
+    # the machine does not have the tool, or only other boxes hold it
+    if item is None:
+        return None
+    users = [holding[u] for u in item.users if u != box_id and u in holding]
+    if not users:
+        return "(will be removed)"
+    if box_id in item.users:
+        return f"(will be kept; {_still_used(users)})"
+    return None
 
 
 def summary(session: Session) -> list[tuple[str, str]]:
@@ -333,22 +351,31 @@ def summary(session: Session) -> list[tuple[str, str]]:
         installed = load_installed(session.paths)
     except (ToolError, OSError):
         return []
-    shown = _one_per_row("tools", [f"{t.name} {t.version}" for t in records], "(will be removed)")
     try:
+        # the boxes undo will count, so the summary says what the finish then does
         holding = toolstate.holding_boxes(session.paths, installed, excluding=box.id)
+    except (ToolError, OSError) as exc:
+        session.console.warn(f"the tools to remove could not be listed: {exc}")
+        return []
+    tools = [
+        f"{record.name} {record.version}   {fate}"
+        for record in records
+        if (fate := _fate(installed.get(record.name), box.id, holding)) is not None
+    ]
+    shown = _one_per_row("tools", tools)
+    try:
         freed = _freed_runtimes(session, installed, holding)
     except (ToolError, OSError) as exc:
         session.console.warn(f"the runtimes to remove could not be listed: {exc}")
         freed = []
-    shown += _one_per_row("runtimes", [f"{t.name} {t.version}" for t in freed], "(will be removed)")
+    shown += _one_per_row("runtimes", [f"{t.name} {t.version}   (will be removed)" for t in freed])
     try:
-        unfinished = unfinished_boxes(session.paths)
         homes = user_homes()
         for record in records:
             item = installed.get(record.name)
             if item is None:
                 continue
-            for path in tooldata.to_delete(item, homes, _others(item, box.id, unfinished)):
+            for path in tooldata.to_delete(item, homes, _others(item, box.id, holding)):
                 shown.append(("home", f"{path}   (will be deleted)"))
     except (ToolError, OSError) as exc:
         session.console.warn(f"the tool data to delete could not be listed: {exc}")
@@ -427,8 +454,7 @@ def _undo_one(
         session.console.ok(f"{name} {record.version} removed")
     elif held and after is not None and after.users:
         users = [unfinished.get(u, "another box") for u in after.users]
-        verb = "still uses" if len(users) == 1 else "still use"
-        session.console.ok(f"{name} {record.version} kept; {', '.join(users)} {verb} it")
+        session.console.ok(f"{name} {record.version} kept; {_still_used(users)}")
     tooldata.delete(doomed, homes)
 
 
