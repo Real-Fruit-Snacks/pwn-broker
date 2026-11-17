@@ -7,7 +7,6 @@ import stat
 import tarfile
 import tempfile
 import tomllib
-import zlib
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -30,7 +29,10 @@ _MANIFEST_LIMIT = 64 * 1024 * 1024
 MAX_ENTRIES = 300_000
 MAX_NAME_BYTES = 4096
 _MAX_NAMES_BYTES = 64 * 1024 * 1024
-_READ_ERRORS = (tarfile.TarError, OSError, EOFError, zlib.error)
+# What may be read between one entry and the next, and before the last: the headers. A file
+# with a long path costs about 6 KiB of them, most files 1.5 KiB.
+_ENTRY_HEADER_BYTES = 256 * 1024
+_ALL_HEADER_BYTES = MAX_ENTRIES * 4096
 
 
 class ArchiveError(Exception):
@@ -237,17 +239,46 @@ class _Capped:
 
     def __init__(self, fh) -> None:
         self._fh = fh
+        # header bytes read since the last entry, and in all, while the entries are being read
+        self._entry = 0
+        self._all = 0
+        self._headers = True
 
     def read(self, size: int = -1) -> bytes:
         if size is None or size < 0 or size > _PIECE:
             raise ArchiveError("archive has a header longer than 64 KiB, which a box's archive never has")
-        return self._fh.read(size)
+        data = self._fh.read(size)
+        if self._headers:
+            # a sparse entry's map is read a block at a time, for as long as the archive says
+            # there is more of it, and no single read is large
+            self._entry += len(data)
+            self._all += len(data)
+            if self._entry > _ENTRY_HEADER_BYTES or self._all > _ALL_HEADER_BYTES:
+                raise ArchiveError("archive has more header than a box's archive ever has")
+        return data
+
+    def next_entry(self) -> None:
+        self._entry = 0
+
+    def entries_read(self) -> None:
+        # from here on only file data is read
+        self._headers = False
 
     def seek(self, *args) -> int:
         return self._fh.seek(*args)
 
     def tell(self) -> int:
         return self._fh.tell()
+
+
+def _said(exc: Exception) -> str:
+    return str(exc) or type(exc).__name__
+
+
+def _unreadable(archive: Path, exc: Exception) -> ArchiveError:
+    # whatever tarfile raises on an archive it cannot make sense of: it has more kinds of error
+    # than it documents (a ValueError for a size too large to seek to, for one)
+    return ArchiveError(f"{archive}: cannot read archive ({_said(exc)})")
 
 
 @contextmanager
@@ -259,8 +290,10 @@ def _open(archive: Path) -> Iterator[tarfile.TarFile]:
     with unzipped:
         try:
             tar = tarfile.open(fileobj=_Capped(unzipped), mode="r:", copybufsize=_PIECE)
-        except _READ_ERRORS as exc:
-            raise ArchiveError(f"{archive}: cannot open as a gzip tar ({exc})") from exc
+        except ArchiveError:
+            raise
+        except Exception as exc:
+            raise ArchiveError(f"{archive}: cannot open as a gzip tar ({_said(exc)})") from exc
         with tar:
             yield tar
 
@@ -297,6 +330,8 @@ def _members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
         if len(members) == MAX_ENTRIES or names > _MAX_NAMES_BYTES:
             raise ArchiveError(f"archive has more than {MAX_ENTRIES} entries, or names too long to hold")
         members.append(member)
+        tar.fileobj.next_entry()
+    tar.fileobj.entries_read()
     return members
 
 
@@ -306,8 +341,8 @@ def peek_folder(archive: Path) -> str:
             return _top_folder(_members(tar))
     except ArchiveError:
         raise
-    except _READ_ERRORS as exc:
-        raise ArchiveError(f"{archive}: cannot read archive ({exc})") from exc
+    except Exception as exc:
+        raise _unreadable(archive, exc) from exc
 
 
 def _manifest_rows(tar: tarfile.TarFile, member: tarfile.TarInfo | None) -> list[dict]:
@@ -345,10 +380,15 @@ def verify(archive: Path) -> None:
             by_name = {m.name: m for m in members}
             rows = _manifest_rows(tar, by_name.get(f"{top}/{MANIFEST}"))
             wanted = []
+            listed: set[str] = set()
             for row in rows:
                 path, size, checksum = row.get("path"), row.get("size"), row.get("sha256")
                 if not checksum:
                     raise ArchiveError(f"{path}: no checksum recorded")
+                if path in listed:
+                    # each row is hashed, and a few bytes can list one file a million times
+                    raise ArchiveError(f"{path}: listed twice in the manifest")
+                listed.add(path)
                 member = by_name.get(f"{top}/{path}")
                 if member is None or not member.isreg():
                     raise ArchiveError(f"{path}: missing from the archive")
@@ -364,8 +404,8 @@ def verify(archive: Path) -> None:
                     raise ArchiveError(f"{path}: checksum differs from the manifest")
     except ArchiveError:
         raise
-    except _READ_ERRORS as exc:
-        raise ArchiveError(f"{archive}: cannot read archive ({exc})") from exc
+    except Exception as exc:
+        raise _unreadable(archive, exc) from exc
 
 
 def _backslash_separates() -> bool:
@@ -429,8 +469,10 @@ def unpack(
         return final
     except ArchiveError:
         raise
-    except (*_READ_ERRORS, ValueError) as exc:
-        raise ArchiveError(f"cannot unpack {archive}: {exc}") from exc
+    except Exception as exc:
+        # whatever tarfile raises on an archive it cannot make sense of: it has more kinds of
+        # error than it documents (a ValueError for a size too large to seek to, for one)
+        raise ArchiveError(f"cannot unpack {archive}: {_said(exc)}") from exc
     finally:
         if tmp is not None:
             shutil.rmtree(tmp, ignore_errors=True)

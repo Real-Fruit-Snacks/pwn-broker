@@ -905,9 +905,14 @@ def test_finish_keeps_the_folder_when_the_box_cannot_be_read_again(session, monk
     answers(session, "y", "y")
     real = lifecycle.scan
 
+    looks = []
+
     def scan(box, records, **options):
         if options.get("limit") == -1:
-            raise PermissionError("no")
+            looks.append(1)
+            # the look before the archive goes through; the one before the removal does not
+            if len(looks) == 2:
+                raise PermissionError("no")
         return real(box, records, **options)
 
     monkeypatch.setattr(lifecycle, "scan", scan)
@@ -1022,3 +1027,78 @@ def test_import_goes_on_when_another_folder_here_cannot_be_read(session, tmp_pat
     (session.box.path / "box.toml").write_text("not toml [", encoding="utf-8")
     box = import_box(session.paths, Settings(), FakeConsole(), archive, lambda: NOW)
     assert box is not None and box.path.name == "2026-11-14_htb_twin"
+
+
+def test_finish_keeps_the_folder_when_a_file_was_rewritten_at_the_same_size(session):
+    stand_in, signalled = window()
+    loot = session.box.path / "loot.txt"
+    loot.write_text("first")
+    answers(session, "y", "y")
+
+    def rewrite():
+        before = loot.stat()
+        loot.write_text("other")
+        os.utime(loot, ns=(before.st_atime_ns, before.st_mtime_ns + 2_000_000_000))
+
+    at_the_remove_question(session, rewrite)
+    assert finish_box(session, **SAVED, **stand_in) is not None
+    assert loot.read_text() == "other" and signalled == []
+    assert kinds(session, "warn") == ["loot.txt changed after the archive was made; the folder was kept"]
+
+
+def test_finish_keeps_the_folder_when_a_new_folder_cannot_be_looked_into(session, monkeypatch):
+    stand_in, signalled = window()
+    answers(session, "y", "y")
+    real = lifecycle.scan
+    looks = []
+
+    def scan(box, records, **options):
+        found = real(box, records, **options)
+        if options.get("limit") == -1:
+            looks.append(1)
+            if len(looks) == 2:
+                options["on_skip"]("targets/locked", "cannot read")
+        return found
+
+    monkeypatch.setattr(lifecycle, "scan", scan)
+    assert finish_box(session, **SAVED, **stand_in) is not None
+    assert session.box.path.exists() and signalled == []
+    assert kinds(session, "warn") == ["targets/locked changed after the archive was made; the folder was kept"]
+
+
+def test_finish_keeps_the_folder_when_a_file_whose_name_is_not_utf8_was_made_after_the_archive(session):
+    stand_in, signalled = window()
+    answers(session, "y", "y")
+    made = []
+    at_the_remove_question(session, lambda: made.append(odd_name(session.box.path)))
+    assert finish_box(session, **SAVED, **stand_in) is not None
+    if made == [None]:
+        pytest.skip("no file here can have a name that is not UTF-8")
+    assert os.path.exists(made[0]) and signalled == []
+    [line] = kinds(session, "warn")
+    assert line.endswith(" changed after the archive was made; the folder was kept")
+
+
+def test_finish_keeps_the_folder_when_a_file_whose_name_is_not_utf8_grew_after_the_archive(session):
+    path = odd_name(session.box.path)
+    if path is None:
+        pytest.skip("no file here can have a name that is not UTF-8")
+    stand_in, signalled = window()
+    answers(session, "y", "y")
+
+    def grow():
+        with open(path, "ab") as fh:
+            fh.write(b" and more")
+
+    at_the_remove_question(session, grow)
+    assert finish_box(session, **SAVED, **stand_in) is not None
+    assert os.path.exists(path) and signalled == []
+    assert any(line.endswith("the folder was kept") for line in kinds(session, "warn"))
+
+
+def test_finish_removes_the_folder_when_a_file_whose_name_is_not_utf8_did_not_change(session):
+    if odd_name(session.box.path) is None:
+        pytest.skip("no file here can have a name that is not UTF-8")
+    answers(session, "y", "y")
+    assert finish_box(session, **SAVED, close=lambda paths, box: False) is not None
+    assert not session.box.path.exists()

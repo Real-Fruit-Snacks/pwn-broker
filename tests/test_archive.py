@@ -1200,3 +1200,140 @@ def test_pack_follows_a_link_on_the_way_to_the_box_itself(filled, tmp_path):
     pack(dc_replace(filled, path=link / filled.path.name), dest)
     verify(dest)
     assert "targets/dc01/loot/SAM.bak" in inside(dest)
+
+
+# --- headers that are read a block at a time ---
+
+
+def patched(block: bytes, changes: dict[int, bytes]) -> bytes:
+    """A header block with bytes replaced and its checksum made right again."""
+    block = bytearray(block)
+    for at, data in changes.items():
+        block[at : at + len(data)] = data
+    block[148:156] = b"        "
+    block[148:156] = b"%06o\0 " % tarfile.calc_chksums(bytes(block))[0]
+    return bytes(block)
+
+
+def raw_tar(dest, *blocks: bytes):
+    """A gzip tar of a top folder, an empty manifest, then the blocks as given."""
+    plain = io.BytesIO()
+    with tarfile.open(fileobj=plain, mode="w") as tar:
+        add_dir(tar, "b")
+        add_bytes(tar, "b/manifest.toml", manifest_bytes([]))
+    body = plain.getvalue().rstrip(b"\0")
+    body += b"\0" * (-len(body) % 512)
+    dest.write_bytes(gzip.compress(body + b"".join(blocks) + b"\0" * 1024))
+    return dest
+
+
+def test_a_sparse_map_that_goes_on_block_after_block_is_refused(tmp_path, monkeypatch):
+    # an old GNU sparse entry says "more of the map follows" for as long as it likes
+    head = patched(sparse_header("b/big", 1024), {482: b"\x01"})
+    more = b"\0" * 504 + b"\x01" + b"\0" * 7
+    dest = raw_tar(tmp_path / "s.tar.gz", head, more * 4000)
+    assert dest.stat().st_size < 16 * 1024
+    read = []
+    real = archive._Capped.read
+    monkeypatch.setattr(archive._Capped, "read", lambda self, size=-1: read.append(size) or real(self, size))
+    with pytest.raises(ArchiveError, match="more header than a box's archive ever has"):
+        verify(dest)
+    assert sum(read) < 512 * 1024
+
+
+def test_a_sparse_map_in_an_extended_header_that_goes_on_is_refused(tmp_path):
+    # the newer form: the entry's data starts with how many numbers follow, then the numbers
+    data = b"100000000\n" + b"1\n" * 400_000
+
+    def build(tar):
+        info = tarfile.TarInfo("b/big")
+        info.size = len(data)
+        info.pax_headers = {
+            "GNU.sparse.major": "1", "GNU.sparse.minor": "0", "GNU.sparse.name": "b/big",
+            "GNU.sparse.realsize": "10",
+        }  # fmt: skip
+        tar.addfile(info, io.BytesIO(data))
+
+    dest = formatted_archive(tmp_path / "p.tar.gz", build, format=tarfile.PAX_FORMAT)
+    with pytest.raises(ArchiveError, match="more header than a box's archive ever has"):
+        verify(dest)
+
+
+def test_the_header_allowance_is_for_each_entry_and_for_them_all(tmp_path, monkeypatch):
+    files = {f"f{n}": b"x" for n in range(40)}
+    dest = hand_archive(tmp_path / "x.tar.gz", files)
+    verify(dest)
+    # forty entries read more than any one entry may, and are read
+    monkeypatch.setattr(archive, "_ENTRY_HEADER_BYTES", 2048)
+    verify(dest)
+    monkeypatch.setattr(archive, "_ALL_HEADER_BYTES", 8192)
+    with pytest.raises(ArchiveError, match="more header than a box's archive ever has"):
+        verify(dest)
+
+
+def test_file_data_does_not_count_as_header(filled, tmp_path, monkeypatch):
+    (filled.path / "big.bin").write_bytes(bytes(range(256)) * 4000)
+    records = scan(filled, [], now=NOW)
+    save_files(filled, records)
+    write_manifest(filled, records, kind="exported", now=NOW)
+    dest = tmp_path / "out.tar.gz"
+    pack(filled, dest)
+    monkeypatch.setattr(archive, "_ENTRY_HEADER_BYTES", 8192)
+    monkeypatch.setattr(archive, "_ALL_HEADER_BYTES", 64 * 1024)
+    verify(dest)
+    assert (unpack(dest, tmp_path / "elsewhere") / "big.bin").stat().st_size == 1_024_000
+
+
+@pytest.mark.parametrize("check", [verify, peek_folder, lambda path: unpack(path, path.parent / "active")])
+def test_a_size_too_large_to_seek_to_is_one_failure_line_not_a_python_error(tmp_path, check):
+    info = tarfile.TarInfo("b/x")
+    block = patched(info.tobuf(tarfile.GNU_FORMAT), {124: b"\x80" + b"\xff" * 11})
+    dest = raw_tar(tmp_path / "v.tar.gz", block)
+    with pytest.raises(ArchiveError, match="cannot (read|unpack|open)"):
+        check(dest)
+    assert not (tmp_path / "active").exists() or list((tmp_path / "active").iterdir()) == []
+
+
+def test_a_sparse_map_cut_short_is_one_failure_line_not_a_python_error(tmp_path):
+    head = patched(sparse_header("b/big", 1024), {482: b"\x01"})
+    dest = tmp_path / "cut.tar.gz"
+    plain = io.BytesIO()
+    with tarfile.open(fileobj=plain, mode="w") as tar:
+        add_dir(tar, "b")
+        add_bytes(tar, "b/manifest.toml", manifest_bytes([]))
+    body = plain.getvalue().rstrip(b"\0")
+    body += b"\0" * (-len(body) % 512)
+    dest.write_bytes(gzip.compress(body + head))
+    with pytest.raises(ArchiveError):
+        verify(dest)
+
+
+def test_a_file_listed_twice_in_the_manifest_is_refused_before_anything_is_hashed(tmp_path, monkeypatch):
+    data = b"x" * 1000
+    dest = hand_archive(tmp_path / "d.tar.gz", {"a": data}, listed=[record("a", data)] * 3)
+    read = []
+    real = archive._pieces
+    monkeypatch.setattr(archive, "_pieces", lambda tar, member: read.append(member.name) or real(tar, member))
+    with pytest.raises(ArchiveError, match="a: listed twice in the manifest"):
+        verify(dest)
+    # only the manifest itself was read
+    assert read == ["b/manifest.toml"]
+
+
+def test_the_entries_keep_none_of_their_extended_header_records(tmp_path):
+    def build(tar):
+        info = tarfile.TarInfo("b/x")
+        info.pax_headers = {"comment": "c" * 2000, "another": "d" * 2000}
+        tar.addfile(info)
+
+    dest = formatted_archive(tmp_path / "r.tar.gz", build, format=tarfile.PAX_FORMAT)
+    with archive._open(dest) as tar:
+        members = archive._members(tar)
+        assert [m.name for m in members] == ["b", "b/manifest.toml", "b/x"]
+        assert all(m.pax_headers == {} for m in members) and tar.pax_headers == {}
+
+
+def test_unpacking_reads_no_more_than_a_piece_at_a_time(tmp_path):
+    dest = hand_archive(tmp_path / "x.tar.gz", {"a": b"x"})
+    with archive._open(dest) as tar:
+        assert tar.copybufsize == archive._PIECE == 64 * 1024

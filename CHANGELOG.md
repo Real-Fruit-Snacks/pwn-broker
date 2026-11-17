@@ -17,7 +17,9 @@ Fixed, in `finish`, `export` and `import`:
 What `import` accepts, made stricter. An archive the app wrote is not affected, up to 300,000 files and folders.
 
 - An archive entry that is a sparse file is refused: 300 bytes could stand for 16 GiB.
-- An extended header or long name of more than 64 KiB is refused before it is read. One of 800 MB, in an archive of 815 KB, cost 3.2 GiB of memory.
+- An extended header or long name of more than 64 KiB is refused before it is read. One of 800 MB, in an archive of 815 KB, cost 3.2 GiB of memory. So is an entry whose headers go on for more than 256 KiB: a sparse file's map is read a block at a time for as long as the archive says there is more.
+- A manifest that lists a file twice is refused. Each row was hashed, so 8,000 rows naming one file, in an archive of 5 KB, took 19 seconds.
+- Whatever goes wrong reading an archive is one `fail` line. A size too large to seek to was a Python error.
 - More than 300,000 entries, a name longer than 4,096 bytes, or a global extended header is refused, and the entries are checked as they are read. `export` and `finish` refuse a box of more files and folders than that, before writing anything.
 - `import` checks that the archive fits in the free space before it unpacks.
 - A `manifest.toml` or `box.toml` nested too deeply is refused with a message, not a Python error.

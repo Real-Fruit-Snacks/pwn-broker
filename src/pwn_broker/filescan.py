@@ -20,6 +20,8 @@ NOTE_SWAP = ".notes.md.sw?"
 # store.write_text's temp files, in the destination's folder at any depth
 TEMP_PREFIX = ".pwn-broker-"
 TEMP_SUFFIX = ".tmp"
+# why scan leaves out a file that files.toml, which is UTF-8, cannot name
+NOT_UTF8 = "its name is not UTF-8, so it is not listed"
 
 _CHUNK = 1024 * 1024
 
@@ -107,7 +109,7 @@ def scan(
                 # files.toml and the manifest are UTF-8 and cannot hold the name. The file is
                 # still packed, under the name it has.
                 if on_skip is not None:
-                    on_skip(rel, "its name is not UTF-8, so it is not listed")
+                    on_skip(rel, NOT_UTF8)
                 continue
             try:
                 st = os.lstat(full)

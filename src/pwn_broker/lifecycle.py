@@ -17,7 +17,7 @@ from pwn_broker.archive import (
 )
 from pwn_broker.config import Settings
 from pwn_broker.console import Cancelled, Console
-from pwn_broker.filescan import scan, sha256_file
+from pwn_broker.filescan import NOT_UTF8, scan, sha256_file
 from pwn_broker.model import Box, FileRecord
 from pwn_broker.note import NOTE_NAME
 from pwn_broker.notewindow import note_unsaved, shut_note
@@ -134,27 +134,48 @@ def _note_is_archived(box: Box, recorded: str | None) -> bool:
 _REWRITTEN = frozenset({"box.toml"})
 
 
-def _changed_since(session: Session, archived: list[FileRecord]) -> list[str] | None:
-    """The files made or changed in the box since the archive was packed, by size and time.
+_Seen = dict[str, tuple[int, float]]
 
-    None when the box could not be read again. Nothing is hashed: a scan in another terminal can
-    still be writing, and the folder is about to be deleted.
+
+def _look(session: Session) -> tuple[_Seen, _Seen, list[str]]:
+    """The size and time of every file in the box, with none of them read.
+
+    Returns the files the records list, the files they cannot (a name that is not UTF-8), and
+    what could not be looked at. A link or special file is in none of them: it is never archived.
     """
-    packed = {r.path: (r.size, r.mtime) for r in archived}
+    unlisted: _Seen = {}
     unread: list[str] = []
 
     def on_skip(rel: str, reason: str) -> None:
-        # a link or special file is never archived, and one that disappeared has nothing to lose
-        if reason == "cannot read":
+        if reason == NOT_UTF8:
+            try:
+                st = os.lstat(os.path.join(session.box.path, rel))
+            except OSError:
+                unread.append(rel)
+            else:
+                unlisted[rel] = (st.st_size, st.st_mtime)
+        elif reason == "cannot read":
             unread.append(rel)
 
+    # a limit below any size: no file is hashed, only its size and time are taken
+    found = scan(session.box, [], now=session.clock(), limit=-1, on_skip=on_skip)
+    return {r.path: (r.size, r.mtime) for r in found}, unlisted, unread
+
+
+def _changed_since(session: Session, archived: list[FileRecord], unlisted: _Seen) -> list[str] | None:
+    """The files made or changed in the box since the archive was packed, by size and time.
+
+    `archived` is what the manifest lists, and `unlisted` the files it cannot name, as they were
+    just before the archive was packed. None when the box could not be read again. Nothing is
+    hashed: a scan in another terminal can still be writing, and the folder is about to be deleted.
+    """
+    packed = {r.path: (r.size, r.mtime) for r in archived} | unlisted
     try:
-        # a limit below any size: no file is read, only its size and time are taken
-        found = scan(session.box, [], now=session.clock(), limit=-1, on_skip=on_skip)
+        listed, odd, unread = _look(session)
     except OSError:
         return None
     changed = {
-        r.path for r in found if r.path not in _REWRITTEN and packed.get(r.path) != (r.size, r.mtime)
+        rel for rel, seen in (listed | odd).items() if rel not in _REWRITTEN and packed.get(rel) != seen
     }
     # a file or folder that cannot be looked at now may be new too
     changed.update(rel for rel in unread if rel not in packed)
@@ -239,6 +260,8 @@ def finish_box(
         box.status = "finished"
         box.finished = session.clock()
         save_box(box)
+        # the records cannot hold a name that is not UTF-8, so those files are noted here
+        unlisted = _look(session)[1]
         packed, left_out = _pack(session, "finished")
         archived = load_files(box)
         archived_note = _recorded_note(archived)
@@ -284,7 +307,7 @@ def finish_box(
         console.warn("the note has unsaved changes; the folder was kept")
     elif remove and not _note_is_archived(box, archived_note):
         console.warn("the note changed after the archive was made; the folder was kept")
-    elif remove and (changed := _changed_since(session, archived)) != []:
+    elif remove and (changed := _changed_since(session, archived, unlisted)) != []:
         if changed is None:
             console.warn("the box could not be read again after the archive was made; the folder was kept")
         else:
