@@ -445,3 +445,14 @@ def test_create_box_with_a_folder_and_a_numbered_archive_gives_the_next_number(p
     (paths.active / "2026-11-14_htb_forest").mkdir(parents=True)
     archive(paths, "2026-11-14_htb_forest-2", "finished")
     assert make(paths).path == paths.active / "2026-11-14_htb_forest-3"
+
+
+def test_a_box_with_a_start_time_of_the_wrong_kind_is_a_problem_not_a_crash(paths):
+    make(paths, name="Good", new_id=lambda: "g")
+    bad = make(paths, name="Bad", new_id=lambda: "b")
+    text = (bad.path / "box.toml").read_text(encoding="utf-8")
+    line = next(row for row in text.splitlines() if row.startswith("started = "))
+    (bad.path / "box.toml").write_text(text.replace(line, 'started = "yesterday"'), encoding="utf-8")
+    boxes, problems = list_boxes(paths)
+    assert [b.name for b in boxes] == ["Good"]
+    assert len(problems) == 1 and problems[0].startswith(f"{bad.path.name}: ")

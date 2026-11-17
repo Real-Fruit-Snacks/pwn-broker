@@ -56,7 +56,9 @@ def write_toml(path: Path, data: dict) -> None:
 def read_toml(path: Path) -> dict:
     try:
         return tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+    except RecursionError as exc:
+        raise StoreError(f"cannot read {path}: it is nested too deeply") from exc
+    except (OSError, ValueError) as exc:  # ValueError: not UTF-8, not TOML, or a number too long to read
         raise StoreError(f"cannot read {path}: {exc}") from exc
 
 
@@ -108,12 +110,71 @@ def save_box(box: Box) -> None:
     write_toml(box.path / "box.toml", data)
 
 
+def _is_a(value, kind) -> bool:
+    # tomllib gives bool for true/false and int for numbers: a bool is not a number. A list is a
+    # list of strings: the model holds no other kind.
+    if isinstance(value, bool):
+        return False
+    if kind is datetime:
+        # a year the app can still convert between time zones
+        return isinstance(value, datetime) and 1980 <= value.year < 9000
+    if kind is float:
+        return isinstance(value, (int, float))
+    if kind is list:
+        return isinstance(value, list) and all(isinstance(v, str) for v in value)
+    return isinstance(value, kind)
+
+
 def _checked(row: dict, kinds: dict, label: str) -> dict:
-    # tomllib gives bool for true/false and int for numbers; a bool is not a build number
+    if not isinstance(row, dict):
+        raise TypeError(f"{label} must be a table")
     for key, kind in kinds.items():
-        if not isinstance(row[key], kind) or (kind is int and isinstance(row[key], bool)):
+        if not _is_a(row[key], kind):
             raise TypeError(f"{label}.{key} has the wrong type")
-    return {key: row[key] for key in kinds}
+    return {key: _aware(row[key]) for key in kinds}
+
+
+def _aware(value):
+    # every time the app writes carries its offset. One written by hand without it is taken as
+    # local time, so that it can be put in order with the others.
+    if isinstance(value, datetime) and value.tzinfo is None:
+        return value.astimezone()
+    return value
+
+
+def _optional(row: dict, key: str, kind, label: str):
+    if key not in row:
+        return None
+    return _checked(row, {key: kind}, label)[key]
+
+
+_BOX = {
+    "id": str, "name": str, "platform": str, "os": str, "difficulty": str, "status": str,
+    "started": datetime,
+}  # fmt: skip
+_TARGET = {
+    "box_id": str, "box": str, "name": str, "ips": list, "hostnames": list, "scope": str,
+    "added": datetime,
+}  # fmt: skip
+_CRED = {
+    "n": int, "username": str, "domain": str, "secret": str, "kind": str, "found_on": str,
+    "works_on": list, "note": str, "added": datetime,
+}  # fmt: skip
+_FILE = {
+    "path": str, "target": str, "first_seen": datetime, "size": int, "mtime": float, "sha256": str,
+}  # fmt: skip
+
+
+def _row(cls, row, kinds: dict, label: str):
+    # the listed fields have the right types; a field the model does not have is still refused
+    return cls(**{**row, **_checked(row, kinds, label)})
+
+
+def _flags(value) -> dict[str, Flag]:
+    if not isinstance(value, dict):
+        raise TypeError("flags must be a table")
+    kinds = {"value": str, "at": datetime}
+    return {name: Flag(**_checked(flag, kinds, "flags")) for name, flag in value.items()}
 
 
 def _runtime(value) -> RuntimeRecord:
@@ -137,10 +198,13 @@ def _tool(row: dict) -> ToolRecord:
 
 def _vpn(row: dict) -> VpnRecord:
     kinds = {"file": str, "sha256": str, "started": datetime}
-    for key, kind in kinds.items():
-        if not isinstance(row[key], kind):
-            raise TypeError(f"vpn.{key} has the wrong type")
-    return VpnRecord(**{key: row[key] for key in kinds})
+    return VpnRecord(**_checked(row, kinds, "vpn"))
+
+
+def _rows(value, label: str) -> list:
+    if not isinstance(value, list):
+        raise TypeError(f"{label} must be a list of tables")
+    return value
 
 
 def _hosts(value) -> list[str]:
@@ -159,19 +223,13 @@ def load_box(folder: Path) -> Box:
             "started", "finished", "last_target", "flags", "tools", "hosts", "vpn",
         }  # fmt: skip
         return Box(
-            id=data["id"],
-            name=data["name"],
-            platform=data["platform"],
-            os=data["os"],
-            difficulty=data["difficulty"],
-            status=data["status"],
-            started=data["started"],
-            finished=data.get("finished"),
-            last_target=data.get("last_target"),
-            flags={k: Flag(value=v["value"], at=v["at"]) for k, v in data.get("flags", {}).items()},
-            tools=[_tool(row) for row in data.get("tools", [])],
+            **_checked(data, _BOX, "box"),
+            finished=_optional(data, "finished", datetime, "box"),
+            last_target=_optional(data, "last_target", str, "box"),
+            flags=_flags(data.get("flags", {})),
+            tools=[_tool(row) for row in _rows(data.get("tools", []), "tools")],
             hosts=_hosts(data.get("hosts", [])),
-            vpn=[_vpn(row) for row in data.get("vpn", [])],
+            vpn=[_vpn(row) for row in _rows(data.get("vpn", []), "vpn")],
             extra={k: v for k, v in data.items() if k not in known},
             path=folder,
         )
@@ -189,7 +247,7 @@ def load_targets(box: Box) -> list[Target]:
     for file in sorted((box.path / "targets").glob("*/target.toml")):
         data = _read_checked(file)
         data.pop("schema")
-        targets.append(_build(file, lambda data=data: Target(**data)))
+        targets.append(_build(file, lambda data=data: _row(Target, data, _TARGET, "target")))
     return sorted(targets, key=lambda t: t.added)
 
 
@@ -205,7 +263,9 @@ def load_creds(box: Box) -> list[Cred]:
     if not path.exists():
         return []
     data = _read_checked(path)
-    return _build(path, lambda: [Cred(**row) for row in data.get("cred", [])])
+    return _build(
+        path, lambda: [_row(Cred, row, _CRED, "cred") for row in _rows(data.get("cred", []), "cred")]
+    )
 
 
 def save_files(box: Box, records: list[FileRecord]) -> None:
@@ -220,4 +280,7 @@ def load_files(box: Box) -> list[FileRecord]:
     if not path.exists():
         return []
     data = _read_checked(path)
-    return _build(path, lambda: [FileRecord(**row) for row in data.get("file", [])])
+    return _build(
+        path,
+        lambda: [_row(FileRecord, row, _FILE, "file") for row in _rows(data.get("file", []), "file")],
+    )

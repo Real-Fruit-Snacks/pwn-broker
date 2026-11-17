@@ -424,3 +424,137 @@ def test_hosts_wrong_type(box, value):
     write_toml(path, data)
     with pytest.raises(StoreError, match="box.toml"):
         load_box(box.path)
+
+
+@pytest.mark.parametrize("nested", ["x = " + "[" * 100_000, "x = " + "{a=" * 100_000])
+def test_a_file_nested_too_deeply_is_a_store_error(tmp_path, nested):
+    path = tmp_path / "box.toml"
+    path.write_text(f"schema = 1\n{nested}", encoding="utf-8")
+    with pytest.raises(StoreError, match="nested too deeply"):
+        read_toml(path)
+
+
+def test_a_number_too_long_to_read_is_a_store_error(tmp_path):
+    path = tmp_path / "box.toml"
+    path.write_text("schema = 1\nx = " + "9" * 10_000, encoding="utf-8")
+    with pytest.raises(StoreError, match="cannot read"):
+        read_toml(path)
+
+
+# --- a file that is TOML but does not hold what the model holds ---
+
+
+def rewrite(path, change):
+    data = read_toml(path)
+    change(data)
+    write_toml(path, data)
+
+
+def set_to(key, value):
+    return lambda data: data.__setitem__(key, value)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        set_to("started", "yesterday"),
+        set_to("started", NOW.date()),
+        set_to("started", NOW.replace(year=1)),
+        set_to("started", True),
+        set_to("id", 5),
+        set_to("name", ["forest"]),
+        set_to("status", False),
+        set_to("finished", "soon"),
+        set_to("last_target", 3),
+        set_to("flags", "none"),
+        set_to("flags", {"user": "abc"}),
+        set_to("flags", {"user": {"value": 1, "at": NOW}}),
+        set_to("flags", {"user": {"value": "abc", "at": "now"}}),
+        set_to("tools", "certipy"),
+        set_to("tools", ["certipy"]),
+        set_to("vpn", {"file": "lab.ovpn"}),
+        set_to("vpn", ["lab.ovpn"]),
+    ],
+)
+def test_a_box_toml_with_a_value_of_the_wrong_kind_is_a_store_error(box, change):
+    rewrite(box.path / "box.toml", change)
+    with pytest.raises(StoreError, match="invalid content"):
+        load_box(box.path)
+
+
+def test_a_time_written_without_an_offset_is_taken_as_local_time(box):
+    text = (box.path / "box.toml").read_text(encoding="utf-8")
+    line = next(row for row in text.splitlines() if row.startswith("started = "))
+    (box.path / "box.toml").write_text(
+        text.replace(line, "started = 2026-11-01T10:00:00"), encoding="utf-8"
+    )
+    started = load_box(box.path).started
+    assert started.tzinfo is not None and started.replace(tzinfo=None) == NOW.replace(
+        year=2026, month=11, day=1, hour=10, tzinfo=None
+    )
+    # it can be put in order with a time that has one
+    assert sorted([NOW, started]) == [started, NOW]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        set_to("ips", "10.10.10.5"),
+        set_to("ips", [10, 5]),
+        set_to("hostnames", [["dc01.htb"]]),
+        set_to("name", 7),
+        set_to("added", "today"),
+        set_to("scope", True),
+    ],
+)
+def test_a_target_with_a_value_of_the_wrong_kind_is_a_store_error(box, dc01, change):
+    rewrite(box.path / "targets" / "dc01" / "target.toml", change)
+    with pytest.raises(StoreError, match="invalid content"):
+        load_targets(box)
+
+
+@pytest.mark.parametrize(
+    "cred",
+    [
+        "none",
+        ["none"],
+        [{"n": "1"}],
+    ],
+)
+def test_creds_that_are_not_rows_of_the_model_are_a_store_error(box, cred):
+    write_toml(box.path / "creds.toml", {"schema": 1, "cred": cred})
+    with pytest.raises(StoreError, match="invalid content"):
+        load_creds(box)
+
+
+def test_a_cred_with_a_value_of_the_wrong_kind_is_a_store_error(box):
+    save_creds(box, [make_cred()])
+    rewrite(box.path / "creds.toml", lambda data: data["cred"][0].__setitem__("works_on", "dc01"))
+    with pytest.raises(StoreError, match="cred.works_on has the wrong type"):
+        load_creds(box)
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("size", "big"), ("size", True), ("mtime", "then"), ("path", 3), ("first_seen", 0), ("sha256", None)],
+)
+def test_a_file_record_with_a_value_of_the_wrong_kind_is_a_store_error(box, key, value):
+    row = {"path": "a.txt", "target": "", "first_seen": NOW, "size": 1, "mtime": 1.5, "sha256": "ab"}
+    row[key] = value
+    if value is None:
+        del row[key]
+    write_toml(box.path / "files.toml", {"schema": 1, "file": [row]})
+    with pytest.raises(StoreError, match="invalid content"):
+        load_files(box)
+
+
+def test_file_records_that_are_not_a_list_are_a_store_error(box):
+    write_toml(box.path / "files.toml", {"schema": 1, "file": "a.txt"})
+    with pytest.raises(StoreError, match="invalid content"):
+        load_files(box)
+
+
+def test_a_whole_number_of_seconds_is_still_a_file_time(box):
+    row = {"path": "a.txt", "target": "", "first_seen": NOW, "size": 1, "mtime": 2, "sha256": "ab"}
+    write_toml(box.path / "files.toml", {"schema": 1, "file": [row]})
+    assert load_files(box)[0].mtime == 2
