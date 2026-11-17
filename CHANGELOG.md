@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.3
 
 The installer prints its `ok` and `fail` lines in the app's colours. Three lines in the middle of an install come from the app and were green, while the installer's own were plain, so one install looked like two programs. Piped output, `NO_COLOR` and a terminal with no colour still get plain text.
 
