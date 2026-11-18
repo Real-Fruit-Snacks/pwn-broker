@@ -91,7 +91,7 @@ Left out: the version line and the launch checks above `New box`, the `New crede
 - One whole box in the official Kali image in CI (Kali 2026.3, as root): installed from the release file with the container's network off, then new box to `finish` and `import`, with a real OpenVPN and `tun0`, under a virtual display with `xterm`
 - An install in a bare `debian:stable-slim` container with no Python and no network
 - Every command by hand in Kali 2026.2 under WSL 2, as root, with Kali's own qterminal, including building the release file there and upgrading an install made by the old installer
-- The published `v0.1.0` there too: the install line above, then a box with all six tools installed from the published index, each started once, and taken off again by `finish`; then `v0.1.1` and `v0.1.2` as upgrades over it, the second with loot whose names are not UTF-8 and a file written while `finish` waited; then `v0.1.3`, with a reinstall of the tools declined
+- The published `v0.1.0` there too: the install line above, then a box with all six tools installed from the published index, each started once, and taken off again by `finish`; then `v0.1.1` and `v0.1.2` as upgrades over it, the second with loot whose names are not UTF-8 and a file written while `finish` waited; then `v0.1.3`, with a reinstall of the tools declined; then `v0.1.4`, with `,h` in the note and an imported box's `/etc/hosts` line declined
 - And once more there as a normal user whose `sudo` asks for a password: the install line, then a box with `/etc/hosts`, the VPN, three tools, a recording, files made with `sudo` and `finish`
 - *Not* tested: a full Kali desktop session; a real Hack The Box connection
 
