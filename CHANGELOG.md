@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.4
 
 `,h` in the note's vim lists the keys the note has: `F8` for a new fold, the fold keys, and how the note saves and reloads by itself. Any key closes the list.
 
