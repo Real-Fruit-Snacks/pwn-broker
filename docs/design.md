@@ -1077,6 +1077,14 @@ The first scans of a box are the same every time: a quick look, every port, some
 - **Finish.** A running scan of the box blocks `finish`, as a recording does: what it wrote after the archive was made would be lost, and the folder would be kept as changed.
 - **Log.** `<target>.log` beside the marker holds each command as `$ nmap ...` and what nmap printed; `scan log` shows the last 20 lines.
 
+### 7.16 Searching
+
+The one place a password, a hostname or a share name turned up is often a file I saved hours ago, or something a recording caught on screen. `search` finds it.
+
+- **Scope.** The current target by default: its folder and its section of the note, found by its `Target:` line below a fold start and taken to the fold's matching end, nested folds included. `search <target> <text>` for another target, `search all <text>` for the whole box. A first word is a scope only when it is `all` or a target's exact name and more follows, so a single word is always what is looked for.
+- **What is read.** Regular files only, no links and no dot names. Binary files (a NUL in the first 8 KiB) are skipped. Recordings are searched through their `.txt` copies; the `.cast` beside each is skipped. `vpn/` is never read, since it holds the VPN key. A file over 16 MiB is skipped and named.
+- **Output.** Hits grouped by file, path relative to the box, each with its line number and the line, trimmed, with anything unprintable shown as `?` and cut at 200 characters. At most 200 hits, then a count of the rest.
+
 ## 8. Phase 3: tools
 
 Built before phase 2. It spans two repositories: `pwn-shop` holds the packages, and `pwn-broker` gains the `tool` commands that install them.

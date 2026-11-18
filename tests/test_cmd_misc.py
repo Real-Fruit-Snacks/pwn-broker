@@ -228,7 +228,7 @@ def test_launch_checks_repairs_path_and_adds_version(paths, tmp_path, monkeypatc
     assert all(r.name != "version" for r in results)
 
 
-ONE_WORD = ["check", "clear", "exit", "export", "files", "finish", "help", "note", "path", "quit", "replay", "status"]
+ONE_WORD = ["check", "clear", "exit", "export", "files", "finish", "help", "note", "path", "quit", "replay", "search", "status"]
 FAMILIES = ["cred", "flag", "host", "scan", "serve", "target", "tool", "vpn"]
 # the longest command name, two spaces, then the description
 DESCRIPTION_COLUMN = 2 + len("tool cache clear") + 2

@@ -136,6 +136,7 @@ Everything the app prints is indented two spaces, apart from the prompt line, th
 | `scan [quick\|full\|udp]` | Run nmap on the current target in the background |
 | `scan log` | Show the last 20 lines of the current target's scan |
 | `scan stop` | Stop the current target's scan |
+| `search [all\|<target>] <text>` | Find text in the current target, another, or the whole box |
 | `serve [<interface or address>] [<port>]` | Offer the target's upload folder and the tools' files over HTTP |
 | `serve files [<word>]` | Show the download line for each file served |
 | `serve log` | Show the last 20 requests and server lines |
@@ -410,6 +411,25 @@ tools_index = "~/pwn-shop/dist"
 ```
 
 The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshes it when it is more than a day old and the source answers within two seconds, and otherwise uses what it has. `tool refresh` fetches it now. `tool list`, `tool search` and `tool info` read the index: with a URL index they use the cached copy when the source does not answer in time, and a folder index is read directly. With no index and no cached copy, every `tool` command prints one `fail` line that says where it looked and how to set `tools_index`.
+
+## Searching
+
+`search <text>` finds text in the current target: every file in its folder, the text copies of its recordings, and its section of the note. `search web01 <text>` looks in another target without switching to it, and `search all <text>` in the whole box: every target, the whole note, the credential lists and the box's own files.
+
+```
+forest/dc01 > search password
+
+  notes.md
+        52  admin password reused on ftp
+  targets/dc01/loot/web.config
+        14  <add key="DbPassword" value="Sup3r!" />
+  2 hits in 2 files in dc01
+```
+
+- Case is ignored. The text is the rest of the line after the scope; runs of spaces count as one.
+- A first word that is `all` or a target's exact name sets the scope when something follows it; on its own it is what is looked for.
+- Binary files, links, names starting with a dot, recordings' `.cast` files (their `.txt` copies are searched) and the `vpn/` folder are skipped. A file over 16 MiB is skipped and named.
+- The first 200 hits are shown, with the count of the rest.
 
 ## Scans
 
