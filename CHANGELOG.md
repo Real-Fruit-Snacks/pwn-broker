@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.6
 
 `search <text>` finds text in the current target's files, its recordings' text copies and its section of the note; `search <target> <text>` in another target, and `search all <text>` in the whole box. Case is ignored; binary files and `vpn/` are skipped.
 
