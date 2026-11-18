@@ -132,7 +132,7 @@ class System:
     def vpn_comm(self, pid):
         return self.processes[pid][1] if pid in self.processes else None
 
-    def serve_cmdline(self, pid):
+    def cmdline(self, pid):
         return self.cmdlines.get(pid)
 
     def interfaces(self):
@@ -141,6 +141,19 @@ class System:
     def kill(self, pid, sig):
         self.killed.append((pid, sig))
         self.processes.pop(pid, None)
+
+    def killpg(self, pid, sig):
+        self.killed.append((pid, sig))
+        self.processes.pop(pid, None)
+
+    def scan_spawn(self, argv, log):
+        # stands in for the scan runner: alive, with a start time and the runner's command line;
+        # it never scans, so a test writes any finished record itself
+        self.spawned.append(list(argv))
+        pid = 50000 + len(self.spawned)
+        self.processes[pid] = (f"start-{pid}", "python3")
+        self.cmdlines[pid] = list(argv)
+        return pid
 
     def serve_spawn(self, argv, fd, log):
         # stands in for the server: a process that is alive, has a start time and the server's
@@ -183,7 +196,7 @@ def system(tmp_path_factory, monkeypatch):
         for name in (
             "is_root", "run_privileged", "ping", "tunnel",
             "which", "sleep", "pid_alive", "pid_started", "vpn_comm",
-            "serve_cmdline", "interfaces", "kill", "serve_spawn",
+            "cmdline", "interfaces", "kill", "serve_spawn", "scan_spawn", "killpg",
         ):  # fmt: skip
             if getattr(self, name) is defaults[name]:
                 setattr(self, name, getattr(fake, name))

@@ -6,6 +6,7 @@ from pwn_broker.boxes import BoxError
 from pwn_broker.console import Cancelled, Console
 from pwn_broker.creds import CredError
 from pwn_broker.note import NoteError
+from pwn_broker.scanning import ScanError
 from pwn_broker.serving import ServeError
 from pwn_broker.session import Session
 from pwn_broker.store import StoreError
@@ -28,7 +29,7 @@ COMMANDS: dict[str, tuple[Handler, str]] = {}
 USAGES: dict[str, str] = {}
 
 _HANDLED = (
-    BoxError, CredError, StoreError, ArchiveError, NoteError, ToolError, VpnError, ServeError,
+    BoxError, CredError, StoreError, ArchiveError, NoteError, ToolError, VpnError, ServeError, ScanError,
     ValueError, OSError,
 )  # fmt: skip
 

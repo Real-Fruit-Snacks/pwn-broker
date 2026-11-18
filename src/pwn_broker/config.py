@@ -24,6 +24,10 @@ class Settings:
     terminal: str = "x-terminal-emulator"
     check_updates: bool = True
     tools_index: str | None = None
+    # each scan mode's nmap options; None is the built-in default
+    scan_quick: str | None = None
+    scan_full: str | None = None
+    scan_udp: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,9 @@ def load(env: Mapping[str, str], home_dir: Path) -> tuple[AppPaths, Settings]:
             else _typed(data, "check_updates", bool, config_file)
         ),
         tools_index=_index_setting(_typed(data, "tools_index", str, config_file), home_dir),
+        scan_quick=_typed(data, "scan_quick", str, config_file) or None,
+        scan_full=_typed(data, "scan_full", str, config_file) or None,
+        scan_udp=_typed(data, "scan_udp", str, config_file) or None,
     )
 
     if settings.home is not None:

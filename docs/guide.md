@@ -133,6 +133,9 @@ Everything the app prints is indented two spaces, apart from the prompt line, th
 | `path [<folder>]` | Print a folder's full path |
 | `quit` | Leave the shell |
 | `replay [<target>] [<n>]` | List a target's recordings, or play one |
+| `scan [quick\|full\|udp]` | Run nmap on the current target in the background |
+| `scan log` | Show the last 20 lines of the current target's scan |
+| `scan stop` | Stop the current target's scan |
 | `serve [<interface or address>] [<port>]` | Offer the target's upload folder and the tools' files over HTTP |
 | `serve files [<word>]` | Show the download line for each file served |
 | `serve log` | Show the last 20 requests and server lines |
@@ -408,6 +411,34 @@ tools_index = "~/pwn-shop/dist"
 
 The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshes it when it is more than a day old and the source answers within two seconds, and otherwise uses what it has. `tool refresh` fetches it now. `tool list`, `tool search` and `tool info` read the index: with a URL index they use the cached copy when the source does not answer in time, and a folder index is read directly. With no index and no cached copy, every `tool` command prints one `fail` line that says where it looked and how to set `tools_index`.
 
+## Scans
+
+`scan` runs nmap against the current target's first IP in the background, with its output in the target's `scans/` folder, and says in the prompt when each mode is done:
+
+```
+forest/dc01 > scan
+
+  ok    scanning dc01 (10.10.10.161): quick then full
+  results go to targets/dc01/scans; a line here when each is done
+
+forest/dc01 > note
+
+  ok    scan quick of dc01 done: 53, 88, 135, 445 are open   targets/dc01/scans/2026-11-18_010203-quick.nmap
+```
+
+| Mode | What it runs | Setting |
+|---|---|---|
+| `scan quick` | the top 1,000 TCP ports with scripts and versions: `-sC -sV` | `scan_quick` |
+| `scan full` | every TCP port, `-p- --min-rate 5000`, then `-sC -sV` on only the ports it found | `scan_full` (the first stage) |
+| `scan udp` | the top 100 UDP ports: `-sU --top-ports 100`; needs root | `scan_udp` |
+| `scan` | quick, then full | |
+
+- Each mode writes `-oA` output, `.nmap`, `.gnmap` and `.xml`, named with the date and time it started and the mode: `scans/2026-11-18_010203-quick.nmap`. Full's first stage is `...-full-ports`.
+- The line that a mode is done comes after the output of the next command you type, with the open ports and the file to read. A mode that nmap ended with an error gets a `warn` line instead.
+- While a scan runs, the status bar shows `scan dc01`. One scan runs per target at a time; `scan stop` stops the current target's, nmap with it. `scan log` shows the last 20 lines of the commands it ran and what nmap printed.
+- It outlives `quit`. `finish` waits while any scan of the box is running, since what it wrote after the archive would be lost: wait for it, or `scan stop`.
+- Each mode's options are a setting, read as a shell would split them. `-oA` and the target are always added, so leave them out.
+
 ## Serving files
 
 `serve` offers files to the targets over HTTP, from a server that runs in the background until `serve stop`, or until the box that started it is finished. It serves two folders: the current target's `upload/`, for files of your own, and `/opt/pwn-broker/upload/`, where the box's tools put the files meant for a target. `serve files` prints the line to paste on the target for each file, `iwr` on a Windows box and `wget` on a Linux one, and `serve files <word>` only those whose path holds the word:
@@ -467,5 +498,8 @@ Unpacking refuses any entry that would land outside the box folder, and an archi
 | `terminal` | `x-terminal-emulator` | What opens the note window |
 | `check_updates` | `true` | Look for a newer release at launch |
 | `tools_index` | the published index in `pwn-shop` | A URL, or a folder that holds `index.toml` and the zips it names |
+| `scan_quick` | `-sC -sV` | nmap's options for `scan quick` |
+| `scan_full` | `-p- --min-rate 5000` | nmap's options for the first stage of `scan full` |
+| `scan_udp` | `-sU --top-ports 100` | nmap's options for `scan udp` |
 
 Two environment variables are read as well. `PWN_BROKER_OPT` is the install folder, for the installer and the app alike (default `/opt/pwn-broker`). `PWN_BROKER_HOME` is where the boxes live when `home` is not set in `config.toml`.

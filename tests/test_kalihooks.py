@@ -5,7 +5,7 @@ import pytest
 from pwn_broker import hostflow, kalihooks, lifecycle
 from pwn_broker.console import FakeConsole
 from pwn_broker.lifecycle import finish_box
-from pwn_broker.shell import cmd_serve
+from pwn_broker.shell import cmd_scan, cmd_serve
 
 SAVED = dict(fix=lambda path: 0, unsaved=lambda box: False)
 HOOK_LISTS = ("BLOCK_HOOKS", "SUMMARY_HOOKS", "PRE_PACK_HOOKS", "UNDO_HOOKS", "RESTORE_HOOKS", "IMPORT_HOOKS")
@@ -24,7 +24,7 @@ def test_register_adds_each_hook_once(monkeypatch):
         monkeypatch.setattr(lifecycle, name, [])
     kalihooks.register()
     kalihooks.register()
-    assert lifecycle.BLOCK_HOOKS == [kalihooks.recording_block]
+    assert lifecycle.BLOCK_HOOKS == [kalihooks.recording_block, cmd_scan.block]
     assert lifecycle.PRE_PACK_HOOKS == [kalihooks.recordings_pre_pack]
     assert lifecycle.SUMMARY_HOOKS == [hostflow.summary, cmd_serve.summary]
     assert lifecycle.UNDO_HOOKS == [hostflow.undo, kalihooks.vpn_question, cmd_serve.undo]

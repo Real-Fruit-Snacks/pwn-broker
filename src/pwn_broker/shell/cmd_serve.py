@@ -7,7 +7,7 @@ from pwn_broker.shell.commands import command, take_args
 
 
 def _checks(session: Session) -> dict:
-    return dict(alive=session.pid_alive, started=session.pid_started, cmdline=session.serve_cmdline)
+    return dict(alive=session.pid_alive, started=session.pid_started, cmdline=session.cmdline)
 
 
 def _where(marker: Marker) -> str:

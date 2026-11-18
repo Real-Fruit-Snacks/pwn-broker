@@ -62,9 +62,21 @@ def toolbar_text(session: Session, now: datetime) -> str:
     recording = recording_count(session)
     if recording:
         parts.append(f"rec {recording}")
+    scanning = _scan_part(session)
+    if scanning:
+        parts.append(scanning)
     minutes = max(0, int((now - session.box.started).total_seconds())) // 60
     parts.append(f"{minutes // 60:02d}:{minutes % 60:02d}")
     return " " + "   ".join(parts)
+
+
+def _scan_part(session: Session) -> str | None:
+    from pwn_broker.shell import cmd_scan
+
+    try:
+        return cmd_scan.toolbar_part(session)
+    except OSError:
+        return None
 
 
 def _tool_names(session: Session, text: str) -> set[str]:
@@ -167,6 +179,16 @@ def run_shell(session: Session) -> None:
                 break
 
 
+def _scan_notices(session: Session) -> None:
+    # a scan that finished since the last command is said after this one's output
+    from pwn_broker.shell import cmd_scan
+
+    try:
+        cmd_scan.notices(session)
+    except OSError as exc:
+        session.console.warn(f"finished scans could not be read: {exc}")
+
+
 def _run_line(session: Session, line: str) -> bool:
     """Run one command line under the box lock; false once the session is to end."""
     console = session.console
@@ -189,7 +211,11 @@ def _run_line(session: Session, line: str) -> bool:
                     rescan(session)
                 except (StoreError, OSError) as exc:
                     console.warn(str(exc))
-                dispatch(session, line)
+                try:
+                    dispatch(session, line)
+                finally:
+                    # after the command's own lines, so a clear cannot wipe them, and a quit still says them
+                    _scan_notices(session)
             finally:
                 try:
                     mark_seen(session)

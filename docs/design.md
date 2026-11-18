@@ -1066,6 +1066,17 @@ Sending a file to a target is a chore on every box: start a web server in the ri
 - **Log.** One line per request in `serve.log` (mode 600): time, client address, the request line with anything unprintable shown as `?`, and the status. `serve log` shows the last 20.
 - **Finish.** The summary lists a server this box started, `(will be stopped)`, and `finish` stops it. One started by another box is left alone. A server that will not stop is a `warn` line naming `serve stop`; the box is finished anyway.
 
+### 7.15 Scans
+
+The first scans of a box are the same every time: a quick look, every port, sometimes UDP. `scan` runs them in the background into the target's `scans/` folder.
+
+- **Modes.** `quick` is `-sC -sV` on nmap's top 1,000 ports. `full` is two stages, `-p- --min-rate 5000` for every TCP port, then `-sC -sV -p <the ports found>`, so scripts run only where something answers; with no open port the second stage is skipped. `udp` is `-sU --top-ports 100` and needs root, so a normal user is refused before anything starts. A bare `scan` is quick then full. Each mode's options are a setting, `scan_quick`, `scan_full` and `scan_udp`, split as a shell would.
+- **Output.** `-oA` into `targets/<target>/scans/<date>_<time>-<mode>`, so nothing is overwritten and the files sort by when they started.
+- **Background.** The prompt starts a runner of its own, `pwn_broker.scanning`, through a short-lived middle process in a session of its own, as `serve` does; it runs each nmap in turn. `/opt/pwn-broker/run/scans/<box>/<target>.toml` is its marker, checked by process ID, start time and command line. `scan stop` signals the runner's whole session, so the nmap it is waiting on stops too. One scan per target at a time.
+- **Being told.** When a mode is done the runner writes a record beside the marker. The prompt reads the records after each command, says each once (the open ports and the `.nmap` file, or a `warn` with nmap's status) and deletes it. After the command, not before, so a `clear` does not wipe it. A record waits for the box's next prompt if none is open. The status bar shows `scan <target>` while one runs.
+- **Finish.** A running scan of the box blocks `finish`, as a recording does: what it wrote after the archive was made would be lost, and the folder would be kept as changed.
+- **Log.** `<target>.log` beside the marker holds each command as `$ nmap ...` and what nmap printed; `scan log` shows the last 20 lines.
+
 ## 8. Phase 3: tools
 
 Built before phase 2. It spans two repositories: `pwn-shop` holds the packages, and `pwn-broker` gains the `tool` commands that install them.
@@ -1514,6 +1525,7 @@ Whatever a box changes on Kali, `finish` undoes. Each change is recorded in `box
 | Lines in `/etc/hosts` | 2 | Removing the lines marked with the box ID |
 | A VPN the app started | 2 | Asking whether to stop it. The default keeps it for the next box |
 | The file server, `serve` | 2 | Stopping it when this box started it |
+| A running scan | 2 | Nothing: `finish` waits until no scan of the box runs |
 | Installed tools | 3 | Removing each tool's commands, upload files and folder |
 | Tool data in the home folder | 3 | Copying it into the box, then deleting it |
 

@@ -204,7 +204,7 @@ def running(system, pid=4321, start="55", argv=None):
 
 
 def checks(system):
-    return dict(alive=system.pid_alive, started=system.pid_started, cmdline=system.serve_cmdline)
+    return dict(alive=system.pid_alive, started=system.pid_started, cmdline=system.cmdline)
 
 
 def test_ours_is_the_marker_while_its_process_is_the_server(session, system):

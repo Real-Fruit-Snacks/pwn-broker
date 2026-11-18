@@ -55,6 +55,11 @@ The packages are published in `pwn-shop`. With no `tools_index` setting the tool
 - [ ] `tool history` lists every tool the box has had, with its install time, its removal time or `-`, and the runtime it ran on. After `tool remove`, the tool stays in the list with a removal time. `~/pwn-broker/tools.log` has mode 600 and a line for each install, `tool remove` and `finish`, a runtime's lines ending in `runtime`. **Kali job:** covered: `tool history` with two tools, one on the runtime, the runtime recorded with the tool in `box.toml`, the log's mode, and its `install` and `finish` lines for both tools and the runtime, at the first install, `finish`, `import` and the last `finish`. **By hand:** `tool remove` and its `remove` lines.
 - [ ] `export` copies tool data into the box and removes nothing. `pwn-broker import <file>` on a fresh VM offers to install the tools again, and the same builds come back. **Kali job:** `import` offers to install the test package again, and it comes back. **By hand:** tool data, and a fresh VM.
 
+## Scans
+
+- [ ] With the VPN up, `scan`: the status bar shows `scan <target>`, and after a minute or so the next command is followed by `ok    scan quick of <target> done: <ports> are open   targets/<target>/scans/...-quick.nmap`, then later the same for full. The `.nmap`, `.gnmap` and `.xml` files are in `scans/`. `finish` while it runs is refused and names the scan. **By hand:** a real target; run on Kali under WSL against 127.0.0.1 as a normal user.
+- [ ] As root, `scan udp` runs; as a normal user it is refused. `scan stop` while a scan runs leaves no `nmap` process. **By hand.**
+
 ## Serving files
 
 - [ ] With the VPN up, put a file in the target's `upload/` and run `serve`. It prints the tunnel's address, port 80 as root or 8000 otherwise, a random part, and how many files; `serve files` prints the download lines. A line, pasted on the target, fetches the file, and `serve log` shows the request with the target's address. The same path without the random part, `/`, and a tool file's path without it all get `404`. **By hand:** the target end; run once on Kali under WSL as a normal user with `serve eth0`.
