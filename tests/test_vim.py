@@ -533,9 +533,86 @@ endif
 """)
     assert "Help()" in got["map"]
     keys = [line.split()[0] for line in got["lines"] if line[:1] in (",", "F", "z")]
-    assert keys == [",h", "F8", "za", "zo", "zR"]
+    assert keys == [",h", ",t", ",i", ",c", "F8", "za", "zo", "zR"]
     assert got["popups"] == 1
     assert got["shown"] == got["lines"] + ["", "any key closes this"]
     assert got["title"] == " note keys "
     assert got["idle"] == 0 and got["still"] == 1
     assert got["after"] == 0
+
+
+def test_comma_t_i_c_are_mapped(box, note, work):
+    got = run_vim(box.path, work, r"""
+for key in [',t', ',i', ',c']
+  call Put(key, maparg(key, 'n'))
+endfor
+""")
+    assert "Insert(strftime(" in got[",t"]
+    assert "InsertIp()" in got[",i"]
+    assert "PickCred()" in got[",c"]
+
+
+def test_insert_puts_text_after_the_cursor_as_it_is(box, note, work):
+    got = run_vim(box.path, work, r"""
+call setline(1, 'abcd')
+call cursor(1, 2)
+call Script('Insert', 'X|<Esc>\y')
+call Put('one', [getline(1), col('.')])
+call setline(2, '')
+call cursor(2, 1)
+call Script('Insert', "pass\nword")
+call Put('empty', [getline(2), col('.')])
+call setline(3, 'é!')
+call cursor(3, 1)
+call Script('Insert', 'Z')
+call Put('wide', getline(3))
+""")
+    # after the b, keys and backslashes kept, the cursor on the last character put in
+    assert got["one"] == ["abX|<Esc>\\ycd", 11]
+    # a line break never splits the line
+    assert got["empty"] == ["password", 8]
+    # after a whole character, not inside it
+    assert got["wide"] == "éZ!"
+
+
+def test_comma_i_takes_the_ip_of_the_section_the_cursor_is_in(box, note, work):
+    got = run_vim(box.path, work, r"""
+call cursor(Find('^Target: dc01'), 1)
+normal! j
+call Put('dc01', Script('TargetIp'))
+call cursor(Find('^Target: web'), 1)
+call Put('web', Script('TargetIp'))
+call cursor(1, 1)
+call Put('box', Script('TargetIp'))
+""")
+    assert got == {"dc01": "10.10.10.161", "web": "10.10.10.5", "box": ""}
+
+
+def test_comma_i_with_no_ip_says_so_and_inserts_nothing(box, note, work):
+    got = run_vim(box.path, work, r"""
+call cursor(1, 1)
+let before = getline(1)
+call Script('InsertIp')
+call Put('same', getline(1) ==# before)
+""")
+    assert got["same"] == 1
+
+
+def test_comma_c_offers_the_box_s_pairs(box, note, work):
+    lists = box.path / "lists"
+    lists.mkdir(exist_ok=True)
+    (lists / "userpass.txt").write_text("svc-alfresco:s3rvice\nadmin:P@ss|w0rd\n", encoding="utf-8")
+    (lists / "userhash.txt").write_text("administrator:32693b11e6aa90eb43d32c72a07ceea6\n", encoding="utf-8")
+    got = run_vim(box.path, work, r"""
+call Put('choices', Script('CredChoices'))
+""")
+    assert got["choices"] == [
+        "svc-alfresco:s3rvice", "admin:P@ss|w0rd", "administrator:32693b11e6aa90eb43d32c72a07ceea6",
+    ]
+
+
+def test_comma_c_with_no_lists_offers_nothing(box, note, work):
+    got = run_vim(box.path, work, r"""
+call Put('choices', Script('CredChoices'))
+""")
+    assert got["choices"] == []

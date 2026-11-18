@@ -64,10 +64,75 @@ endfunction
 nnoremap <silent> <F8> <Cmd>call <SID>NewFold(0)<CR>
 inoremap <silent> <F8> <Cmd>call <SID>NewFold(1)<CR>
 
+" ,t ,i ,c: put text after the cursor, as `a` would, without typing it: a password holding a key
+" name or a control character goes in as it is
+function! s:Insert(text) abort
+  let l:text = substitute(a:text, '[\r\n]', '', 'g')
+  let l:line = getline('.')
+  let l:at = l:line ==# '' ? 0 : col('.') - 1 + len(matchstr(l:line[col('.') - 1 :], '^.'))
+  call setline('.', strpart(l:line, 0, l:at) . l:text . strpart(l:line, l:at))
+  call cursor(line('.'), l:at + len(l:text))
+endfunction
+
+" the first IP of the target whose section the cursor is in: its Target: line reads
+" `name   ip, ip   hostnames   scope`; '' when there is none
+function! s:TargetIp() abort
+  let l:n = search('^Target: ', 'bcnW')
+  if l:n == 0
+    return ''
+  endif
+  let l:fields = split(substitute(getline(l:n), '^Target: ', '', ''), ' \{3}')
+  if len(l:fields) < 2 || l:fields[1] ==# '-'
+    return ''
+  endif
+  return trim(split(l:fields[1], ',')[0])
+endfunction
+
+function! s:InsertIp() abort
+  let l:ip = s:TargetIp()
+  if l:ip ==# ''
+    echo 'no IP: the cursor is not in a section of a target that has one'
+    return
+  endif
+  call s:Insert(l:ip)
+endfunction
+
+" every user:password and user:hash pair the app keeps in the box's lists/ folder
+function! s:CredChoices() abort
+  let l:folder = fnamemodify(argc() > 0 ? argv(0) : expand('%'), ':p:h') . '/lists/'
+  let l:found = []
+  for l:name in ['userpass.txt', 'userhash.txt']
+    if filereadable(l:folder . l:name)
+      let l:found += filter(readfile(l:folder . l:name), 'v:val !=# ""')
+    endif
+  endfor
+  return l:found
+endfunction
+
+function! s:PickCred() abort
+  let l:choices = s:CredChoices()
+  if empty(l:choices)
+    echo 'no credentials in the box yet'
+    return
+  endif
+  let l:menu = ['credential to insert:'] + map(copy(l:choices), 'printf("%d  %s", v:key + 1, v:val)')
+  let l:n = inputlist(l:menu)
+  if l:n >= 1 && l:n <= len(l:choices)
+    call s:Insert(l:choices[l:n - 1])
+  endif
+endfunction
+
+nnoremap <silent> <Leader>t <Cmd>call <SID>Insert(strftime('%Y-%m-%d %H:%M'))<CR>
+nnoremap <silent> <Leader>i <Cmd>call <SID>InsertIp()<CR>
+nnoremap <silent> <Leader>c <Cmd>call <SID>PickCred()<CR>
+
 " ,h: what this vimrc adds to vim, and the fold keys the note is built around
 function! s:HelpLines() abort
   return [
         \ ',h       this list',
+        \ ',t       insert the date and time after the cursor',
+        \ ',i       insert the IP of the target whose section the cursor is in',
+        \ ',c       pick one of the box''s user:password or user:hash pairs to insert',
         \ 'F8       new empty fold below the cursor, in normal or insert mode',
         \ 'za       open or close the fold under the cursor',
         \ 'zo  zc   open, close the fold under the cursor',

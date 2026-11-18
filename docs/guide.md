@@ -184,7 +184,7 @@ Each new target with an IP is pinged once at its first IP, with a two-second wai
 
 ## The note
 
-`notes.md` starts with a box drawn in `#` that holds the box details and one row per target, and the app redraws it whenever the targets change. Below it, each target has a section wrapped in a vim fold that starts with its `Target:` line, and the note opens with every fold closed down to that line. `F8` in vim adds an empty fold below the cursor, and `,h` lists the note's keys in a small window that any key closes. The app changes nothing else in the note, apart from a `Target:` line it wrote when that target is renamed or edited.
+`notes.md` starts with a box drawn in `#` that holds the box details and one row per target, and the app redraws it whenever the targets change. Below it, each target has a section wrapped in a vim fold that starts with its `Target:` line, and the note opens with every fold closed down to that line. `F8` in vim adds an empty fold below the cursor, and `,h` lists the note's keys in a small window that any key closes. `,t` puts the date and time after the cursor, `,i` the IP of the target whose section the cursor is in, and `,c` offers the box's `user:password` and `user:hash` pairs from `lists/` in a numbered list and puts the one you pick in, exactly as it is. The app changes nothing else in the note, apart from a `Target:` line it wrote when that target is renamed or edited.
 
 The note opens in a second terminal, the `terminal` setting, which runs vim with the app's own vimrc. Without a desktop session the `display` check says how to run that vim by hand.
 
