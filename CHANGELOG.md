@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.5
 
 `scan` runs nmap against the current target in the background, with `-oA` output in its `scans/` folder: `scan quick` (`-sC -sV`), `scan full` (every TCP port, then scripts and versions on those it found), `scan udp` (the top 100 UDP ports, as root), and quick then full for a bare `scan`. A line in the prompt says when each is done, with the open ports. Each mode's options are a setting. `scan stop` stops it, `scan log` shows what nmap printed, and `finish` waits while one runs.
 
