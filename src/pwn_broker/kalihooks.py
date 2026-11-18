@@ -2,7 +2,7 @@ from pwn_broker import casttext, hostflow, lifecycle, vpnctl
 from pwn_broker.console import Cancelled
 from pwn_broker.recstate import windows
 from pwn_broker.session import Session, current_tunnel, recordings, vpn_checks
-from pwn_broker.shell import cmd_vpn
+from pwn_broker.shell import cmd_serve, cmd_vpn
 
 
 def recording_block(session: Session) -> str | None:
@@ -54,8 +54,10 @@ def register() -> None:
         (lifecycle.BLOCK_HOOKS, recording_block),
         (lifecycle.PRE_PACK_HOOKS, recordings_pre_pack),
         (lifecycle.SUMMARY_HOOKS, hostflow.summary),
+        (lifecycle.SUMMARY_HOOKS, cmd_serve.summary),
         (lifecycle.UNDO_HOOKS, hostflow.undo),
         (lifecycle.UNDO_HOOKS, vpn_question),
+        (lifecycle.UNDO_HOOKS, cmd_serve.undo),
         (lifecycle.IMPORT_HOOKS, hostflow.on_import),
     ):
         if hook not in hooks:

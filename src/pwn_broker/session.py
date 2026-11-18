@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import time
@@ -6,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from pwn_broker import hosts, privilege, recstate, vpn, vpnctl
+from pwn_broker import hosts, privilege, recstate, serving, vpn, vpnctl
 from pwn_broker.config import Settings
 from pwn_broker.console import Console
 from pwn_broker.filescan import scan
@@ -59,6 +60,11 @@ class Session:
     pid_alive: Callable[[int], bool] = vpnctl.pid_alive
     pid_started: Callable[[int], str | None] = vpnctl.process_start
     vpn_comm: Callable[[int], str | None] = vpnctl.process_comm
+    # the file server: how it is started, told from a process that reuses its ID, and signalled
+    serve_spawn: Callable = serving.spawn
+    serve_cmdline: Callable[[int], list[str] | None] = serving.process_cmdline
+    interfaces: Callable[[], dict[str, list[str]]] = serving.interfaces
+    kill: Callable[[int, int], None] = os.kill
     # how replay plays a recording in this window: play(argv, env=...)
     play: Callable[..., subprocess.CompletedProcess] = subprocess.run
     # the last tunnel read and when it was made, so a redrawn status bar does not run `ip` each time

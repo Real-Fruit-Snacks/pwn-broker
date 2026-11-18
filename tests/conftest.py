@@ -87,6 +87,12 @@ class System:
         self.sleeps: list[float] = []
         # the process table the VPN and recording checks see: pid to (start time, command name)
         self.processes: dict[int, tuple[str, str]] = {}
+        # the file server: each process's command line, the interfaces `ip` would list, the
+        # signals sent, and the server processes started (a test that starts one says how)
+        self.cmdlines: dict[int, list[str]] = {}
+        self.interfaces_found: dict[str, list[str]] = {}
+        self.killed: list[tuple[int, int]] = []
+        self.spawned: list[list[str]] = []
 
     @property
     def hosts_path(self):
@@ -126,6 +132,27 @@ class System:
     def vpn_comm(self, pid):
         return self.processes[pid][1] if pid in self.processes else None
 
+    def serve_cmdline(self, pid):
+        return self.cmdlines.get(pid)
+
+    def interfaces(self):
+        return self.interfaces_found
+
+    def kill(self, pid, sig):
+        self.killed.append((pid, sig))
+        self.processes.pop(pid, None)
+
+    def serve_spawn(self, argv, fd, log):
+        # stands in for the server: a process that is alive, has a start time and the server's
+        # command line, has written its line that it is answering, and never answers
+        self.spawned.append(list(argv))
+        pid = 40000 + len(self.spawned)
+        self.processes[pid] = (f"start-{pid}", "python3")
+        self.cmdlines[pid] = list(argv)
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write(f"2026-11-14 13:00:00  listening, process {pid}" + chr(10))
+        return pid
+
     def ping(self, ip):
         self.pings.append(ip)
         if isinstance(self.answer, BaseException):
@@ -156,6 +183,7 @@ def system(tmp_path_factory, monkeypatch):
         for name in (
             "is_root", "run_privileged", "ping", "tunnel",
             "which", "sleep", "pid_alive", "pid_started", "vpn_comm",
+            "serve_cmdline", "interfaces", "kill", "serve_spawn",
         ):  # fmt: skip
             if getattr(self, name) is defaults[name]:
                 setattr(self, name, getattr(fake, name))

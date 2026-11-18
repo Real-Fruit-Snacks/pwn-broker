@@ -23,7 +23,7 @@ from pwn_broker.store import (
     write_toml,
 )
 
-TARGET_FOLDERS = ("creds", "files", "loot", "scans", "exploits", "screenshots", "recordings")
+TARGET_FOLDERS = ("creds", "files", "loot", "scans", "exploits", "screenshots", "recordings", "upload")
 SCOPES = ("external", "internal")
 
 

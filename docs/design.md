@@ -1051,6 +1051,19 @@ forest > vpn start
 - An archive holds no copy of the VPN file, only its name and checksum.
 - Only OpenVPN files are started. WireGuard is not handled.
 
+### 7.14 Serving files
+
+Sending a file to a target is a chore on every box: start a web server in the right folder, work out the tunnel address, type the download line. `serve` does it from the prompt.
+
+- **What is served.** The current target's `upload/` folder, for my own files, and `/opt/pwn-broker/upload/`, where tools already put their target-side files. Tool files are under the tool's name; a top-level name that is also a tool's folder is the tool's. Each request is looked up afresh, so a file dropped in later is served.
+- **Where.** The tunnel's address by default. An interface name or an address of this machine can be given; with neither a tunnel nor a name, nothing starts, so files are never offered to the whole LAN by accident. `0.0.0.0` is taken only when typed, with a `warn` line.
+- **Port.** 80 as root, for the shortest line, and 8000 for a normal user, who cannot bind 80. The prompt binds the socket itself, so a port in use or an address the machine does not have is a `fail` line at once, then passes the socket to the server.
+- **Nothing to find.** No listing, of `/` or any folder, and every URL starts with a random part of six letters and digits, new each run (62^6, about 57 billion). Other players on the same VPN can reach the tunnel address; without the random part, even a known tool path gets `404`. Dot names, links and anything outside the two folders are never sent. The download lines carry the random part, so it is never typed.
+- **Background.** The server runs as a child of a short-lived middle process, in a session of its own, so it outlives `quit`, a closed window and Ctrl-C, and when it ends it is reaped by init rather than lingering as a zombie whose ID still looks alive. The prompt reports it started only once the server has written its own `listening` line. `/opt/pwn-broker/run/serve/marker.toml` records its process ID, start time, box, target, address, port and random part; like the VPN's marker, a process is only taken as the server while its ID, start time and command line all match.
+- **Lines.** `iwr <url> -OutFile <name>` on a box whose OS starts with `win`, `wget <url>` on Linux and the BSDs, both otherwise.
+- **Log.** One line per request in `serve.log` (mode 600): time, client address, the request line with anything unprintable shown as `?`, and the status. `serve log` shows the last 20.
+- **Finish.** The summary lists a server this box started, `(will be stopped)`, and `finish` stops it. One started by another box is left alone. A server that will not stop is a `warn` line naming `serve stop`; the box is finished anyway.
+
 ## 8. Phase 3: tools
 
 Built before phase 2. It spans two repositories: `pwn-shop` holds the packages, and `pwn-broker` gains the `tool` commands that install them.
@@ -1498,6 +1511,7 @@ Whatever a box changes on Kali, `finish` undoes. Each change is recorded in `box
 |---|---|---|
 | Lines in `/etc/hosts` | 2 | Removing the lines marked with the box ID |
 | A VPN the app started | 2 | Asking whether to stop it. The default keeps it for the next box |
+| The file server, `serve` | 2 | Stopping it when this box started it |
 | Installed tools | 3 | Removing each tool's commands, upload files and folder |
 | Tool data in the home folder | 3 | Copying it into the box, then deleting it |
 
