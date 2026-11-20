@@ -61,7 +61,7 @@
                 <div class="cmd"><code>curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/download/install.sh | sh</code><button class="copy" type="button" data-copy="curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/download/install.sh | sh">Copy</button></div>
                 <div class="caveat">
                     <p><b>No network on the Kali machine:</b> copy the release file and <code>install.sh</code> from the <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest">latest release</a> across and run this. It prints the file's SHA-256 to compare with the release page, and contacts nothing.</p>
-                    <div class="cmd cmd-block"><pre><code>sh install.sh --from pwn-broker-0.1.6-linux-x86_64.tar.gz</code></pre><button class="copy" type="button" data-copy="sh install.sh --from pwn-broker-0.1.6-linux-x86_64.tar.gz">Copy</button></div>
+                    <div class="cmd cmd-block"><pre><code>sh install.sh --from pwn-broker-0.1.7-linux-x86_64.tar.gz</code></pre><button class="copy" type="button" data-copy="sh install.sh --from pwn-broker-0.1.7-linux-x86_64.tar.gz">Copy</button></div>
                 </div>
                 <p class="install-note">Run it as the user who will use pwn-broker, not with <code>sudo</code>. It downloads one release file, checks its SHA-256, and puts the app and its own Python in <code>/opt/pwn-broker</code>; it needs no Python from the machine. x86_64 Linux with glibc only. Run it again to upgrade. The <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/guide.md#install-and-upgrade">guide</a> has the options and what the install trusts.</p>
             </div>
@@ -71,7 +71,7 @@
             <div class="term">
                 <div class="bar" aria-hidden="true"><i></i><i></i><i></i><span>zsh</span></div>
 <pre class="screen" id="screen" data-type="view" tabindex="0" aria-label="A pwn-broker session"><code><span class="ln"><span class="p">$</span> <span class="t">pwn-broker new</span></span>
-<span class="ln">pwn-broker 0.1.6</span>
+<span class="ln">pwn-broker 0.1.7</span>
 
 <span class="ln s">  ok    8 checks passed</span>
 
