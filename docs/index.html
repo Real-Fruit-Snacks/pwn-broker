@@ -166,8 +166,24 @@
                 <p><code>finish</code> archives the box and closes it. <code>export</code> writes a snapshot and keeps working. Both write to <code>~/pwn-broker/wrapped/</code>, and <code>pwn-broker import &lt;file&gt;</code> unpacks one.</p>
             </div>
             <div class="block">
+                <h3>Scans in the background</h3>
+                <p><code>scan</code> runs nmap against the current target: the top 1,000 ports first, then every TCP port with scripts on only the ones it found, with <code>-oA</code> output in the target's <code>scans/</code> folder. A line in the prompt says when each is done and which ports are open. <code>scan udp</code> takes the top 100 UDP ports as root, and <code>finish</code> waits while a scan runs.</p>
+            </div>
+            <div class="block">
+                <h3>Files served to the target</h3>
+                <p><code>serve</code> offers the target's <code>upload/</code> folder and the tools' files over HTTP on the tunnel's address, behind a random path, with nothing listed. <code>serve files</code> prints the <code>iwr</code> or <code>wget</code> line for each file, and a <code>PUT</code> back to the same address saves a file into <code>loot/</code>, never over one already there. It runs until <code>serve stop</code> or <code>finish</code>.</p>
+            </div>
+            <div class="block">
+                <h3>Search across the box</h3>
+                <p><code>search &lt;text&gt;</code> finds text in the current target's files, the text copies of its recordings and its section of the note, and <code>search all &lt;text&gt;</code> in the whole box, credential lists included. Binary files and the VPN folder are skipped, and so is a playbook's text until you fill it in.</p>
+            </div>
+            <div class="block">
                 <h3>Tools, installed and taken off again</h3>
                 <p><code>tool install &lt;name&gt;</code> installs a package from <a href="https://github.com/Real-Fruit-Snacks/pwn-shop">pwn-shop</a>'s index, with its size and SHA-256 checked and no install script: kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng, peass-ng, chisel, godpotato, runascs, rusthound-ce, git-dumper, snaffler, lazagne and cdk. The Python ones bring their own Python as a shared runtime that puts nothing on PATH, so Kali's <code>python3</code> is never used or shadowed. <code>finish</code> takes the box's tools off again unless another unfinished box still uses them, and <code>tool history</code> lists every tool the box has had.</p>
+            </div>
+            <div class="block">
+                <h3>Playbooks read into the note</h3>
+                <p><code>tool install playbooks</code> gets <a href="https://github.com/Real-Fruit-Snacks/pwn-playbooks">pwn-playbooks</a>, short notes for one job each, checked and pinned like any tool. <code>:Pb &lt;name&gt;</code> in the note window reads one in below the cursor, with Tab completing the name from any part of it. Each carries a few lines of vim that fill in its <code>&lt;Placeholder&gt;</code> values in that playbook and nowhere else, and <code>finish</code> takes them off with the tools.</p>
             </div>
             <div class="block">
                 <h3>Recording a window</h3>
@@ -187,6 +203,7 @@
             <h2 id="note-h">The note</h2>
             <p><code>notes.md</code> starts with a box drawn in <code>#</code> that holds the box details and one row per target. The app redraws it whenever the targets change.</p>
             <p>Below it, each target has a section wrapped in a vim fold that starts with its <code>Target:</code> line, and the note opens with every fold closed down to that line. <kbd>F8</kbd> adds an empty fold below the cursor.</p>
+            <p><code>,i</code> puts in the IP of the target whose section the cursor is in, <code>,c</code> one of the box's credentials, <code>,t</code> the date and time, and <code>,x</code> ticks a box; <code>,h</code> lists them. <code>:Pb &lt;name&gt;</code> reads a playbook in below the cursor.</p>
             <p>IP addresses are Amber and <code>&lt;Placeholder&gt;</code> text is Ember wherever they appear. The app changes nothing else in the note, apart from a <code>Target:</code> line it wrote when that target is renamed or edited.</p>
             <p class="aside">Here dc01's fold is open and ws01's is closed. The two lines under enumeration are mine; the app wrote the rest.</p>
         </div>
