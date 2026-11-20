@@ -1668,7 +1668,7 @@ root = "files/playbooks"
 - A `notes` package has no commands, no uploads, no tool data and no requirements, and `needs_root` is false. `arch = "any"` is new and is accepted on every machine.
 - Manifest schema 3 and index schema 3 bring the kind in, the way schema 2 brought in runtimes, because an older pwn-broker rejects a whole index containing a kind it does not know. With schema 3, an older app says to upgrade instead of failing on the kind.
 - **Installing** unpacks it into `/opt/pwn-broker/tools/playbooks/<version>-<build>/` like any tool, writes nothing to `bin/` or `upload/`, and records it in `box.toml` like any tool.
-- **Several builds may be installed at once.** Unlike a tool (section 8.6), nothing of a `notes` package is on PATH, so one unfinished box on an older build does not stop a new box installing the current one. Each build is removed when the last box using it finishes or removes it.
+- **One build at a time, as for any tool** (section 8.6). If an unfinished box still holds an older build, `tool install playbooks` stops and names that box: finish it or remove the playbooks there first, or install that build to share it. Letting builds sit side by side was considered and dropped, because the installed list is keyed by name throughout and reworking that is not worth it for an unfinished box.
 - **The note window finds the open box's playbooks** through `/opt/pwn-broker/run/notes`: one folder per line, the `root` of each `notes` package installed for the open box. The app writes it at launch, resume, `tool install` and `tool remove`, and empties it at `quit` and `finish`.
 - `tool install playbooks` prints, after its `ok` line, how many playbooks it holds and how to read one:
 
