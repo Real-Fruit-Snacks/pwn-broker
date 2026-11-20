@@ -11,7 +11,7 @@ curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/downl
 For a release file already on the machine:
 
 ```sh
-sh install.sh --from pwn-broker-0.1.6-linux-x86_64.tar.gz
+sh install.sh --from pwn-broker-0.1.7-linux-x86_64.tar.gz
 ```
 
 Run the installer as the user who will use pwn-broker, not with `sudo`. It asks no questions. It creates `/opt/pwn-broker` and gives it to you, using `sudo` for that only, and only when it cannot create the folder itself. It then unpacks the release's own Python into `python/`, makes a virtual environment in `app/` with that Python, and installs the app and its dependencies there from the wheels in the release file. It copies asciinema into `app/bin/`, runs the app's `setup`, and adds `/opt/pwn-broker/bin` to PATH in `~/.zshrc` and, if it exists, `~/.bashrc`. Nothing goes into the system Python. If the PATH line cannot be written, the install is kept and one `fail` line says to add `bin/` to PATH yourself.
@@ -74,7 +74,7 @@ On x86_64 Linux. The build downloads the pinned inputs, refuses any that does no
 git clone https://github.com/Real-Fruit-Snacks/pwn-broker.git
 cd pwn-broker
 python3 -m venv .venv && .venv/bin/pip install -e . && .venv/bin/python release/build.py
-sh install.sh --from dist/pwn-broker-0.1.6-linux-x86_64.tar.gz
+sh install.sh --from dist/pwn-broker-0.1.7-linux-x86_64.tar.gz
 ```
 
 The `git clone` line needs `git` and the `python3 -m venv` line needs `python3-venv` (`apt install python3-venv git`); installing the app needs neither. That `.venv` is the build machine's own environment and its dependencies are not pinned; what goes into the release file is. `release/build.py` makes its own build environment with the Python it packs. [CONTRIBUTING.md](../CONTRIBUTING.md#building-a-release-file) has the build's options.
