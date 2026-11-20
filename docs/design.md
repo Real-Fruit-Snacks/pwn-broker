@@ -1599,7 +1599,7 @@ The body is plain markdown that reads well raw in vim: headings, lists, `- [ ]` 
 
 **Placeholders** are written `<Name>` in PascalCase, from one list: `<TargetIP>`, `<Domain>`, `<DCIP>`, `<Username>`, `<Password>`, `<Hash>`, `<LHOST>`, `<LPORT>` and so on. One name per meaning: my notes use both `<User>` and `<Username>`, and the playbooks use only `<Username>`.
 
-Only a name on the list is a placeholder. Anything else in angle brackets is literal text, so an XML payload, an Apache `<Directory>` block or a PowerShell `List<String>` is written as it is. The list avoids names that are common tags. The release zip carries the list as `placeholders.txt`, one name per line, beside the `playbooks/` folder.
+Only a name on the list is a placeholder. Anything else in angle brackets is literal text, so an XML payload, an Apache `<Directory>` block or a PowerShell `List<String>` is written as it is. The list avoids names that are common tags.
 
 **`build.py build`** wraps each source file and zips the tree. A built playbook reads:
 
@@ -1694,7 +1694,7 @@ forest/dc01 > tool install playbooks
 
 #### search
 
-`search` skips, in the note only, lines inside a playbook's fold (from its `Playbook:` line to its `END OF` line) that still contain a placeholder from the package's `placeholders.txt`, and the run block in full. A line I have filled in is my work and is searched like any other. When lines were skipped, the output ends with one mute line saying how many.
+`search` skips, in the note only, lines inside a playbook's fold (from its `Playbook:` line to its `END OF` line) that still contain a `<Placeholder>`, as the note's highlighting finds them, and the run block in full. Inside a playbook every such line is template text, so the list of names is not needed here and `search` works the same once the box's playbooks are removed. A line I have filled in is my work and is searched like any other. When lines were skipped, the output ends with one mute line saying how many.
 
 #### Order
 
