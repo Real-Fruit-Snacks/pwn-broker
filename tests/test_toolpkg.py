@@ -13,7 +13,7 @@ import tomli_w
 
 from pwn_broker import config, toolpkg, vpnctl
 from pwn_broker.toolpkg import ToolError, parse_manifest, unpack
-from toolkit import make_package, make_wheel, sample_manifest
+from toolkit import make_package, make_wheel, notes_files, sample_manifest
 
 
 def python_manifest(kind="kali", **command):
@@ -97,7 +97,7 @@ def expect_error(data, field):
     assert field in str(info.value)
 
 
-@pytest.mark.parametrize("schema", [3, 0, "1", True, None])
+@pytest.mark.parametrize("schema", [4, 0, "1", True, None])
 def test_an_unknown_schema_says_to_upgrade(schema):
     with pytest.raises(ToolError, match="upgrade pwn-broker"):
         parse_manifest(sample_manifest(schema=schema))
@@ -442,7 +442,7 @@ def test_missing_or_bad_manifest(tmp_path):
     with pytest.raises(ToolError):
         unpack(path, tmp_path / "d2")
     with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr("manifest.toml", tomli_w.dumps(sample_manifest(schema=3)))
+        zf.writestr("manifest.toml", tomli_w.dumps(sample_manifest(schema=4)))
     with pytest.raises(ToolError, match="upgrade"):
         unpack(path, tmp_path / "d3")
     assert not (tmp_path / "d1").exists() and not (tmp_path / "d2").exists()
@@ -823,10 +823,10 @@ def test_zip_name_with_a_dot():
 
 
 def test_kinds_and_schemas():
-    assert toolpkg.KINDS == ("kali", "upload", "both", "runtime")
+    assert toolpkg.KINDS == ("kali", "upload", "both", "runtime", "notes")
     # pwn-shop pins the same pattern, so the two repositories accept the same names
     assert toolpkg._NAME.pattern == r"[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*"
-    assert toolpkg.SCHEMAS == (1, 2)
+    assert toolpkg.SCHEMAS == (1, 2, 3)
 
 
 # ---- schema 1 as before
@@ -903,6 +903,79 @@ def test_a_runtime_needs_its_table():
     assert "runtime: a runtime package needs a [runtime] table" in str(info.value)
     with pytest.raises(ToolError, match="runtime: must be a table"):
         parse_manifest(sample_manifest(kind="runtime", runtime="files/python.tar.gz"))
+
+
+# ---- notes packages
+
+
+def test_notes_manifest_parses():
+    m = parse_manifest(sample_manifest(kind="notes"))
+    assert m.kind == "notes"
+    assert m.notes.root == "files/playbooks"
+    assert m.commands == [] and m.uploads == []
+    assert m.arch == "any"
+    assert m.schema == 3
+
+
+def test_notes_needs_schema_3():
+    with pytest.raises(ToolError, match="kind: notes needs schema 3"):
+        parse_manifest(sample_manifest(kind="notes", schema=2))
+
+
+@pytest.mark.parametrize("kind", ["kali", "runtime"])
+def test_schema_3_is_only_for_notes(kind):
+    with pytest.raises(ToolError, match="schema: only a notes package is schema 3"):
+        parse_manifest(sample_manifest(kind=kind, schema=3))
+
+
+@pytest.mark.parametrize(
+    "key, value, message",
+    [
+        ("command", [{"name": "x", "type": "binary", "path": "files/x"}],
+         "command: a notes package has no commands"),
+        ("upload", [{"path": "files/x", "as": "x"}], "upload: a notes package has no uploads"),
+        ("python", {"lock": "wheels.lock", "wheels": "wheels"},
+         "python: a notes package has no Python"),
+        ("requires", ["python-3.13"], "requires: a notes package requires nothing"),
+        ("data", {"home": [".x"]}, "data: a notes package keeps no tool data"),
+        ("needs_root", True, "needs_root: a notes package never needs root"),
+        ("arch", "x86_64", 'arch: a notes package is for any machine (arch = "any")'),
+    ],
+)
+def test_notes_refuses_what_it_cannot_have(key, value, message):
+    with pytest.raises(ToolError) as info:
+        parse_manifest(sample_manifest(kind="notes", **{key: value}))
+    assert message in str(info.value)
+
+
+def test_notes_root_must_be_under_files():
+    with pytest.raises(ToolError, match="notes.root"):
+        parse_manifest(sample_manifest(kind="notes", notes={"root": "playbooks"}))
+    data = sample_manifest(kind="notes")
+    del data["notes"]
+    with pytest.raises(ToolError) as info:
+        parse_manifest(data)
+    assert "notes: a notes package needs a [notes] table" in str(info.value)
+
+
+def test_notes_package_must_hold_a_playbook(tmp_path):
+    path, _size, _sha = make_package(
+        tmp_path, sample_manifest(kind="notes"), {"files/playbooks/readme.txt": b"no playbook\n"}
+    )
+    with pytest.raises(ToolError) as info:
+        toolpkg.package_manifest(path)
+    assert "files/playbooks: the package holds no .md files" in str(info.value)
+
+
+def test_notes_package_with_playbooks_passes_its_checks(tmp_path):
+    path, _size, _sha = make_package(tmp_path, sample_manifest(kind="notes"), notes_files())
+    assert toolpkg.package_manifest(path).kind == "notes"
+
+
+def test_arch_fits():
+    assert toolpkg.arch_fits("any")
+    assert toolpkg.arch_fits(toolpkg.machine_arch())
+    assert not toolpkg.arch_fits("sparc")
 
 
 @pytest.mark.parametrize(

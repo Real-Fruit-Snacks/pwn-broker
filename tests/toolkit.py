@@ -81,10 +81,89 @@ def _runtime_defaults() -> dict:
     }
 
 
+def _notes_defaults() -> dict:
+    return {
+        "schema": 3,
+        "name": "playbooks",
+        "version": "2026.11.19",
+        "build": 1,
+        "kind": "notes",
+        "description": "Playbooks to read into the note and fill in",
+        "tags": ["notes", "playbooks"],
+        "upstream": "https://github.com/Real-Fruit-Snacks/pwn-playbooks",
+        "licence": "CC-BY-4.0",
+        "arch": "any",
+        "needs_root": False,
+        "notes": {"root": "files/playbooks"},
+    }
+
+
+def built_playbook(name: str, title: str, rel: str, placeholders: list[str], body: str,
+                   version: str = "2026.11.19") -> str:
+    """A playbook as pwn-playbooks builds it: one fold, its run block, Fill in, body, end line."""
+    lines = [
+        "##########@@@@@@@@@@",
+        f"Playbook: {title}   {rel}   {version}",
+        "my",
+        f"/^END OF {name} PLAYBOOK$",
+        "mz",
+        *[f":'y,'zs/{p}/<Replace>/ge" for p in placeholders],
+        "'y",
+        "",
+        "Fill in:  " + "  ".join(placeholders),
+        "",
+        body.rstrip("\n"),
+        "",
+        f"END OF {name} PLAYBOOK",
+        "@@@@@@@@@@##########",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+SMB_BODY = "## Null session\nnxc smb <TargetIP> -u '' -p ''\nnxc smb <TargetIP> -u <Username> -p ''\n"
+SERVICES_BODY = "## Weak service permissions\nsc.exe qc <Service>\n"
+
+
+def notes_files() -> dict[str, bytes]:
+    return {
+        "files/playbooks/02-enum/smb.md": built_playbook(
+            "smb", "SMB enumeration", "02-enum/smb", ["<TargetIP>", "<Username>"], SMB_BODY
+        ).encode(),
+        "files/playbooks/06-privesc/windows/services.md": built_playbook(
+            "services", "Windows privesc: services", "06-privesc/windows/services",
+            ["<Service>"], SERVICES_BODY,
+        ).encode(),
+    }
+
+
+def make_notes_entry(folder: Path, files: dict | None = None, **overrides):
+    """A notes package, the playbooks by default, with its index entry."""
+    from pwn_broker.toolindex import BuildEntry
+
+    manifest = sample_manifest(kind="notes", **overrides)
+    zip_path, size, sha = make_package(folder, manifest, notes_files() if files is None else files)
+    entry = BuildEntry(
+        name=manifest["name"],
+        version=manifest["version"],
+        build=manifest["build"],
+        kind="notes",
+        needs_root=False,
+        commands=[],
+        file=zip_path.name,
+        url="",
+        size=size,
+        sha256=sha,
+    )
+    return zip_path, entry
+
+
 def sample_manifest(**overrides) -> dict:
-    # kind="runtime" gives a runtime package; requires=[...] gives a schema 2 Python tool
+    # kind="runtime" gives a runtime package; kind="notes" a schema 3 notes package;
+    # requires=[...] gives a schema 2 Python tool
     if overrides.get("kind") == "runtime":
         data = _runtime_defaults()
+    elif overrides.get("kind") == "notes":
+        data = _notes_defaults()
     elif "requires" in overrides:
         data = _tool_defaults()
         data.update(
