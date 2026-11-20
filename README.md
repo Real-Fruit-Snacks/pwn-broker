@@ -75,12 +75,16 @@ Left out: the version line and the launch checks above `New box`, the `New crede
 ## What's in it
 
 - **Boxes and targets.** `pwn-broker new`, `import <file>` and `resume [name]`. A box gets a folder under `~/pwn-broker/active/`, each target a folder with `scans/`, `loot/`, `exploits/` and the rest, and one prompt runs for the whole session. Each new target with an IP is pinged once. [Guide](docs/guide.md#boxes-and-targets)
-- **The note.** `notes.md` in vim, in a window of its own: the box's details at the top, redrawn when the targets change, and a fold per target. [Guide](docs/guide.md#the-note)
+- **The note.** `notes.md` in vim, in a window of its own: the box's details at the top, redrawn when the targets change, and a fold per target. Keys put in a target's IP, a credential from the box or the time, and `,h` lists them. [Guide](docs/guide.md#the-note)
 - **Credentials.** Kept exactly as typed, in one list per box. `lists/` is rebuilt from them, so other tools can read `usernames.txt`, `userpass.txt`, `hashes.txt` and the rest. [Guide](docs/guide.md#credentials)
 - **/etc/hosts.** One line per target, marked with the box ID, kept in step with the target and removed at `finish`. Other lines are never changed. [Guide](docs/guide.md#the-hosts-file)
 - **Recording.** `record [target]` in any terminal records that window with a pinned asciinema 3.2.1 and writes a timed text copy beside it, for grep. `replay` plays one back. [Guide](docs/guide.md#recording)
 - **VPN.** `vpn start`, `stop`, `status` and `log` for OpenVPN. The `.ovpn` file is copied into the box and never archived. [Guide](docs/guide.md#vpn)
+- **Scans.** `scan` runs nmap against the current target in the background, quick then full, into its `scans/` folder, and says in the prompt when each is done. [Guide](docs/guide.md#scans)
+- **Serving files.** `serve` offers the target's `upload/` folder and the tools' files over HTTP behind a random path, prints the line to fetch each one, and saves files the target sends back into `loot/`. [Guide](docs/guide.md#serving-files)
+- **Search.** `search <text>` looks through the current target's files, recordings and section of the note, and `search all <text>` through the whole box. [Guide](docs/guide.md#searching)
 - **Tools.** `tool install` from [`pwn-shop`](https://github.com/Real-Fruit-Snacks/pwn-shop): kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng, peass-ng, chisel, godpotato, runascs, rusthound-ce, git-dumper, snaffler, lazagne and cdk. The Python ones bring their own Python, so Kali's is never used or shadowed. `finish` takes them off again. [Guide](docs/guide.md#tools)
+- **Playbooks.** `tool install playbooks` gets [pwn-playbooks](https://github.com/Real-Fruit-Snacks/pwn-playbooks), short notes for one job each, and `:Pb <name>` reads one into the note below the cursor, with the vim lines that fill in its placeholders. [Guide](docs/guide.md#playbooks)
 - **Finish, export, import.** `finish` archives the box to `~/pwn-broker/wrapped/` and closes it, `export` writes a snapshot and keeps working, and `pwn-broker import` unpacks either. [Guide](docs/guide.md#finish-export-and-import)
 
 `help` at the prompt lists every command; the [guide](docs/guide.md#every-command) has them all in one table.

@@ -124,6 +124,7 @@ At commit cf585e7.
 - `search all nxc smb` found the filled line and ended `1 matching line of unfilled playbook text skipped`.
 - `finish` listed `playbooks 2026.11.19   (will be removed)` and printed `ok    playbooks 2026.11.19 removed`. It left the installed list empty and no `run/notes`, and the archive kept the filled note.
 - Before the release, in a terminal by `script`: a run block whose playbook had lost its `END OF` line, below a whole copy of the same playbook, changed nothing with the search limited to below its `y` mark; with the earlier, plain search, the same keys rewrote a line of the note between the two copies.
+- After pwn-playbooks was published, on 2026-11-20 in the same Kali as the same user, with no `tools_index` set: `tool install playbooks` from pwn-shop's published index printed `ok    playbooks 2026.11.20.1 installed (79 playbooks)`, and the cached index was schema 3. In real vim, `:Pb kerberoa` and Tab read in `Playbook: Kerberoasting   07-ad/kerberoasting   2026.11.20.1` with its `Fill in:` line. `finish` printed `ok    playbooks 2026.11.20.1 removed` and left no `run/notes`.
 
 ### A normal user with `sudo`
 

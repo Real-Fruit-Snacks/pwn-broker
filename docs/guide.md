@@ -369,12 +369,12 @@ Build 3 of `certipy` and `targetedkerberoast` requires a runtime, and is the onl
 
 ### Playbooks
 
-Playbooks are short notes, one per job, that you read into the box's note and fill in. They come from the pwn-playbooks repository as a package of kind `notes`, through the same index as the tools:
+Playbooks are short notes, one per job, that you read into the box's note and fill in. They come from the [pwn-playbooks](https://github.com/Real-Fruit-Snacks/pwn-playbooks) repository as a package of kind `notes`, through the same index as the tools:
 
 ```
 forest/dc01 > tool install playbooks
 
-  ok    playbooks 2026.11.19 installed (64 playbooks)
+  ok    playbooks 2026.11.20.1 installed (79 playbooks)
   read  :Pb <name>   in the note window
 ```
 
