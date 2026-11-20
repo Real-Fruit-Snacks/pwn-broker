@@ -1524,6 +1524,204 @@ Built. Where the build differs from the first design, this section describes wha
 - If it cannot be written, the app warns once a session and carries on: a log must never stop an install.
 - It is readable only by me: mode 600, set again each time a line is added. Each line is added in one write, not through the app's usual replace-the-file save.
 
+### 8.14 Playbooks
+
+My notes are a large reference written for reading, not for working from mid-box. I want a smaller set cut from them: short playbooks, one per job, that I read straight into the box's note and fill in. I improve them between boxes, so a box takes the current playbooks like a tool and gives them back at `finish`, and the next box gets the newer ones.
+
+**Goals**
+
+- `tool install playbooks` gets them, checked and pinned like any tool, with or without a network.
+- One command in the note window reads a playbook into the note, below the cursor.
+- Every value I must supply is a `<Placeholder>`, and each playbook carries the lines that fill them in throughout that playbook and nowhere else.
+- I find a playbook by phase, OS or service, whichever I am thinking of at the time.
+- A box records which playbooks build it was worked with, and reopening it installs that build again.
+
+**Non-goals**
+
+- Filling placeholders for me. The app knows a few values (the target's IP, `tun0`), but most it cannot, and I fill them by hand.
+- Keeping a playbook already in a note in step with later releases. Once read in it is a copy, and the note records what I did on that box.
+- Converting my notes automatically. Playbooks are written by hand from them.
+
+**Anti-goal:** playbooks that make the note harder to work in, because they bury my own notes, break the box header or the target folds, or flood `search` with template text.
+
+#### Approaches considered
+
+| Approach | Trade |
+|---|---|
+| **A repository of its own, `pwn-playbooks`, with a `pwn-shop` recipe pinning each release (chosen)** | Gets the index, the size and SHA-256 checks, the cache, `fetch.sh` and import for free, and keeps `pwn-shop`'s rule that its packages are upstream's own files. Each improvement is two releases: the playbooks, then the recipe |
+| The playbook source committed in `pwn-shop` | One repository fewer, but it breaks that rule, and a typo fix would run the whole tool CI |
+| A repository of its own with its own `playbooks update` command in pwn-broker | One release per change, but a second download path, cache and offline story beside the one tools already have |
+
+#### The playbooks repository
+
+`Real-Fruit-Snacks/pwn-playbooks`, public, so its README and Pages follow the same standard as the other pwn repositories. The playbooks are licensed CC BY 4.0, since they are writing, not code.
+
+```
+playbooks/                  the playbooks, one file each, in the tree below
+placeholders.toml           every placeholder name a playbook may use, each with one line on what it means
+build.py                    checks the tree and builds the release zip
+```
+
+```
+playbooks/
+  01-checklists/      ad.md  standalone.md  web.md
+  02-enum/            smb.md  ldap.md  mssql.md  snmp.md  nfs.md ...
+  03-web/             sqli.md  lfi.md  upload.md ...
+  04-foothold/        shells.md  file-transfer.md ...
+  05-passwords/       spraying.md  hashcat.md ...
+  06-privesc/
+    linux/            sudo.md  suid.md  cron.md ...
+    windows/          services.md  tokens.md  credential-hunting.md ...
+  07-ad/              kerberoasting.md  asrep.md  adcs.md ...
+  08-pivoting/        ligolo.md  chisel.md ...
+```
+
+The folders go by phase, with OS and service folders only where they help. Finding a playbook goes by file name, wherever it sits, so the tree never has to guess which of the three I will think of.
+
+**A source file** is a title line and a body:
+
+```
+# Windows privesc: services
+
+## Find a service I can change
+...
+```
+
+The body is plain markdown that reads well raw in vim: headings, lists, `- [ ]` checklists and commands. Commands take values only as placeholders.
+
+**`build.py check` refuses**, naming the file and line:
+
+- a file name used twice anywhere in the tree, since lookup is by name;
+- a folder or file name that is not lowercase letters, digits and hyphens;
+- the reserved word `<Replace>` anywhere in a body;
+- a `<Name>` that differs only in case from a listed placeholder (`<TargetIp>`), since that is a typo.
+- in a body: a fold marker, a line of 20 or more `#` (the box header's rule), an Obsidian callout (`> [!`), a `[[link]]`, or front matter.
+
+**Placeholders** are written `<Name>` in PascalCase, from one list: `<TargetIP>`, `<Domain>`, `<DCIP>`, `<Username>`, `<Password>`, `<Hash>`, `<LHOST>`, `<LPORT>` and so on. One name per meaning: my notes use both `<User>` and `<Username>`, and the playbooks use only `<Username>`.
+
+Only a name on the list is a placeholder. Anything else in angle brackets is literal text, so an XML payload, an Apache `<Directory>` block or a PowerShell `List<String>` is written as it is. The list avoids names that are common tags. The release zip carries the list as `placeholders.txt`, one name per line, beside the `playbooks/` folder.
+
+**`build.py build`** wraps each source file and zips the tree. A built playbook reads:
+
+```
+##########@@@@@@@@@@
+Playbook: Windows privesc: services   06-privesc/windows/services   2026.11.19
+my
+/^END OF services PLAYBOOK$
+mz
+:'y,'zs/<TargetIP>/<Replace>/ge
+:'y,'zs/<Username>/<Replace>/ge
+:'y,'zs/<Password>/<Replace>/ge
+'y
+
+Fill in:  <TargetIP>  <Username>  <Password>
+
+## Find a service I can change
+...
+
+END OF services PLAYBOOK
+@@@@@@@@@@##########
+```
+
+- The whole playbook is one fold, and its `Playbook:` line is what the fold shows when closed: title, path and release.
+- The run block comes first, with one replace line per placeholder, then a blank line.
+- `Fill in:` follows it and lists the same placeholders in the same order: every one the body uses, in order of first use, each once. It sits below `my`, so it is inside the range the block replaces.
+- `END OF <name> PLAYBOOK` is the last line inside the fold. `<name>` is the file name without `.md`, unique across the tree.
+
+**Filling one in**, entirely in plain vim:
+
+1. Over each `<Replace>`, type the value: `ca>` on it removes the word and its angle brackets and starts insert mode. Delete with `dd` each line I am not filling.
+2. On the `my` line: `V}` selects the run block down to its blank line, then `"qy` copies it into register `q`.
+3. `@q` runs it. It marks the block's first line `y`, finds this playbook's end line, marks it `z`, replaces each placeholder between the two, and goes back to `y`.
+
+The `Fill in:` line is inside the range, so afterwards it shows the values used, and any placeholder still on it is one not yet filled. The search is forward from the block, so the same playbook read in for two targets fills only the copy it belongs to.
+
+Fixed parts of this, and why:
+
+- **Marks `y` and `z`**, not `a` and `b`, so marks I set myself are rarely overwritten.
+- **Pasting the block from the terminal does not run it.** Vim's bracketed paste inserts pasted text as text, which is why the block goes through a register.
+- **The end line is anchored** with `^` and `$`, or the search would match its own line in the block.
+- **Both ends are marked**, because `:s` leaves the cursor on the last line it changed and a range ending at the cursor would shrink with each line.
+
+**Releases.** One per change. I tag it by hand, `v<YYYY.MM.DD>`; a second release on the same day adds `.1`, `.2`. That is a date-based exception to the SemVer rule in `BRAND.md`, limited to this repository, as `pwn-shop`'s tags are. On a tag, CI runs the check, builds with the version taken from the tag, and publishes the release. Each release holds `playbooks-<version>.zip` and `SHA256SUMS.txt`. A published release is never changed.
+
+#### The `notes` package kind
+
+`pwn-shop` gains a recipe, `recipes/playbooks/`, whose single source is the release zip, unpacked whole into `files/`. That is a new source form for `build.py`: today a source is a bare file or one member of an archive. Its manifest:
+
+```toml
+schema = 3
+name = "playbooks"
+version = "2026.11.19"
+build = 1
+kind = "notes"
+description = "Playbooks to read into the note and fill in"
+tags = ["notes", "playbooks"]
+upstream = "https://github.com/Real-Fruit-Snacks/pwn-playbooks"
+licence = "CC-BY-4.0"
+arch = "any"
+
+[notes]
+root = "files/playbooks"
+```
+
+- A `notes` package has no commands, no uploads, no tool data and no requirements, and `needs_root` is false. `arch = "any"` is new and is accepted on every machine.
+- Manifest schema 3 and index schema 3 bring the kind in, the way schema 2 brought in runtimes, because an older pwn-broker rejects a whole index containing a kind it does not know. With schema 3, an older app says to upgrade instead of failing on the kind.
+- **Installing** unpacks it into `/opt/pwn-broker/tools/playbooks/<version>-<build>/` like any tool, writes nothing to `bin/` or `upload/`, and records it in `box.toml` like any tool.
+- **Several builds may be installed at once.** Unlike a tool (section 8.6), nothing of a `notes` package is on PATH, so one unfinished box on an older build does not stop a new box installing the current one. Each build is removed when the last box using it finishes or removes it.
+- **The note window finds the open box's playbooks** through `/opt/pwn-broker/run/notes`: one folder per line, the `root` of each `notes` package installed for the open box. The app writes it at launch, resume, `tool install` and `tool remove`, and empties it at `quit` and `finish`.
+- `tool install playbooks` prints, after its `ok` line, how many playbooks it holds and how to read one:
+
+```
+forest/dc01 > tool install playbooks
+
+  ok    playbooks 2026.11.19 installed (64 playbooks)
+  read  :Pb <name>   in the note window
+```
+
+- `finish`, `export`, `import` and reopening a box treat it as they treat any tool. Reopening an archived box installs the same build, so the playbooks it was worked with come back with it.
+- `pwn-shop`'s CI step 3 has no command to run for a `notes` package. It checks instead that `root` exists, holds at least one `.md` file, and that every file starts with a fold marker and a `Playbook:` line.
+
+#### In the note window
+
+- **`:Pb <name>`** reads the playbook with that file name, from the folders in `run/notes`, into the note below the cursor. Tab completes names from every installed playbook, matching any part of the name. Like F8, it never lands inside the box header: on a box line it reads below the box, and on a closed fold it reads below the fold. The new fold is left open with the cursor on its `my` line.
+- **`:Pb`** with no name lists every playbook, grouped by folder, to pick one by number, as `,c` does for credentials.
+- With nothing in `run/notes`, `:Pb` prints `no playbooks for this box: tool install playbooks at the prompt`, and reads nothing.
+- When two installed `notes` packages hold the same file name, completion and the list show each with its package's name, and `:Pb <name>` asks which.
+- **`,x`** toggles `[ ]` and `[x]` on the current line.
+- The note's syntax file already shows `<Placeholder>` text in Ember (section 6.6), `<Replace>` included, so what is still to fill stands out with no change.
+- `,h` lists `:Pb` and `,x`.
+
+#### search
+
+`search` skips, in the note only, lines inside a playbook's fold (from its `Playbook:` line to its `END OF` line) that still contain a placeholder from the package's `placeholders.txt`, and the run block in full. A line I have filled in is my work and is searched like any other. When lines were skipped, the output ends with one mute line saying how many.
+
+#### Order
+
+1. pwn-broker: manifest and index schema 3, the `notes` kind, `run/notes`, `:Pb`, `,x` and the `search` skip, released.
+2. `pwn-playbooks`: the repository, `build.py`, `placeholders.toml`, and a first release, even a small one. Writing the playbooks themselves is separate work, done by hand from my notes once the tooling works; the count in the `tool install` example above is only an example.
+3. `pwn-shop`: the whole-archive source form, the recipe, CI's check for `notes`, and the index at schema 3.
+
+#### Testing
+
+- `pwn-playbooks`' CI runs `build.py check` and a build on every change, and its unit tests cover each refusal above.
+- pwn-broker's unit tests build a stand-in `notes` package and cover install, remove, two builds for two boxes, `run/notes` at each point where it is written, finish and import, an older-schema index, and the `search` skip.
+- `tests/test_vim.py` runs vim headless on a note: `:Pb` lands below the box and below a closed fold; the run block, filled in and run through a register, replaces only inside its own playbook; the same playbook read in twice fills only the copy it belongs to; a deleted line leaves its placeholder in place.
+- The Kali checklist gains: `tool install playbooks` from a `fetch.sh` folder, `:Pb` from the note window, fill one in, `finish` removes it, `import` puts the same build back.
+
+#### Accepted trades
+
+- Each improvement is two releases, the playbooks and then the recipe. Automating the second (a playbooks release opening the `pwn-shop` change) can come later.
+- A value containing `/`, `&`, `\` or `~` breaks or changes the replacement unless I escape it (`\/`, `\&`). That matters mostly for passwords.
+- An unfilled replace line, if I forget to delete it, turns that placeholder into `<Replace>` throughout the playbook. It stays visible, but which placeholder it was is lost.
+- Marks `y` and `z` are overwritten each time a run block runs.
+
+#### Left to the builder
+
+- `placeholders.toml`'s full list beyond the names above, and its format.
+- How `:Pb`'s list is laid out on screen, within the note window's existing popup style.
+- How `pwn-shop`'s whole-archive source refuses links and entries that would escape `files/`, matching section 8.5's rules.
+
 ## 9. What finish puts back
 
 Whatever a box changes on Kali, `finish` undoes. Each change is recorded in `box.toml` when it is made.
