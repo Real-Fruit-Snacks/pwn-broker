@@ -1534,6 +1534,37 @@ def test_install_and_remove_rewrite_run_notes(session, tmp_path):
     assert session.paths.run_notes.read_text(encoding="utf-8") == ""
 
 
+@pytest.fixture
+def noted(session, tmp_path):
+    """The playbooks installed for the box through the hooks, from a folder index."""
+    zip_path, entry = toolkit.make_notes_entry(tmp_path / "npkg")
+    toolkit.write_index(tmp_path / "nindex", [entry])
+    (tmp_path / "nindex" / entry.file).write_bytes(zip_path.read_bytes())
+    session.settings = replace(session.settings, tools_index=str(tmp_path / "nindex"))
+    install_through_hooks(session, entry)
+    return session
+
+
+def test_finish_takes_the_playbooks_off_run_notes(noted):
+    assert noted.paths.run_notes.read_text(encoding="utf-8") != ""
+    toolhooks.undo(noted)
+    assert load_installed(noted.paths) == {}
+    assert noted.paths.run_notes.read_text(encoding="utf-8") == ""
+
+
+def test_reopening_puts_the_same_playbooks_build_back_in_run_notes(noted):
+    item = load_installed(noted.paths)["playbooks"]
+    toolinstall.remove_files(noted.paths, item)
+    toolstate.save_installed(noted.paths, {})
+    toolstate.write_notes_file(noted.paths, noted.box)
+    assert noted.paths.run_notes.read_text(encoding="utf-8") == ""
+    say(noted, "y")
+    toolhooks.restore(noted)
+    again = load_installed(noted.paths)["playbooks"]
+    assert (again.version, again.build) == ("2026.11.19", 1)
+    assert noted.paths.run_notes.read_text(encoding="utf-8") == again.notes + "\n"
+
+
 def test_a_failed_install_logs_nothing(tooled, pyshop, monkeypatch):
     toolkit.no_real_venv(monkeypatch, fail="pip")
     with pytest.raises(ToolError):

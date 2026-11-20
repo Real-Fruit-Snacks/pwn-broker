@@ -1607,7 +1607,7 @@ Only a name on the list is a placeholder. Anything else in angle brackets is lit
 ##########@@@@@@@@@@
 Playbook: Windows privesc: services   06-privesc/windows/services   2026.11.19
 my
-/^END OF services PLAYBOOK$
+/^\%>'yEND OF services PLAYBOOK$
 mz
 :'y,'zs/<TargetIP>/<Replace>/ge
 :'y,'zs/<Username>/<Replace>/ge
@@ -1641,6 +1641,7 @@ Fixed parts of this, and why:
 - **Marks `y` and `z`**, not `a` and `b`, so marks I set myself are rarely overwritten.
 - **Pasting the block from the terminal does not run it.** Vim's bracketed paste inserts pasted text as text, which is why the block goes through a register.
 - **The end line is anchored** with `^` and `$`, or the search would match its own line in the block.
+- **The search looks only below mark `y`** (`\%>'y`). Vim's searches wrap round the end of the file, so with this playbook's end line deleted, a plain search would find an earlier copy's end line above. Every replace line would then be a backwards range, which interactive vim offers to swap, taking its answer from the rest of the register, and the fill would rewrite everything between the two copies. Limited to lines below `y`, the search fails, vim stops the register there, and nothing changes.
 - **Both ends are marked**, because `:s` leaves the cursor on the last line it changed and a range ending at the cursor would shrink with each line.
 
 **Releases.** One per change. I tag it by hand, `v<YYYY.MM.DD>`; a second release on the same day adds `.1`, `.2`. That is a date-based exception to the SemVer rule in `BRAND.md`, limited to this repository, as `pwn-shop`'s tags are. On a tag, CI runs the check, builds with the version taken from the tag, and publishes the release. Each release holds `playbooks-<version>.zip` and `SHA256SUMS.txt`. A published release is never changed.

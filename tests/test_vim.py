@@ -785,6 +785,40 @@ def test_run_block_with_its_end_line_gone_replaces_nothing(box, note, work, note
     ) * 2
 
 
+FILL_SECOND_WITH_ITS_END_GONE = r"""
+let outer = Find('^Target: dc01 ') - 1
+execute outer . 'foldopen'
+call cursor(Find('^login as '), 1)
+Pb smb
+let web = Find('^Target: web') - 1
+execute web . 'foldopen'
+call cursor(Find('^Target: web'), 1)
+call append(line('.'), 'my own note between: <TargetIP> still to check')
+call cursor(line('.') + 1, 1)
+Pb smb
+let second = line('.')
+let t = search('^:''y,''zs/<TargetIP>/', 'W')
+call setline(t, ":'y,'zs/<TargetIP>/10.10.10.5/ge")
+let gone = search('^END OF smb PLAYBOOK$', 'W')
+execute gone . 'delete'
+call cursor(second, 1)
+execute "normal! V}\"qy"
+let v:errmsg = ''
+silent! normal @q
+call Put('error', v:errmsg)
+call Put('lines', getline(1, '$'))
+"""
+
+
+def test_run_block_with_its_end_line_gone_never_reaches_a_copy_above(box, note, work, notes_file):
+    # the search must not wrap round to the END OF line of an earlier copy: that range runs
+    # backwards, and interactive vim offers to swap it, taking the answer from the register
+    got = run_vim(box.path, work, with_notes(notes_file, FILL_SECOND_WITH_ITS_END_GONE))
+    assert "E486" in got["error"] and "E493" not in got["error"]
+    assert "my own note between: <TargetIP> still to check" in got["lines"]
+    assert not any("10.10.10.5 -u" in line for line in got["lines"])
+
+
 def test_comma_x_toggles(box, note, work):
     got = run_vim(box.path, work, r"""
 call append(line('$'), ['- [ ] a', 'plain'])

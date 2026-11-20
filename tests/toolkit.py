@@ -105,7 +105,8 @@ def built_playbook(name: str, title: str, rel: str, placeholders: list[str], bod
         "##########@@@@@@@@@@",
         f"Playbook: {title}   {rel}   {version}",
         "my",
-        f"/^END OF {name} PLAYBOOK$",
+        # \%>'y: only below the y mark, so a search that wraps never finds an earlier copy's end
+        f"/^\\%>'yEND OF {name} PLAYBOOK$",
         "mz",
         *[f":'y,'zs/{p}/<Replace>/ge" for p in placeholders],
         "'y",

@@ -15,7 +15,7 @@ def test_template_lines():
     skipped = {lines[n] for n in template_lines(text.splitlines())}
     assert skipped == {
         "my",
-        "/^END OF smb PLAYBOOK$",
+        "/^\\%>'yEND OF smb PLAYBOOK$",
         "mz",
         ":'y,'zs/<TargetIP>/<Replace>/ge",
         "'y",
@@ -39,6 +39,15 @@ def test_template_lines_finds_a_playbook_inside_a_target_fold():
     skipped = {lines[n] for n in template_lines(text.splitlines())}
     assert "nxc smb <TargetIP>" in skipped
     assert "dc01 <TargetIP> note of my own" not in skipped
+
+
+def test_a_playbook_whose_run_block_was_deleted_keeps_its_filled_lines_searchable():
+    text = built_playbook("smb", "SMB", "02-enum/smb", ["<TargetIP>"], BODY)
+    lines = text.splitlines()
+    start, end = lines.index("my"), lines.index("'y")
+    del lines[start : end + 1]
+    skipped = {lines[n - 1] for n in template_lines(lines)}
+    assert skipped == {"Fill in:  <TargetIP>", "nxc smb <TargetIP>"}
 
 
 def test_template_lines_without_playbooks_is_empty():

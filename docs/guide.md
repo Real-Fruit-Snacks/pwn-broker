@@ -387,7 +387,7 @@ A playbook starts with a run block that fills its placeholders in that playbook 
 
 ```
 my
-/^END OF smb PLAYBOOK$
+/^\%>'yEND OF smb PLAYBOOK$
 mz
 :'y,'zs/<TargetIP>/<Replace>/ge
 :'y,'zs/<Username>/<Replace>/ge
@@ -405,7 +405,7 @@ Afterwards the `Fill in:` line shows the values used, and a placeholder still on
 - A value holding `/`, `&`, `\` or `~` breaks or changes the replacement unless you escape it (`\/`, `\&`). That matters mostly for passwords.
 - A replace line left as `<Replace>` turns that placeholder into `<Replace>` throughout the playbook.
 - Marks `y` and `z` are overwritten each time a run block runs.
-- Delete a playbook's `END OF` line and its run block finds nothing and changes nothing, unless another copy of the same playbook sits below it; then the fill reaches into that copy too.
+- The search looks only below the run block (`\%>'y`), so a playbook whose `END OF` line you deleted stops there and changes nothing, even with another copy above it. With another copy of the same playbook below it, the fill runs down to that copy's end, your own lines between included.
 
 ### Kali's copies, sudo, and one build per machine
 

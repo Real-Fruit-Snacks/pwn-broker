@@ -120,6 +120,14 @@ def test_list_installed_adds_the_run_column(session, shop):
     assert rows[1][5] == "ligolo-proxy"
 
 
+def test_list_installed_for_notes_shows_how_to_read_them(session, shop):
+    zip_path, entry = toolkit.make_notes_entry(shop.folder)
+    toolkit.write_index(shop.folder, shop.entries + [entry])
+    run(session, "tool install playbooks")
+    _columns, rows = table(run(session, "tool list --installed"))
+    assert [r[5] for r in rows if r[0] == "playbooks"] == [":Pb <name>"]
+
+
 def test_list_installed_for_an_upload_only_tool_shows_the_upload_folder(session, shop):
     manifest = toolkit.sample_manifest(
         name="chisel", kind="upload", arch=machine_arch(),

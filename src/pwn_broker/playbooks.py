@@ -8,7 +8,8 @@ from pwn_broker.note import FOLD_END, FOLD_START
 # words, as in <TargetIP> or <Target Host>
 PLACEHOLDER = re.compile(r"<[A-Z][0-9A-Za-z_-]*(?: [0-9A-Za-z_-]+)*>")
 PLAYBOOK_PREFIX = "Playbook: "
-# the last line of a playbook's run block
+# the first and last lines of a playbook's run block
+RUN_BLOCK_START = "my"
 RUN_BLOCK_END = "'y"
 
 
@@ -36,12 +37,12 @@ def template_lines(lines: list[str]) -> set[int]:
             n += 1
             continue
         end = _end(lines, n)
-        m = n + 2
-        while m < end:
-            found.add(m + 1)
-            if lines[m] == RUN_BLOCK_END:
-                break
-            m += 1
+        # a run block is there only while its first line follows the Playbook: line and its last
+        # line is still in the playbook; once deleted, only the placeholder rule applies
+        m = n + 1
+        if n + 2 < end and lines[n + 2] == RUN_BLOCK_START and RUN_BLOCK_END in lines[n + 2 : end]:
+            m = lines.index(RUN_BLOCK_END, n + 2)
+            found.update(range(n + 3, m + 2))
         for k in range(m + 1, end):
             if lines[k].strip() not in (FOLD_START, FOLD_END) and PLACEHOLDER.search(lines[k]):
                 found.add(k + 1)
