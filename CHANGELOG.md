@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.7 (unreleased)
+
+`tool install playbooks` installs playbooks for the box: a package of the new kind `notes`, which comes with manifest and index schema 3 and, like a tool, comes off at `finish`. In the note's vim, `:Pb <name>` reads one in below the cursor as its own fold, with Tab completing the name and `:Pb` alone listing them; the run block at its top, copied with `V}` `"qy` and run with `@q`, puts your values in place of its `<Placeholder>`s in that playbook only. `,x` ticks or unticks a `[ ]` box. `search` skips a playbook's unfilled lines in the note and says how many it skipped.
+
 ## v0.1.6
 
 `search <text>` finds text in the current target's files, its recordings' text copies and its section of the note; `search <target> <text>` in another target, and `search all <text>` in the whole box. Case is ignored; binary files and `vpn/` are skipped.
