@@ -188,7 +188,7 @@ Each new target with an IP is pinged once at its first IP, with a two-second wai
 
 ## The note
 
-`notes.md` starts with a box drawn in `#` that holds the box details and one row per target, and the app redraws it whenever the targets change. Below it, each target has a section wrapped in a vim fold that starts with its `Target:` line, and the note opens with every fold closed down to that line. `F8` in vim adds an empty fold below the cursor, and `,h` lists the note's keys in a small window that any key closes. `,t` puts the date and time after the cursor, `,i` the IP of the target whose section the cursor is in, and `,c` offers the box's `user:password` and `user:hash` pairs from `lists/` in a numbered list and puts the one you pick in, exactly as it is. The app changes nothing else in the note, apart from a `Target:` line it wrote when that target is renamed or edited.
+`notes.md` starts with a box drawn in `#` that holds the box details and one row per target, and the app redraws it whenever the targets change. Below it, each target has a section wrapped in a vim fold that starts with its `Target:` line, and the note opens with every fold closed down to that line. `F8` in vim adds an empty fold below the cursor, and `,h` lists the note's keys in a small window that any key closes. `,t` puts the date and time after the cursor, `,i` the IP of the target whose section the cursor is in, and `,c` offers the box's `user:password` and `user:hash` pairs from `lists/` in a numbered list and puts the one you pick in, exactly as it is. `,x` ticks or unticks the first `[ ]` or `[x]` on the line, and `:Pb <name>` reads one of the box's [playbooks](#playbooks) in below the cursor. The app changes nothing else in the note, apart from a `Target:` line it wrote when that target is renamed or edited.
 
 The note opens in a second terminal, the `terminal` setting, which runs vim with the app's own vimrc. Without a desktop session the `display` check says how to run that vim by hand.
 
@@ -367,6 +367,46 @@ A Python tool can bring its own Python instead of using Kali's. Such a tool requ
 
 Build 3 of `certipy` and `targetedkerberoast` requires a runtime, and is the only build of each that is published: builds 1 and 2 were withdrawn on 2026-11-15, before any box had used them. The other four tools need no Python. The app still reads a package that runs on Kali's own Python (schema 1), and such a tool says so if Kali's Python cannot make its environment; none is published.
 
+### Playbooks
+
+Playbooks are short notes, one per job, that you read into the box's note and fill in. They come from the pwn-playbooks repository as a package of kind `notes`, through the same index as the tools:
+
+```
+forest/dc01 > tool install playbooks
+
+  ok    playbooks 2026.11.19 installed (64 playbooks)
+  read  :Pb <name>   in the note window
+```
+
+- **They come and go with the box, like a tool.** `finish` takes them off, the box records which build it had, and reopening or importing it installs that build again. One build is on the machine at a time: while an unfinished box still has an older build, `tool install playbooks` stops and names that box.
+- **`:Pb <name>`** in the note window reads one into the note below the cursor, never into the box at the top, and below a closed fold when the cursor is on one. Tab completes the name from any part of it, so `:Pb serv` finds `06-privesc/windows/services`. `:Pb` on its own lists them all to pick one by number.
+- **Each playbook is one fold.** Closed, it shows its `Playbook:` line: its title, its path and the build it came from.
+- **Placeholders** are written `<Name>`, such as `<TargetIP>` or `<Username>`, and the note shows them in Ember.
+
+A playbook starts with a run block that fills its placeholders in that playbook only:
+
+```
+my
+/^\%>'yEND OF smb PLAYBOOK$
+mz
+:'y,'zs/<TargetIP>/<Replace>/ge
+:'y,'zs/<Username>/<Replace>/ge
+'y
+
+Fill in:  <TargetIP>  <Username>
+```
+
+1. On each replace line, put the value over `<Replace>`: `ca>` on it removes the word and its angle brackets and starts insert mode. Delete with `dd` each replace line you are not filling.
+2. On the `my` line, `V}` selects the run block down to its blank line, and `"qy` copies it into register `q`.
+3. `@q` runs it: it marks the block's first line `y`, finds this playbook's `END OF` line, marks it `z`, replaces each placeholder between the two, and ends back at the run block.
+
+Afterwards the `Fill in:` line shows the values used, and a placeholder still on it is one not filled yet. The same playbook read in for two targets fills only the copy the block belongs to. Pasting the block from the terminal does not run it: vim inserts pasted text as text, which is why it goes through a register.
+
+- A value holding `/`, `&`, `\` or `~` breaks or changes the replacement unless you escape it (`\/`, `\&`). That matters mostly for passwords.
+- A replace line left as `<Replace>` turns that placeholder into `<Replace>` throughout the playbook.
+- Marks `y` and `z` are overwritten each time a run block runs.
+- The search looks only below the run block (`\%>'y`), so a playbook whose `END OF` line you deleted stops there and changes nothing, even with another copy above it. With another copy of the same playbook below it, the fill runs down to that copy's end, your own lines between included.
+
 ### Kali's copies, sudo, and one build per machine
 
 - **Kali's own copies are never touched.** An install writes a launcher for each command into `/opt/pwn-broker/bin`, and that folder decides which copy a bare command name runs. If Kali already has a command of the same name, install prints a `warn` line with its path and says the installed one wins. `tool list` has a `kali` column that says whether Kali already has a command of that name.
@@ -430,6 +470,7 @@ forest/dc01 > search password
 - A first word that is `all` or a target's exact name sets the scope when something follows it; on its own it is what is looked for.
 - Binary files, links, names starting with a dot, recordings' `.cast` files (their `.txt` copies are searched) and the `vpn/` folder are skipped. A file over 16 MiB is skipped and named.
 - The first 200 hits are shown, with the count of the rest.
+- In the note, a [playbook](#playbooks)'s run block, and its lines still holding a `<Placeholder>`, are template text and are skipped; a last line says how many matching lines were. A line you have filled in is searched like any other.
 
 ## Scans
 

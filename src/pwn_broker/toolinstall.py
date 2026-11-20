@@ -18,6 +18,7 @@ from pwn_broker.toolpkg import (
     Command,
     Manifest,
     ToolError,
+    arch_fits,
     build_id,
     check_lock,
     machine_arch,
@@ -192,7 +193,11 @@ def _delete_tree(path: Path) -> None:
 def _show(
     paths: AppPaths, console: Console, item: Installed, version: str | None = None
 ) -> None:
-    if version is not None:
+    if version is not None and item.notes:
+        count = sum(1 for p in Path(item.notes).rglob("*.md") if p.is_file())
+        console.ok(f"{item.name} {version} installed ({count} playbooks)")
+        console.info("read  :Pb <name>   in the note window")
+    elif version is not None:
         console.ok(f"{item.name} {version} installed")
     for command in item.commands:
         console.info(f"run   {command}   from any terminal")
@@ -395,7 +400,7 @@ def install(
                 f"the package is {manifest.name} {manifest.version}-{manifest.build}, "
                 f"not {name} {wanted}"
             )
-        if manifest.arch != machine_arch():
+        if not arch_fits(manifest.arch):
             raise ToolError(f"{name} is built for {manifest.arch}, this machine is {machine_arch()}")
         if manifest.python is not None:
             _build_venv(manifest, folder, python, run, runtime)
@@ -420,6 +425,7 @@ def install(
             requires=list(manifest.requires),
             runtime_version=note.version if note else "",
             runtime_build=note.build if note else 0,
+            notes=(folder / manifest.notes.root).resolve().as_posix() if manifest.notes else "",
         )
         _record(box, ToolRecord(name, entry.version, entry.build, entry.sha256, now, note))
         installed[name] = item

@@ -139,3 +139,59 @@ def test_note_section_stops_at_its_own_end_with_nested_folds_inside():
         FOLD_START, "Target: a   -   -   external", FOLD_START, "inner", FOLD_END, "after inner", FOLD_END,
     ]
     assert finder.note_section(text, "b") == []
+
+
+# ---- playbooks in the note
+
+
+@pytest.fixture
+def playbook(session, two):
+    from toolkit import built_playbook
+
+    body = "smb on dc01: <TargetIP>\nsmb on dc01: 10.10.10.161\n"
+    pb = built_playbook("smbx", "SMB", "02-enum/smbx", ["<TargetIP>"], body)
+    note = session.box.path / "notes.md"
+    text = note.read_text()
+    # inside dc01's section, just before its end
+    text = text.replace("nested password", "nested password\n" + pb.rstrip(), 1)
+    note.write_text(text)
+    return note
+
+
+def test_search_skips_unfilled_playbook_lines(session, playbook):
+    found = finder.search(session.box.path, "smb on dc01", "dc01")
+    assert [h.text for h in found.hits] == ["smb on dc01: 10.10.10.161"]
+    assert found.skipped == 1
+    found = finder.search(session.box.path, "smb on dc01", None)
+    assert [h.text for h in found.hits] == ["smb on dc01: 10.10.10.161"]
+    assert found.skipped == 1
+
+
+def test_search_skip_is_only_for_the_note(session, playbook):
+    from toolkit import built_playbook
+
+    pb = built_playbook("smbx", "SMB", "02-enum/smbx", ["<TargetIP>"], "smb in a file: <TargetIP>\n")
+    (session.box.path / "targets" / "dc01" / "files" / "pb.md").write_text(pb)
+    found = finder.search(session.box.path, "smb in a file", "dc01")
+    assert [h.text for h in found.hits] == ["smb in a file: <TargetIP>"]
+    assert found.skipped == 0
+
+
+def test_cmd_search_reports_skipped(session, playbook):
+    dispatch(session, "search smb on dc01")
+    assert lines(session)[-1] == "1 matching line of unfilled playbook text skipped"
+    assert ("detail", "1 matching line of unfilled playbook text skipped") in session.console.lines
+
+
+def test_cmd_search_reports_skipped_with_no_hits(session, playbook):
+    note = session.box.path / "notes.md"
+    note.write_text(note.read_text().replace("smb on dc01: 10.10.10.161\n", ""))
+    dispatch(session, "search smb on dc01")
+    assert lines(session) == ["no hits for smb on dc01 in dc01", "1 matching line of unfilled playbook text skipped"]
+
+
+def test_cmd_search_counts_skipped_lines_in_the_plural(session, playbook):
+    note = session.box.path / "notes.md"
+    note.write_text(note.read_text().replace("smb on dc01: <TargetIP>", "smb on dc01: <TargetIP>\nsmb on dc01: <Username>"))
+    dispatch(session, "search smb on dc01")
+    assert lines(session)[-1] == "2 matching lines of unfilled playbook text skipped"

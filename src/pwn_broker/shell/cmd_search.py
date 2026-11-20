@@ -40,3 +40,6 @@ def search(session: Session, args: list[str]) -> None:
         console.info(f"the first {finder.MAX_HITS} are shown; narrow the search for the rest")
     if found.too_large:
         console.info(f"skipped as larger than 16 MiB: {', '.join(found.too_large)}")
+    if found.skipped:
+        lines = "1 matching line" if found.skipped == 1 else f"{found.skipped} matching lines"
+        console.detail(f"{lines} of unfilled playbook text skipped")

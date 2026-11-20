@@ -72,6 +72,8 @@ def _status(session: Session) -> dict[str, str]:
 def _run_column(session: Session, item: Installed) -> str:
     if item.commands:
         return ", ".join(item.commands)
+    if item.notes:
+        return ":Pb <name>"
     return (session.paths.upload / item.name).as_posix()
 
 

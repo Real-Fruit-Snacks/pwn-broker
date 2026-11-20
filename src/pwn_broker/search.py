@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pwn_broker.note import FOLD_END, FOLD_START, NOTE_NAME
+from pwn_broker.playbooks import template_lines
 
 # a file larger than this is skipped, not read
 MAX_FILE = 16 * 1024 * 1024
@@ -30,6 +31,8 @@ class Result:
     more: int
     files: int
     too_large: list[str]
+    # lines of the note holding the text that were left out as unfilled playbook text
+    skipped: int = 0
 
 
 def _shown(line: str) -> str:
@@ -96,14 +99,17 @@ def search(box_path: Path, text: str, target: str | None) -> Result:
     no target, in the whole box."""
     wanted = text.casefold()
     hits: list[Hit] = []
-    more = files = 0
+    more = files = skipped = 0
     too_large: list[str] = []
 
-    def look(rel: str, numbered) -> None:
-        nonlocal more, files
+    def look(rel: str, numbered, template: set[int] = frozenset()) -> None:
+        nonlocal more, files, skipped
         found = False
         for number, line in numbered:
             if wanted in line.casefold():
+                if number in template:
+                    skipped += 1
+                    continue
                 found = True
                 if len(hits) < MAX_HITS:
                     hits.append(Hit(rel, number, _shown(line)))
@@ -118,7 +124,7 @@ def search(box_path: Path, text: str, target: str | None) -> Result:
         note = box_path / NOTE_NAME
         body = _text(note) if note.is_file() and not note.is_symlink() else None
         if body is not None:
-            look(NOTE_NAME, note_section(body, target))
+            look(NOTE_NAME, note_section(body, target), template_lines(body.splitlines()))
     for root in roots:
         for path in _files(root, box_path):
             rel = path.relative_to(box_path).as_posix()
@@ -130,5 +136,7 @@ def search(box_path: Path, text: str, target: str | None) -> Result:
                 continue
             body = _text(path)
             if body is not None:
-                look(rel, enumerate(body.splitlines(), start=1))
-    return Result(hits, more, files, too_large)
+                lines = body.splitlines()
+                template = template_lines(lines) if rel == NOTE_NAME else frozenset()
+                look(rel, enumerate(lines, start=1), template)
+    return Result(hits, more, files, too_large, skipped)

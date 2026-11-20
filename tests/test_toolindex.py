@@ -132,12 +132,58 @@ def test_parse_defaults_for_tags_commands_url():
     assert parsed.builds[0].url == ""
 
 
-@pytest.mark.parametrize("schema", [3, 0, "1", True, None])
+@pytest.mark.parametrize("schema", [4, 0, "1", True, None])
 def test_parse_unknown_schema_says_to_upgrade(schema):
     data = index_data()
     data["schema"] = schema
     with pytest.raises(ToolError, match="upgrade pwn-broker"):
         toolindex.parse_index(data)
+
+
+def notes_row(**over):
+    row = build_row(version="2026.11.19", kind="notes", commands=[], file="playbooks-2026.11.19-1.zip")
+    row.update(over)
+    return row
+
+
+def notes_tool(builds=None):
+    return tool_row(
+        name="playbooks", latest="2026.11.19-1", builds=builds if builds is not None else [notes_row()]
+    )
+
+
+def test_schema_3_index_with_a_notes_build_parses():
+    data = {"schema": 3, "tool": [tool_row(), notes_tool()]}
+    tools = toolindex.parse_index(data).tools
+    notes = tools[1].builds[0]
+    assert (notes.name, notes.kind, notes.commands, notes.requires, notes.needs_root) == (
+        "playbooks", "notes", [], [], False,
+    )  # fmt: skip
+    assert tools[0].builds[0].kind == "kali"
+
+
+@pytest.mark.parametrize("schema", [1, 2])
+def test_notes_build_needs_a_schema_3_index(schema):
+    with pytest.raises(ToolError) as err:
+        toolindex.parse_index({"schema": schema, "tool": [notes_tool()]})
+    assert "tool playbooks.build[0].kind: notes needs a schema 3 index" in str(err.value)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [("commands", ["x"]), ("requires", ["python-3.13"]), ("needs_root", True)],
+)
+def test_notes_build_has_no_commands_requires_or_root(field, value):
+    with pytest.raises(ToolError) as err:
+        toolindex.parse_index({"schema": 3, "tool": [notes_tool([notes_row(**{field: value})])]})
+    assert f"tool playbooks.build[0].{field}: a notes package" in str(err.value)
+
+
+def test_builds_cannot_mix_notes_with_other_kinds():
+    mixed = notes_tool([notes_row(), notes_row(build=2, kind="kali", commands=["x"])])
+    with pytest.raises(ToolError) as err:
+        toolindex.parse_index({"schema": 3, "tool": [mixed]})
+    assert "tool playbooks: its builds mix kind notes with other kinds" in str(err.value)
 
 
 def test_parse_missing_schema():
@@ -340,7 +386,7 @@ def test_bad_download_never_replaces_good_cache(paths):
 
 
 def test_bad_download_wrong_schema_is_refused_without_cache(paths):
-    bad = tomli_w.dumps({"schema": 3, "tool": []}).encode()
+    bad = tomli_w.dumps({"schema": 4, "tool": []}).encode()
     with pytest.raises(ToolError, match="upgrade pwn-broker"):
         toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(bad))
     assert not (paths.cache / "index.toml").exists()
@@ -973,14 +1019,14 @@ def test_an_http_error_without_a_cache_says_where(paths):
     assert_says_where(err, URL)
 
 
-@pytest.mark.parametrize("body", [b"garbage = [", b"tool = []\n", b"schema = 3\n"])
+@pytest.mark.parametrize("body", [b"garbage = [", b"tool = []\n", b"schema = 4\n"])
 def test_a_download_that_does_not_parse_says_where(paths, body):
     with pytest.raises(ToolError) as err:
         toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(body))
     assert_says_where(err, URL)
 
 
-@pytest.mark.parametrize("body", ["garbage = [", "tool = []\n", "schema = 3\n"])
+@pytest.mark.parametrize("body", ["garbage = [", "tool = []\n", "schema = 4\n"])
 def test_a_folder_index_that_does_not_parse_says_where(paths, tmp_path, body):
     (tmp_path / "index.toml").write_text(body, encoding="utf-8")
     with pytest.raises(ToolError) as err:

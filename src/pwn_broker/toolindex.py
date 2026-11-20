@@ -144,13 +144,21 @@ def _build(tool: str, row: object, label: str, schema: int) -> BuildEntry:
         raise ToolError(f"{label}.kind: must be one of {', '.join(KINDS)}")
     if kind == "runtime" and schema == 1:
         raise ToolError(f"{label}.kind: runtime needs a schema 2 index")
+    if kind == "notes" and schema != 3:
+        raise ToolError(f"{label}.kind: notes needs a schema 3 index")
     requires = _requires(tool, row, kind, schema, label)
+    if requires and kind == "notes":
+        raise ToolError(f"{label}.requires: a notes package requires nothing")
     commands = _strings(row, "commands", f"{label}.commands")
     if commands and kind == "runtime":
         raise ToolError(f"{label}.commands: a runtime has no commands")
+    if commands and kind == "notes":
+        raise ToolError(f"{label}.commands: a notes package has no commands")
     needs_root = row.get("needs_root", False)
     if not isinstance(needs_root, bool):
         raise ToolError(f"{label}.needs_root: must be true or false")
+    if needs_root and kind == "notes":
+        raise ToolError(f"{label}.needs_root: a notes package never needs root")
     size = row.get("size")
     if not isinstance(size, int) or isinstance(size, bool) or size < 1:
         raise ToolError(f"{label}.size: must be a positive whole number")
@@ -191,6 +199,8 @@ def _tool(row: object, index: int, schema: int) -> ToolEntry:
     builds = [_build(name, r, f"{label}.build[{i}]", schema) for i, r in enumerate(rows)]
     if len({b.kind == "runtime" for b in builds}) > 1:
         raise ToolError(f"{label}: its builds mix kind runtime with other kinds")
+    if len({b.kind == "notes" for b in builds}) > 1:
+        raise ToolError(f"{label}: its builds mix kind notes with other kinds")
     seen = set()
     for b in builds:
         bid = build_id(b.version, b.build)

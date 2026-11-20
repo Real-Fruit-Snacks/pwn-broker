@@ -504,6 +504,51 @@ def test_different_build_names_the_other_box(paths, box, other, tmp_path):
     )
 
 
+# ---- notes packages
+
+
+def test_install_notes_package(paths, box, tmp_path):
+    zip_path, entry = toolkit.make_notes_entry(tmp_path / "zips")
+    item, console, installed = do_install(paths, box, entry, zip_path, tmp_path)
+    assert not paths.bin.exists() or list(paths.bin.iterdir()) == []
+    assert not (paths.upload / "playbooks").exists()
+    assert item.notes.endswith("/tools/playbooks/2026.11.19-1/files/playbooks")
+    assert Path(item.notes).is_dir()
+    assert (Path(item.notes) / "02-enum" / "smb.md").is_file()
+    assert item.commands == [] and item.uploads == []
+    assert [(t.name, t.version, t.build) for t in load_box(box.path).tools] == [
+        ("playbooks", "2026.11.19", 1)
+    ]
+    assert console.lines == [
+        ("ok", "playbooks 2026.11.19 installed (2 playbooks)"),
+        ("info", "read  :Pb <name>   in the note window"),
+    ]
+
+
+def test_notes_package_installs_on_any_machine(paths, box, tmp_path, monkeypatch):
+    import pwn_broker.toolinstall as ti
+    import pwn_broker.toolpkg as tp
+
+    monkeypatch.setattr(tp, "machine_arch", lambda: "aarch64")
+    monkeypatch.setattr(ti, "machine_arch", lambda: "aarch64", raising=False)
+    zip_path, entry = toolkit.make_notes_entry(tmp_path / "zips")
+    item, _c, _i = do_install(paths, box, entry, zip_path, tmp_path)
+    assert Path(item.notes).is_dir()
+
+
+def test_notes_one_build_at_a_time(paths, box, other, tmp_path):
+    zip_path, entry = toolkit.make_notes_entry(tmp_path / "zips")
+    unfinished = {box.id: box.name, other.id: other.name}
+    _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path, unfinished=unfinished)
+    zip2, entry2 = toolkit.make_notes_entry(tmp_path / "zips2", version="2026.11.20")
+    with pytest.raises(ToolError) as err:
+        do_install(paths, other, entry2, zip2, tmp_path, installed=installed, unfinished=unfinished)
+    assert str(err.value) == (
+        "playbooks 2026.11.19-1 is in use by forest; finish or remove it there before installing "
+        "2026.11.20-1"
+    )
+
+
 def test_a_box_the_installed_list_names_with_another_build_is_refused(paths, box, tmp_path):
     zip_path, entry = build(tmp_path)
     _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path)

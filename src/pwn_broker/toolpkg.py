@@ -11,8 +11,8 @@ from pathlib import Path
 
 from pwn_broker.filescan import sha256_file
 
-KINDS = ("kali", "upload", "both", "runtime")
-SCHEMAS = (1, 2)
+KINDS = ("kali", "upload", "both", "runtime", "notes")
+SCHEMAS = (1, 2, 3)
 COMMAND_TYPES = ("binary", "python-entry", "python-script")
 MANIFEST = "manifest.toml"
 
@@ -132,6 +132,13 @@ class Manifest:
     schema: int = 1
     requires: list[str] = field(default_factory=list)
     runtime: RuntimeSpec | None = None
+    notes: "NotesSpec | None" = None
+
+
+@dataclass
+class NotesSpec:
+    # the folder of notes inside the package, under files/
+    root: str
 
 
 def valid_tool_name(name: str) -> bool:
@@ -185,6 +192,11 @@ def build_id(version: str, build: int) -> str:
 
 def zip_name(name: str, version: str, build: int) -> str:
     return f"{name}-{build_id(version, build)}.zip"
+
+
+def arch_fits(arch: str) -> bool:
+    """Whether a package built for arch runs here: "any" fits every machine."""
+    return arch == "any" or arch == machine_arch()
 
 
 def machine_arch() -> str:
@@ -402,6 +414,54 @@ def _runtime(data: dict) -> RuntimeSpec:
     return RuntimeSpec(archive, python, series)
 
 
+# what a notes package may not carry, each with why it is refused
+_NOT_IN_NOTES = (
+    ("command", "command: a notes package has no commands"),
+    ("upload", "upload: a notes package has no uploads"),
+    ("python", "python: a notes package has no Python"),
+    ("requires", "requires: a notes package requires nothing"),
+    ("data", "data: a notes package keeps no tool data"),
+    ("runtime", "runtime: a notes package is not a runtime"),
+)
+
+
+def _notes_manifest(data: dict, name: str, version: str, build: int, needs_root: bool) -> Manifest:
+    """A notes package: files to read, nothing to run, upload or keep, for any machine."""
+    for key, message in _NOT_IN_NOTES:
+        if key in data:
+            raise ToolError(message)
+    if needs_root:
+        raise ToolError("needs_root: a notes package never needs root")
+    arch = _text(data, "arch", "arch")
+    if arch != "any":
+        raise ToolError('arch: a notes package is for any machine (arch = "any")')
+    table = data.get("notes")
+    if table is None:
+        raise ToolError("notes: a notes package needs a [notes] table")
+    if not isinstance(table, dict):
+        raise ToolError("notes: must be a table")
+    root = _relative(_text(table, "root", "notes.root"), "notes.root", under="files")
+    return Manifest(
+        name=name,
+        version=version,
+        build=build,
+        kind="notes",
+        description=_text(data, "description", "description"),
+        tags=_strings(data, "tags", "tags"),
+        upstream=_text(data, "upstream", "upstream"),
+        licence=_text(data, "licence", "licence"),
+        arch=arch,
+        needs_root=False,
+        examples=_strings(data, "examples", "examples"),
+        commands=[],
+        uploads=[],
+        python=None,
+        home=[],
+        schema=3,
+        notes=NotesSpec(root),
+    )
+
+
 def parse_manifest(data: dict) -> Manifest:
     if "schema" not in data:
         # an empty or cut-short file, not one from a newer version
@@ -429,6 +489,12 @@ def parse_manifest(data: dict) -> Manifest:
         raise ToolError("needs_root: must be true or false")
     if kind == "runtime" and schema == 1:
         raise ToolError("kind: a runtime needs schema 2")
+    if kind == "notes" and schema != 3:
+        raise ToolError("kind: notes needs schema 3")
+    if schema == 3 and kind != "notes":
+        raise ToolError("schema: only a notes package is schema 3")
+    if kind == "notes":
+        return _notes_manifest(data, name, version, build, needs_root)
     requires = _requires(data, name, schema)
     runtime = None
     if kind == "runtime":
@@ -639,6 +705,10 @@ def _check_named_files(manifest: Manifest, seen: dict[str, zipfile.ZipInfo]) -> 
     for name in named:
         if not _is_file(seen, name):
             raise ToolError(f"{name}: named in the manifest but missing from the package")
+    if manifest.notes is not None:
+        prefix = manifest.notes.root + "/"
+        if not any(not i.is_dir() and b.startswith(prefix) and b.endswith(".md") for b, i in seen.items()):
+            raise ToolError(f"{manifest.notes.root}: the package holds no .md files")
     if manifest.runtime is not None and not _is_file(seen, manifest.runtime.archive):
         raise ToolError(
             f"{manifest.runtime.archive}: the runtime's archive is missing from the package"
