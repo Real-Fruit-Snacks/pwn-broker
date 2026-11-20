@@ -336,8 +336,14 @@ def write_index(folder: Path, entries: list) -> Path:
                 "build": [_build_row(b) for b in builds],
             }
         )
-    # schema 2 only when an entry needs it, so an index of schema 1 packages stays schema 1
-    schema = 2 if any(e.kind == "runtime" or e.requires for e in entries) else 1
+    # schema 2 only when an entry needs it, so an index of schema 1 packages stays schema 1;
+    # schema 3 when it holds a notes package
+    if any(e.kind == "notes" for e in entries):
+        schema = 3
+    elif any(e.kind == "runtime" or e.requires for e in entries):
+        schema = 2
+    else:
+        schema = 1
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "index.toml"
     path.write_text(tomli_w.dumps({"schema": schema, "tool": rows}), encoding="utf-8")
