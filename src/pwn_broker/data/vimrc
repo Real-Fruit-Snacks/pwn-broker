@@ -126,6 +126,104 @@ nnoremap <silent> <Leader>t <Cmd>call <SID>Insert(strftime('%Y-%m-%d %H:%M'))<CR
 nnoremap <silent> <Leader>i <Cmd>call <SID>InsertIp()<CR>
 nnoremap <silent> <Leader>c <Cmd>call <SID>PickCred()<CR>
 
+" ,x: tick or untick the first checkbox on the line
+function! s:ToggleBox() abort
+  let l:line = getline('.')
+  if l:line =~# '\[ \]'
+    call setline('.', substitute(l:line, '\[ \]', '[x]', ''))
+  elseif l:line =~# '\[x\]'
+    call setline('.', substitute(l:line, '\[x\]', '[ ]', ''))
+  else
+    echo 'no [ ] or [x] on this line'
+  endif
+endfunction
+nnoremap <silent> <Leader>x <Cmd>call <SID>ToggleBox()<CR>
+
+" :Pb: read one of the box's playbooks into the note. The app lists the folders of the notes
+" packages installed for the open box in run/notes, one per line.
+function! s:NotesFile() abort
+  return get(g:, 'pwn_notes_file', fnamemodify(s:dir, ':h') . '/run/notes')
+endfunction
+
+" every playbook installed for the box, sorted by its path under its folder: its name (the file
+" name without .md), that path, the file, and the package it came from
+function! s:Playbooks() abort
+  let l:list = s:NotesFile()
+  if !filereadable(l:list)
+    return []
+  endif
+  let l:found = []
+  for l:root in readfile(l:list)
+    if l:root ==# '' || !isdirectory(l:root)
+      continue
+    endif
+    let l:base = substitute(l:root, '/\+$', '', '') . '/'
+    let l:package = matchstr(l:root, '/tools/\zs[^/]\+\ze/')
+    if l:package ==# ''
+      let l:package = fnamemodify(substitute(l:root, '/\+$', '', ''), ':t')
+    endif
+    for l:file in globpath(l:root, '**/*.md', 0, 1)
+      let l:file = substitute(l:file, '\\', '/', 'g')
+      let l:rel = stridx(l:file, l:base) == 0 ? l:file[len(l:base) :] : fnamemodify(l:file, ':t')
+      let l:rel = fnamemodify(l:rel, ':r')
+      call add(l:found, {'name': fnamemodify(l:rel, ':t'), 'rel': l:rel, 'file': l:file, 'package': l:package})
+    endfor
+  endfor
+  return sort(l:found, {a, b -> a.rel ==# b.rel ? 0 : a.rel ># b.rel ? 1 : -1})
+endfunction
+
+" Tab on :Pb: the names holding what was typed, in any case
+function! PwnPbComplete(arglead, cmdline, pos) abort
+  let l:names = map(s:Playbooks(), 'v:val.name')
+  call filter(l:names, 'stridx(tolower(v:val), tolower(a:arglead)) >= 0')
+  return uniq(sort(l:names))
+endfunction
+
+function! s:PickPlaybook(title, items, with_package) abort
+  let l:menu = [a:title]
+  for l:i in range(len(a:items))
+    let l:item = a:items[l:i]
+    call add(l:menu, printf('%d  %s', l:i + 1, (a:with_package ? l:item.package . '/' : '') . l:item.rel))
+  endfor
+  let l:n = inputlist(l:menu)
+  return l:n >= 1 && l:n <= len(a:items) ? a:items[l:n - 1] : {}
+endfunction
+
+" below the cursor, or below the closed fold it is on, and never inside the box; the new fold is
+" left open with the cursor on its run block's first line
+function! s:ReadPlaybook(file) abort
+  let l:row = foldclosedend('.') == -1 ? line('.') : foldclosedend('.')
+  let l:box = s:BoxEnd()
+  if l:row <= l:box
+    let l:row = l:box
+  endif
+  execute l:row . 'read ' . fnameescape(a:file)
+  call cursor(l:row + 3, 1)
+  normal! zv
+endfunction
+
+function! s:Pb(name) abort
+  let l:all = s:Playbooks()
+  if empty(l:all)
+    echo 'no playbooks for this box: tool install playbooks at the prompt'
+    return
+  endif
+  if a:name ==# ''
+    let l:pick = s:PickPlaybook('playbook to read:', l:all, 0)
+  else
+    let l:matches = filter(copy(l:all), 'v:val.name ==# a:name')
+    if empty(l:matches)
+      echo 'no playbook named ' . a:name . '; :Pb on its own lists them'
+      return
+    endif
+    let l:pick = len(l:matches) == 1 ? l:matches[0] : s:PickPlaybook('which playbook:', l:matches, 1)
+  endif
+  if !empty(l:pick)
+    call s:ReadPlaybook(l:pick.file)
+  endif
+endfunction
+command! -nargs=? -complete=customlist,PwnPbComplete Pb call <SID>Pb(<q-args>)
+
 " ,h: what this vimrc adds to vim, and the fold keys the note is built around
 function! s:HelpLines() abort
   return [
@@ -133,7 +231,9 @@ function! s:HelpLines() abort
         \ ',t       insert the date and time after the cursor',
         \ ',i       insert the IP of the target whose section the cursor is in',
         \ ',c       pick one of the box''s user:password or user:hash pairs to insert',
+        \ ',x       tick or untick the first [ ] or [x] on this line',
         \ 'F8       new empty fold below the cursor, in normal or insert mode',
+        \ ':Pb      read a playbook into the note below the cursor; Tab completes its name',
         \ 'za       open or close the fold under the cursor',
         \ 'zo  zc   open, close the fold under the cursor',
         \ 'zR  zM   open, close every fold',

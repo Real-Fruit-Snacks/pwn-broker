@@ -532,8 +532,8 @@ if !empty(ids)
 endif
 """)
     assert "Help()" in got["map"]
-    keys = [line.split()[0] for line in got["lines"] if line[:1] in (",", "F", "z")]
-    assert keys == [",h", ",t", ",i", ",c", "F8", "za", "zo", "zR"]
+    keys = [line.split()[0] for line in got["lines"] if line[:1] in (",", "F", "z", ":")]
+    assert keys == [",h", ",t", ",i", ",c", ",x", "F8", ":Pb", "za", "zo", "zR"]
     assert got["popups"] == 1
     assert got["shown"] == got["lines"] + ["", "any key closes this"]
     assert got["title"] == " note keys "
@@ -616,3 +616,188 @@ def test_comma_c_with_no_lists_offers_nothing(box, note, work):
 call Put('choices', Script('CredChoices'))
 """)
     assert got["choices"] == []
+
+
+# ---- playbooks: :Pb and ,x
+
+
+@pytest.fixture
+def notes_file(work):
+    """Two playbooks installed for the box, as the app lays them out, and the run/notes file."""
+    import toolkit
+
+    root = work / "tools" / "playbooks" / "2026.11.19-1" / "files" / "playbooks"
+    for rel, data in toolkit.notes_files().items():
+        path = root / rel.removeprefix("files/playbooks/")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    listing = work / "run-notes"
+    listing.write_text(root.as_posix() + "\n", encoding="utf-8")
+    return listing
+
+
+def with_notes(listing, script):
+    return f"let g:pwn_notes_file = '{listing.as_posix()}'\n" + script
+
+
+def smb_lines():
+    import toolkit
+
+    return toolkit.notes_files()["files/playbooks/02-enum/smb.md"].decode().splitlines()
+
+
+def test_pb_reads_below_the_cursor_with_its_fold_open(box, note, work, notes_file):
+    got = run_vim(box.path, work, with_notes(notes_file, r"""
+let outer = Find('^Target: dc01 ') - 1
+execute outer . 'foldopen'
+let row = Find('^login as ')
+call cursor(row, 3)
+Pb smb
+call Put('row', row)
+call Put('lines', getline(row + 1, row + 3))
+call Put('cursor', line('.'))
+call Put('here', getline('.'))
+call Put('closed', foldclosed('.'))
+"""))
+    assert got["lines"][0] == FOLD_START
+    assert got["lines"][1].startswith("Playbook: SMB enumeration   02-enum/smb   ")
+    assert got["cursor"] == got["row"] + 3 and got["here"] == "my"
+    assert got["closed"] == -1
+
+
+def test_pb_on_a_box_line_reads_below_the_box(box, note, work, notes_file):
+    got = run_vim(box.path, work, with_notes(notes_file, r"""
+call cursor(3, 5)
+Pb smb
+call Put('lines', getline(1, 14))
+"""))
+    assert got["lines"][:11] == note.splitlines()[:11]
+    assert got["lines"][11] == FOLD_START and got["lines"][12].startswith("Playbook: SMB")
+
+
+def test_pb_on_a_closed_fold_reads_below_the_fold(box, note, work, notes_file):
+    got = run_vim(box.path, work, with_notes(notes_file, r"""
+let start = Find('^Target: dc01 ') - 1
+call cursor(start, 1)
+let end = foldclosedend(start)
+Pb smb
+call Put('end', end)
+call Put('after', getline(end + 1, end + 2))
+"""))
+    assert got["end"] > 0
+    assert got["after"][0] == FOLD_START and got["after"][1].startswith("Playbook: SMB")
+
+
+def test_pb_completion_matches_any_part_of_the_name(box, note, work, notes_file):
+    got = run_vim(box.path, work, with_notes(notes_file, r"""
+call Put('erv', PwnPbComplete('erv', '', 0))
+call Put('all', PwnPbComplete('', '', 0))
+call Put('upper', PwnPbComplete('SM', '', 0))
+call Put('none', PwnPbComplete('zzz', '', 0))
+"""))
+    assert got == {"erv": ["services"], "all": ["services", "smb"], "upper": ["smb"], "none": []}
+
+
+@pytest.mark.parametrize("listing", ["missing", "empty", "gone"])
+def test_pb_with_no_playbooks_says_so(box, note, work, listing):
+    path = work / "run-notes"
+    if listing == "empty":
+        path.write_text("", encoding="utf-8")
+    elif listing == "gone":
+        path.write_text((work / "no-such-folder").as_posix() + "\n", encoding="utf-8")
+    got = run_vim(box.path, work, with_notes(path, r"""
+let before = getline(1, '$')
+call Put('msg', execute('Pb smb'))
+call Put('same', getline(1, '$') ==# before)
+"""))
+    assert "no playbooks for this box: tool install playbooks at the prompt" in got["msg"]
+    assert got["same"] == 1
+
+
+def test_pb_unknown_name_says_so(box, note, work, notes_file):
+    got = run_vim(box.path, work, with_notes(notes_file, r"""
+let before = getline(1, '$')
+call Put('msg', execute('Pb nope'))
+call Put('same', getline(1, '$') ==# before)
+"""))
+    assert "no playbook named nope; :Pb on its own lists them" in got["msg"]
+    assert got["same"] == 1
+
+
+def copies(lines):
+    """Each copy of the smb playbook in the note, from its Playbook: line to its END OF line."""
+    found = []
+    for n, line in enumerate(lines):
+        if line.startswith("Playbook: SMB"):
+            end = lines.index("END OF smb PLAYBOOK", n)
+            found.append((n, lines[n : end + 1]))
+    return found
+
+
+FILL_FIRST = r"""
+let outer = Find('^Target: dc01 ') - 1
+execute outer . 'foldopen'
+call cursor(Find('^login as '), 1)
+Pb smb
+let first = line('.')
+let web = Find('^Target: web') - 1
+execute web . 'foldopen'
+call cursor(Find('^Target: web'), 1)
+Pb smb
+call cursor(first, 1)
+let t = search('^:''y,''zs/<TargetIP>/', 'W')
+call setline(t, ":'y,'zs/<TargetIP>/10.10.10.161/ge")
+let u = search('^:''y,''zs/<Username>/', 'W')
+execute u . 'delete'
+BEFORE_RUN
+call cursor(first, 1)
+execute "normal! V}\"qy"
+normal @q
+call Put('cursor', line('.'))
+call Put('lines', getline(1, '$'))
+"""
+
+
+def test_run_block_fills_only_its_own_playbook(box, note, work, notes_file):
+    got = run_vim(box.path, work, with_notes(notes_file, FILL_FIRST.replace("BEFORE_RUN", "")))
+    lines = got["lines"]
+    (first_at, first), (_second_at, second) = copies(lines)
+    original = smb_lines()[1:-1]
+    assert second == original
+    body = first[first.index("Fill in:  10.10.10.161  <Username>") :]
+    assert "nxc smb 10.10.10.161 -u '' -p ''" in body
+    assert "nxc smb 10.10.10.161 -u <Username> -p ''" in body
+    assert not any("<TargetIP>" in line for line in body)
+    # back at the first copy's run block: 'y goes to its my line, and the Enter ending that line
+    # and the blank line after it each move one line down (vim counts from 1)
+    assert got["cursor"] == first_at + 2 + 2
+
+
+def test_run_block_with_its_end_line_gone_replaces_nothing(box, note, work, notes_file):
+    script = FILL_FIRST.replace(
+        "BEFORE_RUN",
+        "let gone = search('^END OF smb PLAYBOOK$', 'W')\nexecute gone . 'delete'\n"
+        "let second = search('^END OF smb PLAYBOOK$', 'W')\nexecute second . 'delete'",
+    )
+    got = run_vim(box.path, work, with_notes(notes_file, script))
+    assert sum("<TargetIP>" in line for line in got["lines"]) == sum(
+        "<TargetIP>" in line for line in smb_lines()
+    ) * 2
+
+
+def test_comma_x_toggles(box, note, work):
+    got = run_vim(box.path, work, r"""
+call append(line('$'), ['- [ ] a', 'plain'])
+call cursor(line('$') - 1, 1)
+call Script('ToggleBox')
+call Put('ticked', getline('.'))
+call Script('ToggleBox')
+call Put('unticked', getline('.'))
+call cursor(line('$'), 1)
+call Put('msg', execute("call Script('ToggleBox')"))
+call Put('plain', getline('.'))
+call Put('map', maparg(',x', 'n'))
+""")
+    assert (got["ticked"], got["unticked"], got["plain"]) == ("- [x] a", "- [ ] a", "plain")
+    assert "no [ ] or [x] on this line" in got["msg"]
+    assert "ToggleBox()" in got["map"]
