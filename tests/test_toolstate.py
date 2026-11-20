@@ -52,6 +52,62 @@ def test_installed_round_trip(paths):
     assert load_installed(paths) == data
 
 
+def notes_item(name, root, users):
+    found = item(name, users=users, home={})
+    found.commands, found.uploads, found.needs_root = [], [], False
+    found.notes = root.as_posix()
+    return found
+
+
+def test_notes_survive_the_installed_list(paths, tmp_path):
+    data = {"playbooks": notes_item("playbooks", tmp_path / "root", ["id-1"]), "nmap-x": item()}
+    save_installed(paths, data)
+    assert load_installed(paths) == data
+    rows = tomllib.loads(paths.tools_state.read_text(encoding="utf-8"))["tool"]
+    assert rows[0]["notes"] == (tmp_path / "root").as_posix()
+    assert "notes" not in rows[1]
+    assert item().notes == ""
+
+
+def test_write_notes_file(paths, box, tmp_path):
+    mine, theirs, gone = tmp_path / "mine", tmp_path / "theirs", tmp_path / "gone"
+    mine.mkdir()
+    theirs.mkdir()
+    save_installed(paths, {
+        "playbooks": notes_item("playbooks", mine, [box.id]),
+        "other-notes": notes_item("other-notes", theirs, ["someone-else"]),
+        "old-notes": notes_item("old-notes", gone, [box.id]),
+        "nmap-x": item(users=[box.id]),
+    })  # fmt: skip
+    toolstate.write_notes_file(paths, box)
+    assert paths.run_notes.read_text(encoding="utf-8") == mine.as_posix() + "\n"
+
+
+def test_write_notes_file_with_an_unreadable_list_writes_none(paths, box):
+    paths.tools_state.parent.mkdir(parents=True)
+    paths.tools_state.write_text("nope [", encoding="utf-8")
+    toolstate.write_notes_file(paths, box)
+    assert paths.run_notes.read_text(encoding="utf-8") == ""
+
+
+def test_clear_notes_file(paths, box):
+    toolstate.write_notes_file(paths, box)
+    assert paths.run_notes.exists()
+    toolstate.clear_notes_file(paths)
+    assert not paths.run_notes.exists()
+    toolstate.clear_notes_file(paths)
+
+
+def test_open_writes_and_release_clears_run_notes(paths, box, tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    save_installed(paths, {"playbooks": notes_item("playbooks", root, [box.id])})
+    acquire_open(paths, box, pid=100, alive=yes)
+    assert paths.run_notes.read_text(encoding="utf-8") == root.as_posix() + "\n"
+    release_open(paths, pid=100)
+    assert not paths.run_notes.exists()
+
+
 def test_installed_missing_file_is_empty(paths):
     assert load_installed(paths) == {}
 

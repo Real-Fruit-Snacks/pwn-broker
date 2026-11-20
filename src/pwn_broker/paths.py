@@ -60,6 +60,11 @@ class AppPaths:
         return self.run / "tools"
 
     @property
+    def run_notes(self) -> Path:
+        # the open box's notes folders, one per line, for the note window's :Pb
+        return self.run / "notes"
+
+    @property
     def run_recordings(self) -> Path:
         return self.run / "recordings"
 

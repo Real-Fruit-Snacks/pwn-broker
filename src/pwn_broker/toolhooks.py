@@ -104,6 +104,7 @@ def release_tool(
             done = held and (after is None or box.id not in after.users)
         if done:
             log_tool(session, event, record, when=when)
+        toolstate.write_notes_file(session.paths, box)
 
 
 # ---- runtimes
@@ -175,6 +176,7 @@ def install_tool(
     for runtime_item in brought:
         log_tool(session, "install", runtime_item, kind="runtime")
     log_tool(session, "install", tool)
+    toolstate.write_notes_file(paths, session.box)
     return tool
 
 

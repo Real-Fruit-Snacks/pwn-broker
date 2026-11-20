@@ -25,6 +25,7 @@ def test_tool_folders(tmp_path):
     assert paths.tools == o / "tools" and paths.upload == o / "upload"
     assert paths.cache == o / "cache" and paths.tools_state == o / "tools" / "installed.toml"
     assert paths.run_box == o / "run" / "box" and paths.run_tools == o / "run" / "tools"
+    assert paths.run_notes == o / "run" / "notes"
 
 
 def test_recording_and_vpn_paths(tmp_path):

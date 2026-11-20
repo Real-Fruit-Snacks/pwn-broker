@@ -1519,6 +1519,21 @@ def test_an_install_logs_the_runtime_it_brought_then_the_tool(tooled, pyshop):
     assert log_lines(tooled.paths)[2:] == [logged("install", pyshop.bloodhound)]
 
 
+def test_install_and_remove_rewrite_run_notes(session, tmp_path):
+    zip_path, entry = toolkit.make_notes_entry(tmp_path / "npkg")
+    toolkit.write_index(tmp_path / "nindex", [entry])
+    (tmp_path / "nindex" / entry.file).write_bytes(zip_path.read_bytes())
+    session.settings = replace(session.settings, tools_index=str(tmp_path / "nindex"))
+    item = install_through_hooks(session, entry)
+    assert session.paths.run_notes.read_text(encoding="utf-8") == item.notes + "\n"
+    record = current_tools(session.box)[0]
+    toolhooks.release_tool(
+        session, record, "remove",
+        installed=load_installed(session.paths), unfinished={session.box.id: session.box.name},
+    )  # fmt: skip
+    assert session.paths.run_notes.read_text(encoding="utf-8") == ""
+
+
 def test_a_failed_install_logs_nothing(tooled, pyshop, monkeypatch):
     toolkit.no_real_venv(monkeypatch, fail="pip")
     with pytest.raises(ToolError):

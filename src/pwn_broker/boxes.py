@@ -328,6 +328,7 @@ def acquire_open(
 
     try:
         toolstate.write_open_box(paths, box.path, pid)
+        toolstate.write_notes_file(paths, box)
     except OSError:
         # a box must still open; drop any older file so it cannot stand in for this box
         try:
@@ -343,6 +344,7 @@ def release_open(paths: AppPaths, *, pid: int) -> None:
     from pwn_broker import toolstate
 
     toolstate.clear_open_box(paths, pid)
+    toolstate.clear_notes_file(paths)
 
 
 def open_box_folder(paths: AppPaths, *, alive: Callable[[int], bool] = pid_alive) -> Path | None:

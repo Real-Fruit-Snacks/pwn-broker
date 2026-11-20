@@ -36,6 +36,8 @@ class Installed:
     # only build that serves it (the environment points into that build's folder)
     runtime_version: str = ""
     runtime_build: int = 0
+    # for a notes package: its folder of notes, as an absolute path
+    notes: str = ""
 
 
 KINDS = ("tool", "runtime")
@@ -81,6 +83,9 @@ def _installed(row: object) -> Installed:
     runtime_build = row.get("runtime_build", 0)
     if not _is_int(runtime_build):
         raise TypeError("runtime_build must be an integer")
+    notes = row.get("notes", "")
+    if not isinstance(notes, str):
+        raise TypeError("notes must be a string")
     return Installed(
         name=row["name"],
         version=row["version"],
@@ -98,6 +103,7 @@ def _installed(row: object) -> Installed:
         python=python,
         runtime_version=runtime_version,
         runtime_build=runtime_build,
+        notes=notes,
     )
 
 
@@ -153,6 +159,8 @@ def _row(t: Installed) -> dict:
     if t.runtime_version:
         row["runtime_version"] = t.runtime_version
         row["runtime_build"] = t.runtime_build
+    if t.notes:
+        row["notes"] = t.notes
     return row
 
 
@@ -242,6 +250,34 @@ def holding_boxes(
                 if user != excluding and user not in known:
                     holding[user] = "a box that cannot be read"
     return holding
+
+
+def write_notes_file(paths: AppPaths, box: Box) -> None:
+    """Lists, one per line, the notes folders installed for the box, for the note window's :Pb.
+
+    Never raises: a box must still open, and with no file the note window says it has none.
+    """
+    try:
+        installed = load_installed(paths)
+    except (ToolError, OSError):
+        installed = {}
+    roots = sorted(
+        t.notes
+        for t in installed.values()
+        if t.notes and box.id in t.users and "\n" not in t.notes and "\r" not in t.notes
+        and Path(t.notes).is_dir()
+    )
+    try:
+        write_text(paths.run_notes, "".join(f"{r}\n" for r in roots))
+    except OSError:
+        pass
+
+
+def clear_notes_file(paths: AppPaths) -> None:
+    try:
+        paths.run_notes.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _resolve_alive(alive: Callable[[int], bool] | None) -> Callable[[int], bool]:
