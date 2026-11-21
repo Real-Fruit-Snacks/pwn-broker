@@ -19,7 +19,8 @@
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#0C0D10">
+<meta name="theme-color" content="#0E1012">
+<link rel="preload" href="fonts/overpass-latin-900-normal.woff2" as="font" type="font/woff2" crossorigin>
 <script>
     // A saved theme wins over the system setting; the key is shared with the other RFS pages.
     // js-run hides the terminal's lines until script.js plays them (a CSS failsafe shows them after 6 s).
@@ -30,47 +31,48 @@
 </script>
 <link rel="stylesheet" href="styles.css">
 </head>
-<body>
-<a class="skip" href="#install">Skip to the install commands</a>
+<body class="is-broker">
+<a class="skip" href="#install">Skip to the install line</a>
 
-<header class="top">
-    <div class="wrap">
-        <a class="name" href="./" aria-label="pwn-broker, top of the page">pwn-broker</a>
-        <nav aria-label="Page">
-            <a href="#install">Install</a>
-            <a href="#what">What it does</a>
-            <a href="#note">The note</a>
-            <a href="#tested">Tested on</a>
-            <a href="#issues">Known issues</a>
-            <a href="https://github.com/Real-Fruit-Snacks/pwn-broker">GitHub</a>
-        </nav>
+<header class="wrap">
+    <div class="spine">
+        <a class="set" href="https://real-fruit-snacks.github.io/"><img src="icon.svg" alt="" width="26" height="26">Real-Fruit-Snacks</a>
+        <a class="gh" href="https://github.com/Real-Fruit-Snacks/pwn-broker">GitHub</a>
         <button class="theme" type="button" id="theme"><span class="sr-only">Theme: </span><span class="t-night">Night</span><span class="t-day">Day</span></button>
     </div>
+    <nav aria-label="The pwn set">
+        <ul class="tabs">
+            <li><a class="t-broker" href="./" aria-current="page">Broker<small>the box</small></a></li>
+            <li><a class="t-shop" href="https://real-fruit-snacks.github.io/pwn-shop/">Shop<small>its tools</small></a></li>
+            <li><a class="t-books" href="https://real-fruit-snacks.github.io/pwn-playbooks/">Playbooks<small>its notes</small></a></li>
+        </ul>
+    </nav>
 </header>
 
-<main>
-<div class="hero">
-    <div class="wrap hero-grid">
-        <div class="hero-text">
-            <h1 class="wordmark">pwn-broker</h1>
+<main class="wrap stack">
+<section class="card first" aria-labelledby="top-h">
+    <p class="runhead"><b>pwn-broker 0.1.7</b><span>Kali Linux · x86_64 · glibc</span><span>MIT</span></p>
+    <div class="hero">
+        <div>
+            <h1 class="title" id="top-h">pwn-broker</h1>
             <p class="lead">Keeps a box's targets, notes, creds and tools in order</p>
-            <p class="sub">I launch it when I start a Hack The Box machine. It asks a few questions, builds the workspace, opens my notes in vim, and stays open as a prompt for the whole session. When the box is done it packs everything into one archive. It is for Kali Linux with a desktop session; see what it has been <a href="#tested">tested on</a>.</p>
-
-            <div class="install" id="install">
-                <p class="install-label">Install</p>
-                <div class="cmd"><code>curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/download/install.sh | sh</code><button class="copy" type="button" data-copy="curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/download/install.sh | sh">Copy</button></div>
-                <div class="caveat">
-                    <p><b>No network on the Kali machine:</b> copy the release file and <code>install.sh</code> from the <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest">latest release</a> across and run this. It prints the file's SHA-256 to compare with the release page, and contacts nothing.</p>
-                    <div class="cmd cmd-block"><pre><code>sh install.sh --from pwn-broker-0.1.7-linux-x86_64.tar.gz</code></pre><button class="copy" type="button" data-copy="sh install.sh --from pwn-broker-0.1.7-linux-x86_64.tar.gz">Copy</button></div>
-                </div>
-                <p class="install-note">Run it as the user who will use pwn-broker, not with <code>sudo</code>. It downloads one release file, checks its SHA-256, and puts the app and its own Python in <code>/opt/pwn-broker</code>; it needs no Python from the machine. x86_64 Linux with glibc only. Run it again to upgrade. The <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/guide.md#install-and-upgrade">guide</a> has the options and what the install trusts.</p>
-            </div>
+            <p class="sub">I launch it when I start a Hack The Box machine. It asks a few questions, builds the workspace, opens my notes in vim, and stays open as a prompt for the whole session. When the box is done it packs everything into one archive.</p>
+            <ol class="ck steps" id="box-ck" aria-label="A box, start to finish">
+                <li id="install" data-state="todo"><span class="box" aria-hidden="true"></span><span class="ch">Install</span><span class="ld" aria-hidden="true"></span><span class="rs">Run once</span>
+                    <div class="act"><div class="cmd"><code>curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/download/install.sh | sh</code><button class="copy" type="button" data-copy="curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/download/install.sh | sh">Copy</button></div></div>
+                    <p class="why">As the user who will use pwn-broker, not with <code>sudo</code>. It downloads one release file, checks its SHA-256, and puts the app and its own Python in <code>/opt/pwn-broker</code>. Run it again to upgrade.</p></li>
+                <li data-step="2" data-state="done"><span class="box" aria-hidden="true"></span><span class="ch">Box and target</span><span class="ld" aria-hidden="true"></span><span class="rs">Created</span></li>
+                <li data-step="3" data-state="done"><span class="box" aria-hidden="true"></span><span class="ch">/etc/hosts</span><span class="ld" aria-hidden="true"></span><span class="rs">Updated</span></li>
+                <li data-step="4" data-state="done"><span class="box" aria-hidden="true"></span><span class="ch">Credential</span><span class="ld" aria-hidden="true"></span><span class="rs">Saved</span></li>
+                <li data-step="5" data-state="done"><span class="box" aria-hidden="true"></span><span class="ch">Finish</span><span class="ld" aria-hidden="true"></span><span class="rs">Archived</span></li>
+            </ol>
+            <p class="closeout">Box closed out</p>
         </div>
 
-        <figure class="session" aria-labelledby="session-cap">
-            <div class="term">
-                <div class="bar" aria-hidden="true"><i></i><i></i><i></i><span>zsh</span></div>
-<pre class="screen" id="screen" data-type="view" tabindex="0" aria-label="A pwn-broker session"><code><span class="ln"><span class="p">$</span> <span class="t">pwn-broker new</span></span>
+        <figure class="display" aria-labelledby="session-cap">
+            <div class="screenbox">
+                <p class="bar" aria-hidden="true"><b>Session</b><span>zsh · forest/dc01</span></p>
+<pre class="screen" id="screen" tabindex="0" aria-label="A pwn-broker session"><code><span class="ln"><span class="p">$</span> <span class="t">pwn-broker new</span></span>
 <span class="ln">pwn-broker 0.1.7</span>
 
 <span class="ln s">  ok    8 checks passed</span>
@@ -90,13 +92,13 @@
 <span class="ln"><span class="q">  scope        [external] &gt; </span></span>
 <span class="ln"><span class="q">  name         [forest.htb.local] &gt; </span>dc01</span>
 
-<span class="ln s">  ok    target dc01 created</span>
+<span class="ln s" data-step="2">  ok    target dc01 created</span>
 
 <span class="ln"><span class="q">  add another? [y/N] &gt; </span></span>
 
 <span class="ln"><span class="q">  add dc01's hostnames to /etc/hosts? [Y/n] &gt; </span></span>
 
-<span class="ln s">  ok    /etc/hosts updated</span>
+<span class="ln s" data-step="3">  ok    /etc/hosts updated</span>
 <span class="ln o">        10.10.10.161 forest.htb.local</span>
 <span class="ln s">  ok    10.10.10.161 answered in 43 ms</span>
 <span class="ln s">  ok    box forest created</span>
@@ -111,7 +113,7 @@
 <span class="ln"><span class="q">  found on     [dc01] &gt; </span></span>
 <span class="ln"><span class="q">  note         &gt; </span></span>
 
-<span class="ln s">  ok    cred 1 saved, found on dc01</span>
+<span class="ln s" data-step="4">  ok    cred 1 saved, found on dc01</span>
 <span class="ln s">  ok    lists updated: 1 username, 1 password, 1 pair</span>
 
 <span class="ln"><span class="p">forest/dc01 &gt;</span> <span class="t">finish</span></span>
@@ -129,86 +131,77 @@
 
 <span class="ln"><span class="q">  remove working folder? [y/N] &gt; </span>y</span>
 
-<span class="ln s">  ok    removed /home/kali/pwn-broker/active/2026-11-14_htb_forest</span>
+<span class="ln s" data-step="5">  ok    removed /home/kali/pwn-broker/active/2026-11-14_htb_forest</span>
 
 <span class="ln end"><span class="p">$</span> <span class="cursor"></span></span></code></pre>
             </div>
             <figcaption id="session-cap">
-                <span class="cap-note">One box from start to finish. The lines are the app's own output from a scripted run of its code, as root with a VPN up, with the paths a user called kali would see; the launch checks' look-ups, the tunnel and the ping's answer were stand-ins, and so was the terminal that opens the note. The note window opens beside it.</span>
+                <p class="cap">One box from start to finish. The lines are the app's own output from a scripted run of its code, as root with a VPN up, with the paths a user called kali would see; the launch checks' look-ups, the tunnel and the ping's answer were stand-ins, and so was the terminal that opens the note. The note window opens beside it.</p>
                 <button class="replay" type="button" data-replay="screen" hidden>Replay</button>
             </figcaption>
         </figure>
     </div>
-</div>
+</section>
 
-<section id="what" class="what" aria-labelledby="what-h">
-    <div class="wrap">
-        <h2 id="what-h">What it does</h2>
-        <div class="blocks">
-            <div class="block">
-                <h3>A folder per box, and per target</h3>
-                <p>A box lives in <code>~/pwn-broker/active/&lt;date&gt;_&lt;platform&gt;_&lt;name&gt;/</code>. Each target gets its own folder with <code>creds/</code>, <code>files/</code>, <code>loot/</code>, <code>scans/</code>, <code>exploits/</code>, <code>screenshots/</code> and <code>recordings/</code>. A second box with the same name and platform on the same day gets <code>-2</code> on its folder and its archives, so one box's archive is never offered to another for replacing.</p>
-            </div>
-            <div class="block">
-                <h3>A prompt for the whole session</h3>
-                <p>It stays open as <code>forest/dc01 &gt;</code>, with commands for targets, hostnames, credentials, flags, files, recordings, the VPN and status. <code>help</code> lists them; <code>exit</code> leaves as <code>quit</code> does, and <code>clear</code> clears the screen. A yes or no question takes <code>y</code>, <code>yes</code>, <code>n</code>, <code>no</code>, or Enter for its default, and asks again after anything else; a wrong argument gets the command's usage under the <code>fail</code> line. Only one box is open at a time.</p>
-            </div>
-            <div class="block">
-                <h3>Credentials kept as typed</h3>
-                <p>One credential list for the whole box, in <code>creds.toml</code>, each answer stored exactly as typed. The <code>lists/</code> folder is rebuilt from it, so other tools can read <code>usernames.txt</code>, <code>userpass.txt</code>, <code>hashes.txt</code> or <code>hosts.txt</code> as they are.</p>
-            </div>
-            <div class="block">
-                <h3>The note window</h3>
-                <p>A second terminal runs vim on <code>notes.md</code> with its own vimrc; your <code>~/.vimrc</code> is never read. It saves when you leave the window and reloads when you come back. A box has one note window: opening the box again while it is open says <code>ok    the note is already open</code>, and <code>finish</code> closes it when it removes the working folder. It keeps the folder, with a <code>warn</code> line, when the note has unsaved changes or has changed since the archive was made.</p>
-            </div>
-            <div class="block">
-                <h3>Finish, export, import</h3>
-                <p><code>finish</code> archives the box and closes it. <code>export</code> writes a snapshot and keeps working. Both write to <code>~/pwn-broker/wrapped/</code>, and <code>pwn-broker import &lt;file&gt;</code> unpacks one.</p>
-            </div>
-            <div class="block">
-                <h3>Scans in the background</h3>
-                <p><code>scan</code> runs nmap against the current target: the top 1,000 ports first, then every TCP port with scripts on only the ones it found, with <code>-oA</code> output in the target's <code>scans/</code> folder. A line in the prompt says when each is done and which ports are open. <code>scan udp</code> takes the top 100 UDP ports as root, and <code>finish</code> waits while a scan runs.</p>
-            </div>
-            <div class="block">
-                <h3>Files served to the target</h3>
-                <p><code>serve</code> offers the target's <code>upload/</code> folder and the tools' files over HTTP on the tunnel's address, behind a random path, with nothing listed. <code>serve files</code> prints the <code>iwr</code> or <code>wget</code> line for each file, and a <code>PUT</code> back to the same address saves a file into <code>loot/</code>, never over one already there. It runs until <code>serve stop</code> or <code>finish</code>.</p>
-            </div>
-            <div class="block">
-                <h3>Search across the box</h3>
-                <p><code>search &lt;text&gt;</code> finds text in the current target's files, the text copies of its recordings and its section of the note, and <code>search all &lt;text&gt;</code> in the whole box, credential lists included. Binary files and the VPN folder are skipped, and so is a playbook's text until you fill it in.</p>
-            </div>
-            <div class="block">
-                <h3>Tools, installed and taken off again</h3>
-                <p><code>tool install &lt;name&gt;</code> installs a package from <a href="https://github.com/Real-Fruit-Snacks/pwn-shop">pwn-shop</a>'s index, with its size and SHA-256 checked and no install script: kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng, peass-ng, chisel, godpotato, runascs, rusthound-ce, git-dumper, snaffler, lazagne and cdk. The Python ones bring their own Python as a shared runtime that puts nothing on PATH, so Kali's <code>python3</code> is never used or shadowed. <code>finish</code> takes the box's tools off again unless another unfinished box still uses them, and <code>tool history</code> lists every tool the box has had.</p>
-            </div>
-            <div class="block">
-                <h3>Playbooks read into the note</h3>
-                <p><code>tool install playbooks</code> gets <a href="https://github.com/Real-Fruit-Snacks/pwn-playbooks">pwn-playbooks</a>, short notes for one job each, checked and pinned like any tool. <code>:Pb &lt;name&gt;</code> in the note window reads one in below the cursor, with Tab completing the name from any part of it. Each carries a few lines of vim that fill in its <code>&lt;Placeholder&gt;</code> values in that playbook and nowhere else, and <code>finish</code> takes them off with the tools.</p>
-            </div>
-            <div class="block">
-                <h3>Recording a window</h3>
-                <p><code>record [target]</code>, typed in any terminal while a box is open, records that window under a pinned asciinema 3.2.1 into the target's <code>recordings/</code> folder, with <code>[rec dc01]</code> in front of the zsh or bash prompt. Beside each <code>.cast</code> the app writes a <code>.txt</code> with the time on every line of text, for grep. <code>replay</code> lists and plays them. Keystrokes are not recorded, but a password typed on a command line is.</p>
-            </div>
-            <div class="block">
-                <h3>/etc/hosts and the VPN</h3>
-                <p>A target with an IP and a hostname can have one line in <code>/etc/hosts</code>, marked with the box ID; <code>host add</code> adds names to it and <code>finish</code> takes it out. Lines that are not the app's are never changed. <code>vpn start</code> copies a <code>.ovpn</code> file into the box and starts OpenVPN in the background; the file is never archived, and <code>vpn stop</code> stops only the process the app started. Each new target with an IP is pinged once.</p>
-            </div>
-        </div>
+<section class="card ref" id="offline" aria-labelledby="offline-h">
+    <h2 id="offline-h">No network on the Kali machine</h2>
+    <p class="intro">Copy the release file and <code>install.sh</code> from the <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest">latest release</a> across, then run this. It prints the file's SHA-256 to compare with the release page, and contacts nothing. x86_64 Linux with glibc only; it needs no Python from the machine. The <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/guide.md#install-and-upgrade">guide</a> has the options and what the install trusts.</p>
+    <div class="cmd cmd-block"><pre><code>sh install.sh --from pwn-broker-0.1.7-linux-x86_64.tar.gz</code></pre><button class="copy" type="button" data-copy="sh install.sh --from pwn-broker-0.1.7-linux-x86_64.tar.gz">Copy</button></div>
+</section>
+
+<section class="card ref" id="what" aria-labelledby="what-h">
+    <h2 id="what-h">What it does</h2>
+    <div class="cols">
+        <ul class="ck spec">
+            <li><span class="ch">A folder per box</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>active/</code></span>
+                <p class="why">A box lives in <code>~/pwn-broker/active/&lt;date&gt;_&lt;platform&gt;_&lt;name&gt;/</code>. Each target gets its own folder with <code>creds/</code>, <code>files/</code>, <code>loot/</code>, <code>scans/</code>, <code>exploits/</code>, <code>screenshots/</code> and <code>recordings/</code>. A second box with the same name and platform on the same day gets <code>-2</code>, so one box's archive is never offered to another for replacing.</p></li>
+            <li><span class="ch">A prompt for the session</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>forest/dc01 &gt;</code></span>
+                <p class="why">Commands for targets, hostnames, credentials, flags, files, recordings, the VPN and status. <code>help</code> lists them; <code>exit</code> leaves as <code>quit</code> does. A yes or no question takes <code>y</code>, <code>yes</code>, <code>n</code>, <code>no</code> or Enter for its default; a wrong argument gets the command's usage under the <code>fail</code> line. One box is open at a time.</p></li>
+            <li><span class="ch">Credentials as typed</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>creds.toml</code></span>
+                <p class="why">One credential list for the whole box, each answer stored exactly as typed. The <code>lists/</code> folder is rebuilt from it, so other tools can read <code>usernames.txt</code>, <code>userpass.txt</code>, <code>hashes.txt</code> or <code>hosts.txt</code> as they are.</p></li>
+            <li><span class="ch">The note window</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>notes.md</code></span>
+                <p class="why">A second terminal runs vim on the note with its own vimrc; your <code>~/.vimrc</code> is never read. It saves when you leave the window and reloads when you come back, and <code>finish</code> closes it. It keeps the folder, with a <code>warn</code> line, when the note has unsaved changes or changed since the archive was made.</p></li>
+            <li><span class="ch">Finish, export, import</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>wrapped/</code></span>
+                <p class="why"><code>finish</code> archives the box and closes it. <code>export</code> writes a snapshot and keeps working. Both write to <code>~/pwn-broker/wrapped/</code>, and <code>pwn-broker import &lt;file&gt;</code> unpacks one.</p></li>
+            <li><span class="ch">/etc/hosts and the VPN</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>vpn start</code></span>
+                <p class="why">A target with an IP and a hostname can have one line in <code>/etc/hosts</code>, marked with the box ID; <code>host add</code> adds names and <code>finish</code> takes it out. Lines that are not the app's are never changed. <code>vpn start</code> copies a <code>.ovpn</code> file into the box and starts OpenVPN in the background; the file is never archived, and <code>vpn stop</code> stops only the process the app started. Each new target with an IP is pinged once.</p></li>
+        </ul>
+        <ul class="ck spec">
+            <li><span class="ch">Scans in the background</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>scan</code></span>
+                <p class="why">nmap against the current target: the top 1,000 ports first, then every TCP port with scripts on only the ones it found, with <code>-oA</code> output in the target's <code>scans/</code>. A line in the prompt says when each is done and which ports are open. <code>scan udp</code> takes the top 100 UDP ports as root, and <code>finish</code> waits while a scan runs.</p></li>
+            <li><span class="ch">Files served to the target</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>serve</code></span>
+                <p class="why">The target's <code>upload/</code> folder and the tools' files over HTTP on the tunnel's address, behind a random path, with nothing listed. <code>serve files</code> prints the <code>iwr</code> or <code>wget</code> line for each file, and a <code>PUT</code> back saves a file into <code>loot/</code>, never over one already there. It runs until <code>serve stop</code> or <code>finish</code>.</p></li>
+            <li><span class="ch">Search across the box</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>search</code></span>
+                <p class="why">Text in the current target's files, the text copies of its recordings and its section of the note, or with <code>search all</code> the whole box, credential lists included. Binary files and the VPN folder are skipped, and so is a playbook's text until you fill it in.</p></li>
+            <li><span class="ch">Tools, on and off again</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>tool install</code></span>
+                <p class="why">A package from <a href="https://real-fruit-snacks.github.io/pwn-shop/">pwn-shop</a>'s index, with its size and SHA-256 checked and no install script: kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng, peass-ng, chisel, godpotato, runascs, rusthound-ce, git-dumper, snaffler, lazagne and cdk. The Python ones bring their own Python as a shared runtime that puts nothing on PATH. <code>finish</code> takes them off unless another unfinished box still uses them, and <code>tool history</code> lists every tool the box has had.</p></li>
+            <li><span class="ch">Playbooks in the note</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>:Pb</code></span>
+                <p class="why"><code>tool install playbooks</code> gets <a href="https://real-fruit-snacks.github.io/pwn-playbooks/">pwn-playbooks</a>, short notes for one job each. <code>:Pb &lt;name&gt;</code> in the note window reads one in below the cursor, Tab completing the name from any part of it, and its few lines of vim fill in its <code>&lt;Placeholder&gt;</code> values in that playbook and nowhere else.</p></li>
+            <li><span class="ch">Recording a window</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>record</code></span>
+                <p class="why">Typed in any terminal while a box is open, it records that window under a pinned asciinema 3.2.1 into the target's <code>recordings/</code>, with <code>[rec dc01]</code> in front of the prompt. Beside each <code>.cast</code> goes a <code>.txt</code> with the time on every line, for grep; <code>replay</code> plays them. Keystrokes are not recorded, but a password typed on a command line is.</p></li>
+        </ul>
     </div>
 </section>
 
-<section id="note" class="note-sec" aria-labelledby="note-h">
-    <div class="wrap note-grid">
-        <div class="note-text">
+<section class="card ref" id="note" aria-labelledby="note-h">
+    <div class="note">
+        <div>
             <h2 id="note-h">The note</h2>
-            <p><code>notes.md</code> starts with a box drawn in <code>#</code> that holds the box details and one row per target. The app redraws it whenever the targets change.</p>
-            <p>Below it, each target has a section wrapped in a vim fold that starts with its <code>Target:</code> line, and the note opens with every fold closed down to that line. <kbd>F8</kbd> adds an empty fold below the cursor.</p>
-            <p><code>,i</code> puts in the IP of the target whose section the cursor is in, <code>,c</code> one of the box's credentials, <code>,t</code> the date and time, and <code>,x</code> ticks a box; <code>,h</code> lists them. <code>:Pb &lt;name&gt;</code> reads a playbook in below the cursor.</p>
-            <p>IP addresses are Amber and <code>&lt;Placeholder&gt;</code> text is Ember wherever they appear. The app changes nothing else in the note, apart from a <code>Target:</code> line it wrote when that target is renamed or edited.</p>
-            <p class="aside">Here dc01's fold is open and ws01's is closed. The two lines under enumeration are mine; the app wrote the rest.</p>
+            <p><code>notes.md</code> starts with a box drawn in <code>#</code> that holds the box details and one row per target; the app redraws it whenever the targets change. Each target has a section in a vim fold that starts with its <code>Target:</code> line, and the note opens with every fold closed down to that line.</p>
+            <ul class="ck spec" aria-label="The note's keys">
+                <li><span class="ch">New fold</span><span class="ld" aria-hidden="true"></span><span class="rs"><kbd>F8</kbd></span></li>
+                <li><span class="ch">Target's IP</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>,i</code></span></li>
+                <li><span class="ch">A credential</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>,c</code></span></li>
+                <li><span class="ch">Date and time</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>,t</code></span></li>
+                <li><span class="ch">Tick a box</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>,x</code></span></li>
+                <li><span class="ch">List the keys</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>,h</code></span></li>
+                <li><span class="ch">Read a playbook in</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>:Pb &lt;name&gt;</code></span></li>
+            </ul>
+            <p class="cap" style="margin-top:1rem">IP addresses are amber and <code>&lt;Placeholder&gt;</code> text is orange wherever they appear. The app changes nothing else in the note, apart from a <code>Target:</code> line it wrote when that target is renamed or edited. Here dc01's fold is open and ws01's closed; the two lines under enumeration are mine.</p>
         </div>
-        <figure class="vim" aria-labelledby="vim-cap">
-            <div class="vim-win">
+        <figure class="display" aria-labelledby="vim-cap">
+            <div class="screenbox">
+                <p class="bar" aria-hidden="true"><b>Note window</b><span>vim notes.md</span></p>
 <pre class="vim-buf" tabindex="0" aria-labelledby="vim-cap"><code><span class="r">################################################################</span>
 <span class="b">#  </span>Box:         forest                                       <span class="b">  #</span>
 <span class="b">#  </span>Platform:    htb                                          <span class="b">  #</span>
@@ -235,7 +228,6 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
 <span class="m">@@@@@@@@@@##########</span>
 
 <span class="fold">Target: ws01   10.10.10.162   -   internal</span>
-<span class="eob">~</span>
 <span class="eob">~</span></code></pre>
                 <p class="vim-status" aria-hidden="true"><span>notes.md</span><span>18:1</span></p>
             </div>
@@ -244,49 +236,50 @@ GetNPUsers.py htb.local/<span class="ph">&lt;DomainUser&gt;</span> -no-pass -dc-
     </div>
 </section>
 
-<section id="tested" class="tested" aria-labelledby="tested-h">
-    <div class="wrap">
-        <h2 id="tested-h">Tested on</h2>
-        <div class="tested-grid">
-            <ul class="untested" aria-label="Not tested">
-                <li><b>Not tested: a full Kali desktop session.</b> CI used a virtual display and <code>xterm</code>, and the run by hand Kali's qterminal under WSL.</li>
-                <li><b>Not tested: a real Hack The Box connection.</b> The OpenVPN file in the Kali run has no server behind it.</li>
-            </ul>
-            <ul aria-label="Tested">
-                <li><b>The unit suite</b> on Windows 11 under Python 3.13, and on Ubuntu 24.04 in CI under Python 3.11, 3.12, 3.13 and 3.14 and once more as root, with warnings treated as errors.</li>
-                <li><b>One whole box in the official Kali image in CI</b> (Kali 2026.3, as root): installed from the release file with the container's network off, then new box to <code>finish</code> and <code>import</code>, with a real OpenVPN and <code>tun0</code>, under a virtual display with <code>xterm</code>.</li>
-                <li><b>An install in a bare <code>debian:stable-slim</code> container</b> with no Python and no network.</li>
-                <li><b>Every command by hand in Kali 2026.2 under WSL 2</b>, as root, with Kali's own qterminal, including building the release file there and upgrading an install made by the old installer.</li>
-                <li><b>The published v0.1.0 there too</b>: the install line above, then a box with all six tools installed from the published index, each started once, and taken off again by <code>finish</code>; then v0.1.1 and v0.1.2 as upgrades over it, the second with loot whose names are not UTF-8 and a file written while <code>finish</code> waited; then v0.1.3, with a reinstall of the tools declined; then v0.1.4, with <code>,h</code> in the note and an imported box's <code>/etc/hosts</code> line declined; then v0.1.5, with <code>serve</code>, <code>scan</code> and the note keys; then v0.1.6, with <code>search</code>; then v0.1.7, with playbooks read into the note and filled in.</li>
-                <li><b>And once more as a normal user</b> whose <code>sudo</code> asks for a password: the install line, then a box with <code>/etc/hosts</code>, the VPN, three tools, a recording, files made with <code>sudo</code> and <code>finish</code>.</li>
-                <li><b>The full record</b>, with counts, versions and dates, is in <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/tested.md">docs/tested.md</a>.</li>
-            </ul>
-        </div>
-    </div>
-</section>
-
-<section id="issues" class="issues" aria-labelledby="issues-h">
-    <div class="wrap">
-        <h2 id="issues-h">Known issues</h2>
-        <ul>
-            <li>x86_64 Linux with glibc only. On any other machine the installer stops and says so.</li>
-            <li>The app's Python and its OpenSSL are as new as the release, not as Kali; a fix to them reaches you only in a new release. They take about 100 MB more on disk.</li>
-            <li>Close pwn-broker before you upgrade. The installer replaces <code>app/</code> and <code>python/</code> under a running prompt, and does not check.</li>
-            <li>On a terminal that hosts all its windows in one process, such as gnome-terminal, <code>finish</code> closes the note's vim but cannot close its window.</li>
-            <li>Nothing is signed. <code>SHA256SUMS.txt</code> comes from the same release as the file it checks, and the tool index that every zip is checked against is not signed either: the checks catch a corrupted download or a swapped zip, not who published them.</li>
-            <li>A password typed on a command line in a recorded window is in the recording and the archive. One typed at a hidden prompt is not.</li>
-            <li><code>quit</code> leaves the box's <code>/etc/hosts</code> lines in place; only <code>finish</code> removes them.</li>
-            <li><code>finish</code> refuses while a window is recording for the box or one of its tools is running. Exit those first.</li>
+<section class="card ref" id="tested" aria-labelledby="tested-h">
+    <h2 id="tested-h">Tested on</h2>
+    <div class="cols">
+        <ul class="ck" aria-label="Checks run">
+            <li data-state="done"><span class="box" aria-hidden="true"></span><span class="ch">The unit suite</span><span class="ld" aria-hidden="true"></span><span class="rs">Passed</span>
+                <p class="why">On Windows 11 under Python 3.13, and on Ubuntu 24.04 in CI under Python 3.11, 3.12, 3.13 and 3.14 and once more as root, with warnings treated as errors.</p></li>
+            <li data-state="done"><span class="box" aria-hidden="true"></span><span class="ch">A whole box in Kali, in CI</span><span class="ld" aria-hidden="true"></span><span class="rs">Passed</span>
+                <p class="why">The official Kali image (Kali 2026.3, as root): installed from the release file with the container's network off, then new box to <code>finish</code> and <code>import</code>, with a real OpenVPN and <code>tun0</code>, under a virtual display with <code>xterm</code>.</p></li>
+            <li data-state="done"><span class="box" aria-hidden="true"></span><span class="ch">A bare Debian install</span><span class="ld" aria-hidden="true"></span><span class="rs">Passed</span>
+                <p class="why">In a <code>debian:stable-slim</code> container with no Python and no network.</p></li>
+            <li data-state="done"><span class="box" aria-hidden="true"></span><span class="ch">Every command by hand</span><span class="ld" aria-hidden="true"></span><span class="rs">Passed</span>
+                <p class="why">In Kali 2026.2 under WSL 2, as root, with Kali's own qterminal, including building the release file there and upgrading an install made by the old installer.</p></li>
+        </ul>
+        <ul class="ck" aria-label="Checks run, and not run">
+            <li data-state="done"><span class="box" aria-hidden="true"></span><span class="ch">Each published release</span><span class="ld" aria-hidden="true"></span><span class="rs">All 8</span>
+                <p class="why">The install line, then a box with all six tools from the published index, taken off again by <code>finish</code>; each later release as an upgrade over it, with the feature it added: <code>,h</code>, <code>serve</code>, <code>scan</code>, <code>search</code>, and in 0.1.7 playbooks read into the note and filled in.</p></li>
+            <li data-state="done"><span class="box" aria-hidden="true"></span><span class="ch">A normal user with sudo</span><span class="ld" aria-hidden="true"></span><span class="rs">Passed</span>
+                <p class="why">Whose <code>sudo</code> asks for a password: the install line, then a box with <code>/etc/hosts</code>, the VPN, three tools, a recording, files made with <code>sudo</code> and <code>finish</code>.</p></li>
+            <li data-state="no"><span class="box" aria-hidden="true"></span><span class="ch">A full Kali desktop</span><span class="ld" aria-hidden="true"></span><span class="rs">Not run</span>
+                <p class="why">CI used a virtual display and <code>xterm</code>, and the run by hand Kali's qterminal under WSL.</p></li>
+            <li data-state="no"><span class="box" aria-hidden="true"></span><span class="ch">A real HTB connection</span><span class="ld" aria-hidden="true"></span><span class="rs">Not run</span>
+                <p class="why">The OpenVPN file in the Kali run has no server behind it. The full record is in <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/tested.md">docs/tested.md</a>.</p></li>
         </ul>
     </div>
 </section>
+
+<section class="card ref limits" id="issues" aria-labelledby="issues-h">
+    <h2 id="issues-h">Known issues</h2>
+    <ul class="plain">
+        <li>x86_64 Linux with glibc only. On any other machine the installer stops and says so.</li>
+        <li>The app's Python and its OpenSSL are as new as the release, not as Kali; a fix to them reaches you only in a new release. They take about 100 MB more on disk.</li>
+        <li>Close pwn-broker before you upgrade. The installer replaces <code>app/</code> and <code>python/</code> under a running prompt, and does not check.</li>
+        <li>On a terminal that hosts all its windows in one process, such as gnome-terminal, <code>finish</code> closes the note's vim but cannot close its window.</li>
+        <li>Nothing is signed. <code>SHA256SUMS.txt</code> comes from the same release as the file it checks, and the tool index every zip is checked against is not signed either: the checks catch a corrupted download or a swapped zip, not who published them.</li>
+        <li>A password typed on a command line in a recorded window is in the recording and the archive. One typed at a hidden prompt is not.</li>
+        <li><code>quit</code> leaves the box's <code>/etc/hosts</code> lines in place; only <code>finish</code> removes them.</li>
+        <li><code>finish</code> refuses while a window is recording for the box or one of its tools is running. Exit those first.</li>
+    </ul>
+</section>
 </main>
 
-<footer>
-    <div class="wrap">
-        <p>MIT. Not affiliated with Hack The Box.</p>
-        <p><a href="https://github.com/Real-Fruit-Snacks/pwn-broker">Source</a> · <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/guide.md">Guide</a> · <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/SECURITY.md">Security</a> · <a href="https://real-fruit-snacks.github.io/">RFS</a></p>
-    </div>
+<footer class="wrap foot">
+    <p>MIT. Not affiliated with Hack The Box.</p>
+    <p><a href="https://github.com/Real-Fruit-Snacks/pwn-broker">Source</a> · <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/docs/guide.md">Guide</a> · <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/Real-Fruit-Snacks/pwn-broker/blob/main/SECURITY.md">Security</a> · <a href="https://real-fruit-snacks.github.io/">RFS</a></p>
 </footer>
 
 <script src="script.js"></script>
