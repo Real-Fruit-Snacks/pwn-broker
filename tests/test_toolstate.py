@@ -271,6 +271,15 @@ def test_open_box_round_trip_and_format(paths, tmp_path):
     assert open_box(paths, alive=yes) == folder.resolve()
 
 
+def test_open_box_records_the_start_time(paths, tmp_path):
+    write_open_box(paths, tmp_path, 42, "5000")
+    assert paths.run_box.read_text().split("\n")[:3] == [tmp_path.resolve().as_posix(), "42", "5000"]
+    assert open_box(paths, alive=yes, started=lambda pid: "5000") == tmp_path.resolve()
+    assert open_box(paths, alive=yes, started=lambda pid: None) == tmp_path.resolve()
+    # the pid now belongs to another process
+    assert open_box(paths, alive=yes, started=lambda pid: "9000") is None
+
+
 def test_open_box_dead_missing_malformed(paths, tmp_path):
     assert open_box(paths, alive=yes) is None
     write_open_box(paths, tmp_path, 42)

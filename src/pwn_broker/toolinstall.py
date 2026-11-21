@@ -33,7 +33,7 @@ from pwn_broker.toolstate import Installed, needed_runtimes, save_installed, too
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _MARK = "# pwn-broker tool: "
 _DATA = "{data}"
-_OWN_VARIABLES = ("data", "box", "run", "pid")
+_OWN_VARIABLES = ("data", "box", "run", "pid", "start")
 
 
 def runtime_refusal(name: str) -> str:
@@ -89,6 +89,15 @@ def launcher_text(paths: AppPaths, manifest: Manifest, command: Command, folder:
         '    box="$(command -p sed -n 1p "$run/box")"',
         '    pid="$(command -p sed -n 2p "$run/box")"',
         "    kill -0 \"$pid\" 2>/dev/null || box=''",
+        # line 3, when present, is that prompt's start time: another one means the pid was reused
+        '    start="$(command -p sed -n 3p "$run/box")"',
+        '    if [ -n "$box" ] && [ -n "$start" ]; then',
+        "        case \"$({ command -p sed 's/.*) //' \"/proc/$pid/stat\" | command -p cut -d' ' -f20; } "
+        "2>/dev/null)\" in",
+        "            ''|\"$start\") ;;",
+        "            *) box='' ;;",
+        "        esac",
+        "    fi",
         "fi",
         # the process start time lets a later reader tell a reused process ID from this run
         # a failed redirection must not end the shell, so the whole group is silenced and forgiven

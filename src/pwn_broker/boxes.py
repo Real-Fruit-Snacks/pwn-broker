@@ -297,6 +297,12 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
+def process_start(pid: int) -> str | None:
+    from pwn_broker import toolstate
+
+    return toolstate.process_start(pid)
+
+
 def _lock_file(paths: AppPaths) -> Path:
     return paths.run / "open.toml"
 
@@ -315,19 +321,44 @@ def _read_lock(paths: AppPaths) -> dict | None:
     return None
 
 
-def acquire_open(
-    paths: AppPaths, box: Box, *, pid: int, alive: Callable[[int], bool] = pid_alive
-) -> None:
+def _holder(
+    paths: AppPaths, alive: Callable[[int], bool], started: Callable[[int], str | None]
+) -> dict | None:
     held = _read_lock(paths)
-    if held is not None and alive(held["pid"]):
+    if held is None or not alive(held["pid"]):
+        return None
+    # after a restart the dead prompt's pid can belong to another process; its start time tells
+    # them apart. A start time that cannot be read, or a lock written without one, keeps the lock.
+    recorded = held.get("start")
+    if isinstance(recorded, str) and recorded:
+        now = started(held["pid"])
+        if now is not None and now != recorded:
+            return None
+    return held
+
+
+def acquire_open(
+    paths: AppPaths,
+    box: Box,
+    *,
+    pid: int,
+    alive: Callable[[int], bool] = pid_alive,
+    started: Callable[[int], str | None] = process_start,
+) -> None:
+    held = _holder(paths, alive, started)
+    if held is not None:
         mine = held["pid"] == pid and held["box_id"] == box.id
         if not mine:
             raise BoxError(f"{Path(held['folder']).name} is already open (pid {held['pid']})")
-    write_toml(_lock_file(paths), {"schema": SCHEMA, "box_id": box.id, "folder": str(box.path), "pid": pid})
+    start = started(pid)
+    lock = {"schema": SCHEMA, "box_id": box.id, "folder": str(box.path), "pid": pid}
+    if start:
+        lock["start"] = start
+    write_toml(_lock_file(paths), lock)
     from pwn_broker import toolstate
 
     try:
-        toolstate.write_open_box(paths, box.path, pid)
+        toolstate.write_open_box(paths, box.path, pid, start)
         toolstate.write_notes_file(paths, box)
     except OSError:
         # a box must still open; drop any older file so it cannot stand in for this box
@@ -347,8 +378,11 @@ def release_open(paths: AppPaths, *, pid: int) -> None:
     toolstate.clear_notes_file(paths)
 
 
-def open_box_folder(paths: AppPaths, *, alive: Callable[[int], bool] = pid_alive) -> Path | None:
-    held = _read_lock(paths)
-    if held is None or not alive(held["pid"]):
-        return None
-    return Path(held["folder"])
+def open_box_folder(
+    paths: AppPaths,
+    *,
+    alive: Callable[[int], bool] = pid_alive,
+    started: Callable[[int], str | None] = process_start,
+) -> Path | None:
+    held = _holder(paths, alive, started)
+    return None if held is None else Path(held["folder"])

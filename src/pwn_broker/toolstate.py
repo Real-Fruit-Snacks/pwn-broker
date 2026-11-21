@@ -288,8 +288,9 @@ def _resolve_alive(alive: Callable[[int], bool] | None) -> Callable[[int], bool]
     return boxes.pid_alive
 
 
-def write_open_box(paths: AppPaths, folder: Path, pid: int) -> None:
-    # a plain two-line file: launcher scripts read it with sed -n 1p and sed -n 2p
+def write_open_box(paths: AppPaths, folder: Path, pid: int, start: str | None = None) -> None:
+    # a plain file of lines, read by launcher scripts with sed -n 1p, 2p and 3p: the folder, the
+    # prompt's pid, and that process's start time when it is known
     text = folder.resolve().as_posix()
     if "\n" in text or "\r" in text:
         # a line break would push the pid off line 2; no file is better than a wrong one
@@ -298,10 +299,11 @@ def write_open_box(paths: AppPaths, folder: Path, pid: int) -> None:
         except OSError:
             pass
         raise OSError(f"{text!r} holds a line break and cannot go in {paths.run_box}")
-    write_text(paths.run_box, f"{text}\n{pid}\n")
+    third = f"{start}\n" if start and start.isascii() and start.isdecimal() else ""
+    write_text(paths.run_box, f"{text}\n{pid}\n{third}")
 
 
-def _read_open_box(paths: AppPaths) -> tuple[str, int] | None:
+def _read_open_box(paths: AppPaths) -> tuple[str, int, str] | None:
     try:
         text = paths.run_box.read_bytes().decode("utf-8")  # bytes: keep any CR visible
     except (OSError, UnicodeDecodeError):
@@ -314,7 +316,8 @@ def _read_open_box(paths: AppPaths) -> tuple[str, int] | None:
     pid = int(lines[1])
     if pid < 1:
         return None
-    return lines[0], pid
+    start = lines[2] if len(lines) > 2 and lines[2].isascii() and lines[2].isdecimal() else ""
+    return lines[0], pid, start
 
 
 def clear_open_box(paths: AppPaths, pid: int) -> None:
@@ -327,10 +330,19 @@ def clear_open_box(paths: AppPaths, pid: int) -> None:
         pass
 
 
-def open_box(paths: AppPaths, *, alive: Callable[[int], bool] | None = None) -> Path | None:
+def open_box(
+    paths: AppPaths,
+    *,
+    alive: Callable[[int], bool] | None = None,
+    started: Callable[[int], str | None] | None = None,
+) -> Path | None:
     held = _read_open_box(paths)
     if held is None or not _resolve_alive(alive)(held[1]):
         return None
+    if held[2]:
+        now = (started if started is not None else process_start)(held[1])
+        if now is not None and now != held[2]:
+            return None  # the pid now belongs to another process
     return Path(held[0])
 
 

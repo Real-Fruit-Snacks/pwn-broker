@@ -275,6 +275,28 @@ def run_with_box(shell, script, paths, box_dir, *args, env_extra=None):
 PRINT_ARGS = b'#!/bin/sh\nfor a in "$@"; do printf "[%s]" "$a"; done\n'
 
 
+@pytest.mark.skipif(not SHELLS or not os.path.isdir("/proc/self"), reason="needs sh and /proc")
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("start", ["own", "other"])
+def test_a_reused_pid_in_run_box_is_no_open_box(paths, tmp_path, shell, start):
+    paths.run.mkdir(parents=True)
+    cmd = Command("kerbrute", "binary", path="files/kerbrute", args=["--out", "{data}/out.txt"])
+    script = shell_launcher(paths, tmp_path, cmd, PRINT_ARGS)
+    box_dir = tmp_path / "boxdir"
+    box_dir.mkdir()
+    # line 3 is the start time of the process that opened the box: this shell's own, or another's
+    own = "\"$(sed 's/.*) //' /proc/$$/stat | cut -d' ' -f20)\""
+    opener = (
+        f'printf "%s\\n%s\\n%s\\n" {sh_quote(box_dir.as_posix())} "$$" '
+        f'{own if start == "own" else "1"} > {sh_quote(paths.run_box.as_posix())}; '
+        f'exec {shell} {sh_quote(script.as_posix())} "$@"'
+    )
+    result = run_sh(["-c", opener, shell, "mine"], shell=shell)
+    assert (result.returncode, result.stderr) == (0, "")
+    data = f"{box_dir.as_posix()}/tooldata/kerbrute"
+    assert result.stdout == (f"[--out][{data}/out.txt][mine]" if start == "own" else "[mine]")
+
+
 @pytest.mark.skipif(not SHELLS, reason="needs sh")
 @pytest.mark.parametrize("shell", SHELLS)
 def test_args_that_need_a_box_are_added_only_while_one_is_open(paths, tmp_path, shell):
