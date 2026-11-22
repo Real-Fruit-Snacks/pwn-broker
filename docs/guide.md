@@ -314,7 +314,7 @@ forest > vpn start
 
 ## Tools
 
-`tool install <name>` puts a tool on the machine for this box, and `finish` takes it off again. The packages are published in a second repository, [`Real-Fruit-Snacks/pwn-shop`](https://github.com/Real-Fruit-Snacks/pwn-shop): kerbrute, pspy, certipy, targetedkerberoast, ligolo-ng, peass-ng, chisel, godpotato, runascs, rusthound-ce, git-dumper, snaffler, lazagne and cdk, and the `python-3.13` runtime the three Python tools run on. With no setting, the app reads that repository's published index. To work with no network, fill a folder with `sh fetch.sh <folder>` in a clone of it and point `tools_index` at the folder.
+`tool install <name>` puts a tool on the machine for this box, and `finish` takes it off again. The packages are published in a second repository, [`Real-Fruit-Snacks/pwn-shop`](https://github.com/Real-Fruit-Snacks/pwn-shop), which [lists every one](https://github.com/Real-Fruit-Snacks/pwn-shop#whats-in-it) with its version: Active Directory tools such as NetExec, Impacket, Certipy and Rubeus, PEASS-ng and pspy, the potatoes, ligolo-ng and chisel, and the `python-3.13` runtime the Python tools run on. With no setting, the app reads that repository's published index. To work with no network, fill a folder with `sh fetch.sh <folder>` in a clone of it and point `tools_index` at the folder.
 
 ```
 forest/dc01 > tool install ligolo-ng
