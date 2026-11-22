@@ -97,9 +97,8 @@ Left out: the version line and the launch checks above `New box`, the `New crede
 - Every command by hand in Kali 2026.2 under WSL 2, as root, with Kali's own qterminal, including building the release file there and upgrading an install made by the old installer
 - The published `v0.1.0` there too: the install line above, then a box with all six tools installed from the published index, each started once, and taken off again by `finish`; then `v0.1.1` and `v0.1.2` as upgrades over it, the second with loot whose names are not UTF-8 and a file written while `finish` waited; then `v0.1.3`, with a reinstall of the tools declined; then `v0.1.4`, with `,h` in the note and an imported box's `/etc/hosts` line declined; then `v0.1.5`, with `serve`, `scan` and the note keys; then `v0.1.6`, with `search`; then `v0.1.7`, with playbooks read into the note and filled in
 - And once more there as a normal user whose `sudo` asks for a password: the install line, then a box with `/etc/hosts`, the VPN, three tools, a recording, files made with `sudo` and `finish`
-- *Not* tested: a full Kali desktop session; a real Hack The Box connection
 
-[docs/tested.md](docs/tested.md) is the full record: counts, versions, dates and what each run checked.
+[docs/tested.md](docs/tested.md) is the full record: counts, versions, dates, what each run checked, and what has not been run.
 
 ## Known issues
 
