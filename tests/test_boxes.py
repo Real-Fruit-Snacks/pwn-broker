@@ -29,6 +29,7 @@ from pwn_broker.store import (
     load_creds,
     load_files,
     load_targets,
+    read_toml,
     save_box,
     save_creds,
     save_files,
@@ -325,6 +326,29 @@ def test_stale_lock_is_taken_over(paths, box, other):
     acquire_open(paths, box, pid=100, alive=yes)
     acquire_open(paths, other, pid=200, alive=no)
     assert open_box_folder(paths, alive=yes) == other.path
+
+
+def test_reused_pid_does_not_hold_the_lock(paths, box, other):
+    # after a restart the dead prompt's pid can belong to another process: its start time differs
+    acquire_open(paths, box, pid=100, alive=yes, started=lambda pid: "5000")
+    assert open_box_folder(paths, alive=yes, started=lambda pid: "5000") == box.path
+    assert open_box_folder(paths, alive=yes, started=lambda pid: "9000") is None
+    acquire_open(paths, other, pid=100, alive=yes, started=lambda pid: "9000")
+    assert open_box_folder(paths, alive=yes, started=lambda pid: "9000") == other.path
+
+
+def test_lock_holds_when_the_start_time_cannot_be_read(paths, box, other):
+    acquire_open(paths, box, pid=100, alive=yes, started=lambda pid: "5000")
+    with pytest.raises(BoxError, match="forest"):
+        acquire_open(paths, other, pid=200, alive=yes, started=lambda pid: None)
+
+
+def test_lock_without_a_start_time_still_holds(paths, box, other):
+    # a lock written before start times were recorded is judged by its pid alone
+    acquire_open(paths, box, pid=100, alive=yes, started=lambda pid: None)
+    assert "start" not in read_toml(paths.run / "open.toml")
+    with pytest.raises(BoxError, match="forest"):
+        acquire_open(paths, other, pid=200, alive=yes, started=lambda pid: "9000")
 
 
 def test_corrupt_lock_is_replaced(paths, box):

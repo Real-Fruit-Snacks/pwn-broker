@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.8 (unreleased)
+
+Fixed: after Kali restarted, `start` could refuse with `<box> is open in another prompt; quit that prompt first` when no prompt was running. The open box was known only by its prompt's process ID, and after a restart another process can be given the same number. pwn-broker now also records when that process started, so a reused number no longer counts as an open box for `start` and `record`, or for a tool installed from this version on. A box left open by an earlier version is still judged by its number alone.
+
 ## v0.1.7
 
 `tool install playbooks` installs playbooks for the box: a package of the new kind `notes`, which comes with manifest and index schema 3 and, like a tool, comes off at `finish`. In the note's vim, `:Pb <name>` reads one in below the cursor as its own fold, with Tab completing the name and `:Pb` alone listing them; the run block at its top, copied with `V}` `"qy` and run with `@q`, puts your values in place of its `<Placeholder>`s in that playbook only. `,x` ticks or unticks a `[ ]` box. `search` skips a playbook's unfilled lines in the note and says how many it skipped.
