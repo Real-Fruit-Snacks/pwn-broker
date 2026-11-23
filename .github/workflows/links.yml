@@ -27,7 +27,7 @@ jobs:
             --verbose --no-progress --max-retries 4 --retry-wait-time 10 --timeout 30
             --accept 200,206,429
             --exclude '^https://github\.com/Real-Fruit-Snacks/pwn-broker/(issues/new|security/advisories/new)'
-            --remap '^https://github\.com/Real-Fruit-Snacks/pwn-broker/blob/main/(.*)$ file://${{ github.workspace }}/$1'
+            --remap '^https://github\.com/Real-Fruit-Snacks/pwn-broker/blob/main/(.*)$ file://${{ github.workspace }}/no-such-folder/$1'
             './**/*.md'
           fail: true
         env:
