@@ -28,12 +28,16 @@ class Settings:
     scan_quick: str | None = None
     scan_full: str | None = None
     scan_udp: str | None = None
+    # whether a new box gets the playbooks; None leaves it to the answer saved in state.toml
+    playbooks: bool | None = None
 
 
 @dataclass(frozen=True)
 class State:
     last_platform: str | None = None
     last_vpn_file: str | None = None
+    # the answer to the question the first new box asks; None until it is answered
+    new_box_playbooks: bool | None = None
 
 
 def _expand(text: str, home_dir: Path) -> Path:
@@ -92,6 +96,7 @@ def load(env: Mapping[str, str], home_dir: Path) -> tuple[AppPaths, Settings]:
         scan_quick=_typed(data, "scan_quick", str, config_file) or None,
         scan_full=_typed(data, "scan_full", str, config_file) or None,
         scan_udp=_typed(data, "scan_udp", str, config_file) or None,
+        playbooks=_typed(data, "playbooks", bool, config_file),
     )
 
     if settings.home is not None:
@@ -110,9 +115,11 @@ def load_state(state_file: Path) -> State:
         return State()
     last = data.get("last_platform")
     vpn = data.get("last_vpn_file")
+    playbooks = data.get("new_box_playbooks")
     return State(
         last_platform=last if isinstance(last, str) else None,
         last_vpn_file=vpn if isinstance(vpn, str) else None,
+        new_box_playbooks=playbooks if isinstance(playbooks, bool) else None,
     )
 
 
@@ -122,6 +129,8 @@ def save_state(state_file: Path, state: State) -> None:
         data["last_platform"] = state.last_platform
     if state.last_vpn_file is not None:
         data["last_vpn_file"] = state.last_vpn_file
+    if state.new_box_playbooks is not None:
+        data["new_box_playbooks"] = state.new_box_playbooks
     write_toml(state_file, data)
 
 

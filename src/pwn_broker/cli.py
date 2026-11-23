@@ -1,7 +1,7 @@
 import os
 import sys
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -15,10 +15,16 @@ from pwn_broker.model import Box, Target
 from pwn_broker.note import NoteError
 from pwn_broker.paths import AppPaths
 from pwn_broker.session import Session
+from pwn_broker.shell import cmd_tool
 from pwn_broker.shell.app import run_shell
 from pwn_broker.store import StoreError, load_box
+from pwn_broker.toolpkg import ToolError
 
 NO_ARCHIVE = "give the path of an exported box"
+PLAYBOOKS = "playbooks"
+PLAYBOOKS_QUESTION = "install playbooks in new boxes?"
+# what a failed install raises; anything else is a bug, reported the same way
+_INSTALL_ERRORS = (ToolError, BoxError, StoreError, ValueError, OSError)
 SUBCOMMANDS = ("new", "import", "resume")
 HELP = (
     "pwn-broker                 open the menu, or the box you are inside",
@@ -44,6 +50,8 @@ class Env:
     is_root: Callable[[], bool] = privilege.is_root
     run_privileged: Callable = privilege.run_privileged
     tunnel: Callable[[], vpn.Tunnel | None] = vpn.tunnel
+    # new_box made the box this launch opens, so it may get the playbooks once it is open
+    made_box: bool = False
 
 
 def _load(env: Env, box: Box) -> Session:
@@ -108,14 +116,67 @@ def new_box(env: Env) -> Session:
         session.targets = targets
         sessions.set_current(session, targets[0] if targets else None)
         sessions.refresh(session)
-        config.save_state(env.paths.state_file, config.State(last_platform=answers.platform))
+        # read again: the platform is saved beside whatever else the file holds now
+        saved = config.load_state(env.paths.state_file)
+        config.save_state(env.paths.state_file, replace(saved, last_platform=answers.platform))
         for target in targets:
             targetflow.after_add(session, target)
     except (StoreError, OSError) as exc:
         # the box, its note and its targets are on disk and can be resumed
         raise BoxError(f"box {box.path.name} was created but not finished: {exc}") from exc
     console.ok(f"box {box.name} created")
+    env.made_box = True
     return session
+
+
+def _playbooks_for_new_box(env: Env, session: Session) -> None:
+    """The setting decides, else the answer saved for this machine, else the question,
+    asked once: at the first new box after install or upgrade."""
+    console = env.console
+    wanted = env.settings.playbooks
+    if wanted is None:
+        wanted = config.load_state(env.paths.state_file).new_box_playbooks
+    kept = False
+    if wanted is None:
+        try:
+            wanted = console.confirm(PLAYBOOKS_QUESTION, default=True)
+        except Cancelled:
+            console.info("playbooks not installed; asked again at the next new box")
+            return
+        kept = _keep_playbooks_answer(env, wanted)
+    if wanted:
+        _install_playbooks(session)
+    if kept and wanted:
+        console.info(f"new boxes get them too; playbooks = false in {env.paths.config_file} stops that")
+    elif kept:
+        console.info(f"new boxes go without them; playbooks = true in {env.paths.config_file} installs them")
+
+
+def _keep_playbooks_answer(env: Env, wanted: bool) -> bool:
+    path = env.paths.state_file
+    try:
+        config.save_state(path, replace(config.load_state(path), new_box_playbooks=wanted))
+    except OSError as exc:
+        env.console.warn(f"the answer could not be saved, so the next new box asks again: {exc}")
+        return False
+    return True
+
+
+def _install_playbooks(session: Session) -> None:
+    console = session.console
+    try:
+        cmd_tool.tool_install(session, [PLAYBOOKS])
+        return
+    except Cancelled:
+        console.info("playbooks not installed; tool install playbooks gets them")
+        return
+    except _INSTALL_ERRORS as exc:
+        reason = str(exc)
+    except Exception as exc:
+        # the playbooks are extra: a bug here must not keep the new box from opening
+        reason = f"unexpected error: {type(exc).__name__}: {exc}"
+    console.warn(f"playbooks not installed: {reason}")
+    console.detail("tool install playbooks tries again")
 
 
 def _date(value: datetime) -> str:
@@ -355,6 +416,10 @@ def start(env: Env, argv: list[str]) -> int:
         return 1
     try:
         hostflow.on_open(session)
+        # once the box holds the open lock, so no other launch takes the install for leftovers,
+        # and before the note window, so its vim has them from the start
+        if env.made_box:
+            _playbooks_for_new_box(env, session)
         if notewindow.find_note(env.paths, session.box) is not None:
             console.ok("the note is already open")
         elif not notewindow.open_note(env.paths, env.settings, session.box, env.environ):

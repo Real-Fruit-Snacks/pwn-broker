@@ -1,17 +1,20 @@
 import sys
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
 import pytest
 
+import toolkit
 from conftest import NOW
 from pwn_broker import (
     __version__, boxes, checks, cli, lifecycle, note, notewindow, privilege, session, setup,
+    toolhooks, toolstate,
 )  # fmt: skip
 from pwn_broker.boxes import BoxError, create_box
 from pwn_broker.checks import CheckResult
 from pwn_broker.cli import box_for_cwd, choose, main, new_box, start
-from pwn_broker.config import Settings, load_state
+from pwn_broker.config import Settings, State, load_state, save_state
 from pwn_broker.console import Cancelled, FakeConsole
 from pwn_broker.questions import BoxAnswers, ask_box
 from pwn_broker.store import StoreError, load_box, save_box
@@ -832,3 +835,130 @@ def test_start_does_not_open_a_second_note_window(env, quiet, box, monkeypatch, 
     assert quiet == [] and len(ran) == 1
     assert lines(env, "ok").count("the note is already open") == 1
     assert lines(env, "warn") == []
+
+
+def test_a_new_box_keeps_the_rest_of_the_saved_state(env):
+    save_state(env.paths.state_file, State("thm", "lab.ovpn", True))
+    env.console = FakeConsole(["forest", "", "", "", "", "n"])
+    new_box(env)
+    assert load_state(env.paths.state_file) == State("thm", "lab.ovpn", True)
+
+
+# ---- playbooks in new boxes
+
+PLAYBOOKS_QUESTION = "install playbooks in new boxes?"
+BOX_ANSWERS = ["forest", "", "", "", "", "n"]
+
+
+@pytest.fixture
+def shop(env, tmp_path, monkeypatch):
+    """A folder index holding the stand-in playbooks, for env's launches to install from."""
+    folder = tmp_path / "index"
+    home = tmp_path / "user"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setattr(toolhooks, "user_home", lambda: home)
+    monkeypatch.setattr(toolhooks.tooldata, "_root_home", lambda: tmp_path / "no-root-home")
+    toolkit.write_index(folder, [toolkit.make_notes_entry(folder)[1]])
+    env.settings = replace(env.settings, tools_index=str(folder))
+    return folder
+
+
+def has_playbooks(env, box):
+    item = toolstate.load_installed(env.paths).get("playbooks")
+    return item is not None and box.id in item.users
+
+
+def installed_line(env):
+    return [t for t in lines(env, "ok") if t.startswith("playbooks 2026.11.19 installed")]
+
+
+def test_the_first_new_box_asks_about_playbooks_and_installs_them(env, quiet, shop, ran, monkeypatch):
+    at_note = []
+    monkeypatch.setattr(
+        notewindow, "open_note", lambda paths, settings, box, environ: at_note.append(has_playbooks(env, box)) or True
+    )
+    env.console = FakeConsole([*BOX_ANSWERS, ""])
+    assert start(env, ["new"]) == 0
+    box = ran[-1].box
+    assert env.console.asked[-1] == PLAYBOOKS_QUESTION
+    assert has_playbooks(env, box) and len(installed_line(env)) == 1
+    # after the box is made, and before its note window opens
+    shown = env.console.lines
+    assert shown.index(("ok", "box forest created")) < shown.index(("ok", installed_line(env)[0]))
+    assert at_note == [True]
+    assert load_state(env.paths.state_file).new_box_playbooks is True
+    assert lines(env, "info")[-1] == (
+        f"new boxes get them too; playbooks = false in {env.paths.config_file} stops that"
+    )
+
+
+def test_a_new_box_from_the_menu_asks_too(env, quiet, shop, ran):
+    env.console = FakeConsole(["1", *BOX_ANSWERS, ""])
+    assert start(env, []) == 0
+    assert env.console.asked[-1] == PLAYBOOKS_QUESTION and has_playbooks(env, ran[-1].box)
+
+
+def test_a_later_new_box_gets_them_without_asking(env, quiet, shop, ran):
+    save_state(env.paths.state_file, State("htb", "lab.ovpn", True))
+    env.console = FakeConsole(BOX_ANSWERS)
+    assert start(env, ["new"]) == 0
+    assert PLAYBOOKS_QUESTION not in env.console.asked
+    assert has_playbooks(env, ran[-1].box) and len(installed_line(env)) == 1
+    assert load_state(env.paths.state_file) == State("htb", "lab.ovpn", True)
+
+
+def test_no_installs_nothing_and_is_not_asked_again(env, quiet, shop, ran):
+    env.console = FakeConsole([*BOX_ANSWERS, "n"])
+    assert start(env, ["new"]) == 0
+    assert not has_playbooks(env, ran[-1].box) and installed_line(env) == []
+    assert load_state(env.paths.state_file).new_box_playbooks is False
+    assert lines(env, "info")[-1] == (
+        f"new boxes go without them; playbooks = true in {env.paths.config_file} installs them"
+    )
+    env.console = FakeConsole(["second", "", "", "", "", "n"])
+    assert start(env, ["new"]) == 0
+    assert PLAYBOOKS_QUESTION not in env.console.asked
+    assert not has_playbooks(env, ran[-1].box)
+
+
+@pytest.mark.parametrize(
+    "setting, saved, installs",
+    [(True, None, True), (True, False, True), (False, True, False), (False, None, False)],
+)
+def test_the_setting_wins_over_the_saved_answer_and_nothing_is_asked(
+    env, quiet, shop, ran, setting, saved, installs
+):
+    env.settings = replace(env.settings, playbooks=setting)
+    save_state(env.paths.state_file, State("htb", new_box_playbooks=saved))
+    env.console = FakeConsole(BOX_ANSWERS)
+    assert start(env, ["new"]) == 0
+    assert PLAYBOOKS_QUESTION not in env.console.asked
+    assert has_playbooks(env, ran[-1].box) is installs
+    assert load_state(env.paths.state_file).new_box_playbooks is saved
+
+
+def test_an_install_that_fails_is_a_warning_and_the_box_still_opens(env, quiet, shop, ran):
+    env.settings = replace(env.settings, tools_index=str(shop.parent / "missing"))
+    env.console = FakeConsole([*BOX_ANSWERS, ""])
+    assert start(env, ["new"]) == 0 and len(ran) == 1
+    warned = [t for t in lines(env, "warn") if t.startswith("playbooks not installed: ")]
+    assert len(warned) == 1 and "missing" in warned[0]
+    assert "tool install playbooks tries again" in lines(env, "detail")
+    assert lines(env, "fail") == []
+    # the answer is kept, so the next new box tries again
+    assert load_state(env.paths.state_file).new_box_playbooks is True
+
+
+def test_cancelling_the_question_saves_no_answer_and_still_opens_the_box(env, quiet, shop, ran):
+    # the answers run out at the question, as Ctrl-C there would
+    env.console = FakeConsole(BOX_ANSWERS)
+    assert start(env, ["new"]) == 0 and len(ran) == 1
+    assert env.console.asked[-1] == PLAYBOOKS_QUESTION
+    assert "playbooks not installed; asked again at the next new box" in lines(env, "info")
+    assert load_state(env.paths.state_file).new_box_playbooks is None
+    assert not has_playbooks(env, ran[-1].box)
+
+
+def test_resuming_a_box_never_asks_about_playbooks(env, quiet, shop, box, ran):
+    assert start(env, ["resume", "forest"]) == 0
+    assert PLAYBOOKS_QUESTION not in env.console.asked and not has_playbooks(env, box)

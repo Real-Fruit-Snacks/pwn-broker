@@ -58,9 +58,10 @@ The release file. Downloaded, it is checked against `SHA256SUMS.txt` before anyt
 |---|---|---|
 | Install without `--from` | The release file and its checksum | This repository's release |
 | `tool install` | Packages and the index | `pwn-shop`'s releases, or a folder on disk |
+| A new box, when new boxes get the playbooks | The playbooks and the index | `pwn-shop`'s releases, or a folder on disk |
 | Launch | Whether a newer release exists | This repository's releases; `check_updates = false` turns it off |
 
-Nothing else, apart from a ping to each new target's first IP and OpenVPN when you start it. With `--from` and a folder for `tools_index`, the install and the tool commands contact nothing.
+Nothing else, apart from a ping to each new target's first IP and OpenVPN when you start it. With `--from` and a folder for `tools_index`, the install, the tool commands and a new box's playbooks contact nothing.
 
 ### asciinema
 
@@ -381,6 +382,7 @@ forest/dc01 > tool install playbooks
 ```
 
 - **They come and go with the box, like a tool.** `finish` takes them off, the box records which build it had, and reopening or importing it installs that build again. One build is on the machine at a time: while an unfinished box still has an older build, `tool install playbooks` stops and names that box.
+- **New boxes can get them as they are made.** The first `pwn-broker new` on a machine asks `install playbooks in new boxes? [Y/n]` once the box is made, and keeps the answer in `/opt/pwn-broker/state.toml`. With yes, that box and every later new box get them before the note window opens, as `tool install playbooks` installs them, and the line after the install says how to stop it: `new boxes get them too; playbooks = false in /opt/pwn-broker/config.toml stops that`. An install that fails is a `warn` line, `playbooks not installed: <why>`, and the box opens all the same; `tool install playbooks` tries again. `playbooks = true` or `false` in `config.toml` decides instead, and then nothing is asked. A box that is resumed, reopened or imported is never asked: it offers the tools it had.
 - **`:Pb <name>`** in the note window reads one into the note below the cursor, never into the box at the top, and below a closed fold when the cursor is on one. Tab completes the name from any part of it, so `:Pb serv` finds `06-privesc/windows/services`. `:Pb` on its own lists them all to pick one by number.
 - **Each playbook is one fold.** Closed, it shows its `Playbook:` line: its title, its path and the build it came from.
 - **Placeholders** are written `<Name>`, such as `<TargetIP>` or `<Username>`, and the note shows them in Ember.
@@ -580,5 +582,6 @@ Unpacking refuses any entry that would land outside the box folder, and an archi
 | `scan_quick` | `-sC -sV` | nmap's options for `scan quick` |
 | `scan_full` | `-p- --min-rate 5000` | nmap's options for the first stage of `scan full` |
 | `scan_udp` | `-sU --top-ports 100` | nmap's options for `scan udp` |
+| `playbooks` | not set | Whether each new box gets the playbooks. Not set, the first new box asks, and the answer is kept in `/opt/pwn-broker/state.toml` |
 
 Two environment variables are read as well. `PWN_BROKER_OPT` is the install folder, for the installer and the app alike (default `/opt/pwn-broker`). `PWN_BROKER_HOME` is where the boxes live when `home` is not set in `config.toml`.
