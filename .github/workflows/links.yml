@@ -18,12 +18,16 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+      # A link to one of this repository's own files on main is checked against the checkout:
+      # github.com answers 503 to a checker now and then for its larger pages, and the file
+      # on disk is the one that link will show once this commit is on main.
       - uses: lycheeverse/lychee-action@v2
         with:
           args: >-
             --no-progress --max-retries 4 --retry-wait-time 10 --timeout 30
             --accept 200,206,429
             --exclude '^https://github\.com/Real-Fruit-Snacks/pwn-broker/(issues/new|security/advisories/new)'
+            --remap '^https://github\.com/Real-Fruit-Snacks/pwn-broker/blob/main/(.*)$ file://${{ github.workspace }}/$1'
             './**/*.md'
           fail: true
         env:
