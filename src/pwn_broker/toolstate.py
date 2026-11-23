@@ -252,6 +252,20 @@ def holding_boxes(
     return holding
 
 
+def notes_packages(installed: dict[str, Installed], box: Box) -> list[Installed]:
+    """The notes packages installed for the box whose folder of notes is on disk, by that folder.
+    A folder whose path holds a line break is left out: run/notes keeps one per line."""
+    return sorted(
+        (
+            t
+            for t in installed.values()
+            if t.notes and box.id in t.users and "\n" not in t.notes and "\r" not in t.notes
+            and Path(t.notes).is_dir()
+        ),
+        key=lambda t: t.notes,
+    )
+
+
 def write_notes_file(paths: AppPaths, box: Box) -> None:
     """Lists, one per line, the notes folders installed for the box, for the note window's :Pb.
 
@@ -261,12 +275,7 @@ def write_notes_file(paths: AppPaths, box: Box) -> None:
         installed = load_installed(paths)
     except (ToolError, OSError):
         installed = {}
-    roots = sorted(
-        t.notes
-        for t in installed.values()
-        if t.notes and box.id in t.users and "\n" not in t.notes and "\r" not in t.notes
-        and Path(t.notes).is_dir()
-    )
+    roots = [t.notes for t in notes_packages(installed, box)]
     try:
         write_text(paths.run_notes, "".join(f"{r}\n" for r in roots))
     except OSError:

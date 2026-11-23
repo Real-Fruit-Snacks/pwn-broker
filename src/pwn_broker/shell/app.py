@@ -38,6 +38,7 @@ _TOOL_INDEX_ARG = re.compile(r"(tool install|tool info) (\S*)")
 _TOOL_BOX_ARG = re.compile(r"(tool remove) (\S*)")
 _PATH_ARG = re.compile(re.escape(PATH_COMMAND) + r" (\S*)")
 _HOST_REMOVE_ARG = re.compile(r"(host remove (?:\S+ +)*)(\S*)")
+_PLAYBOOK_ARG = re.compile(r"(playbook show) (\S*)")
 
 
 def prompt_text(session: Session) -> str:
@@ -95,8 +96,23 @@ def _tool_names(session: Session, text: str) -> set[str]:
         return set()
 
 
+def _playbook_names(session: Session, text: str) -> set[str]:
+    # from any part of the name, in any case, as :Pb completes in the note
+    match = _PLAYBOOK_ARG.fullmatch(text)
+    if not match:
+        return set()
+    from pwn_broker.shell import cmd_playbook
+
+    try:
+        names = cmd_playbook.names(session)
+    except Exception:
+        return set()
+    return {f"{match[1]} {n}" for n in names if match[2].lower() in n.lower()}
+
+
 def completions(session: Session, text: str) -> list[str]:
     found = {name for name in COMMANDS if name.startswith(text)}
+    found.update(_playbook_names(session, text))
     match = _TARGET_ARG.fullmatch(text)
     if match:
         command, partial = match.groups()

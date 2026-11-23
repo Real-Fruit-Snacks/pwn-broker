@@ -1693,6 +1693,15 @@ forest/dc01 > tool install playbooks
 - The note's syntax file already shows `<Placeholder>` text in Ember (section 6.6), `<Replace>` included, so what is still to fill stands out with no change.
 - `,h` lists `:Pb` and `,x`.
 
+#### At the prompt
+
+Added in 0.1.9, because the note window was the only place to see which playbooks a box had, and picking one by number from `:Pb`'s list is a slow way to browse 88 of them.
+
+- **`playbook list [<word>...]`** lists every playbook installed for the open box, from the same packages `run/notes` names, sorted by path as `:Pb` lists them: name, folder and title, the title taken from the `Playbook:` line. A package column is added only when two packages are installed, since only then can a name be in both. Words keep the playbooks with every word in the name, folder or title, in any case, as `tool search` matches. The last line gives the count and the release.
+- **`playbook show <name>`** prints one in the terminal: the `Playbook:` line, then the playbook without its fold markers, its run block and its `END OF` line, which only mean something in vim. It takes the name `:Pb` takes, the path, or the package and path; a name two packages hold fails and names both. A file that does not start as a built playbook is shown whole under its path.
+- The text is a package's, so it goes out the way `scan log` and `vpn log` lines do: flush left so a command copies cleanly, with a control character shown as `?`. Placeholders are left as they are, in keeping with the non-goal above: filling in is the note's job.
+- Tab after `playbook show` completes the name from any part of it, in any case, as `:Pb` does, from the folders on disk only.
+
 #### search
 
 `search` skips, in the note only, lines inside a playbook's fold (from its `Playbook:` line to its `END OF` line) that still contain a `<Placeholder>`, as the note's highlighting finds them, and the run block in full. Inside a playbook every such line is template text, so the list of names is not needed here and `search` works the same once the box's playbooks are removed. A line I have filled in is my work and is searched like any other. When lines were skipped, the output ends with one mute line saying how many.

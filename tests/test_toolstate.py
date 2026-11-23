@@ -83,6 +83,22 @@ def test_write_notes_file(paths, box, tmp_path):
     assert paths.run_notes.read_text(encoding="utf-8") == mine.as_posix() + "\n"
 
 
+def test_notes_packages_are_the_boxs_own_on_disk_by_folder(box, tmp_path):
+    b, a, theirs, gone = tmp_path / "b", tmp_path / "a", tmp_path / "theirs", tmp_path / "gone"
+    broken = tmp_path / "line\nbreak"
+    for folder in (b, a, theirs):
+        folder.mkdir()
+    installed = {
+        "second": notes_item("second", b, [box.id]),
+        "first": notes_item("first", a, [box.id]),
+        "other-notes": notes_item("other-notes", theirs, ["someone-else"]),
+        "old-notes": notes_item("old-notes", gone, [box.id]),
+        "broken": notes_item("broken", broken, [box.id]),
+        "nmap-x": item(users=[box.id]),
+    }
+    assert [t.name for t in toolstate.notes_packages(installed, box)] == ["first", "second"]
+
+
 def test_write_notes_file_with_an_unreadable_list_writes_none(paths, box):
     paths.tools_state.parent.mkdir(parents=True)
     paths.tools_state.write_text("nope [", encoding="utf-8")
