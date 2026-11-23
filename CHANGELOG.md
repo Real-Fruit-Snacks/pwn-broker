@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.9 (unreleased)
+
+`playbook list` at the prompt lists the box's playbooks by name, folder and title, and words after it keep only the playbooks with every one of them in those, such as `playbook list windows`. `playbook show <name>` prints one in the terminal, from its `Playbook:` line and without its run block, flush left so its commands copy cleanly. It takes the name `:Pb` takes or the playbook's path, and Tab completes the name from any part of it.
+
 ## v0.1.8
 
 Fixed: after Kali restarted, `start` could refuse with `<box> is open in another prompt; quit that prompt first` when no prompt was running. The open box was known only by its prompt's process ID, and after a restart another process can be given the same number. pwn-broker now also records when that process started, so a reused number no longer counts as an open box for `start` and `record`, or for a tool installed from this version on. A box left open by an earlier version is still judged by its number alone.

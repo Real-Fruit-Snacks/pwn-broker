@@ -131,6 +131,8 @@ Everything the app prints is indented two spaces, apart from the prompt line, th
 | `host remove <hostname>...` | Take hostnames off the current target |
 | `note` | Open the note in vim |
 | `path [<folder>]` | Print a folder's full path |
+| `playbook list [<word>...]` | List the box's playbooks; words narrow the list |
+| `playbook show <name>` | Print a playbook in the terminal, without its run block |
 | `quit` | Leave the shell |
 | `replay [<target>] [<n>]` | List a target's recordings, or play one |
 | `scan [quick\|full\|udp]` | Run nmap on the current target in the background |
@@ -382,6 +384,22 @@ forest/dc01 > tool install playbooks
 - **`:Pb <name>`** in the note window reads one into the note below the cursor, never into the box at the top, and below a closed fold when the cursor is on one. Tab completes the name from any part of it, so `:Pb serv` finds `06-privesc/windows/services`. `:Pb` on its own lists them all to pick one by number.
 - **Each playbook is one fold.** Closed, it shows its `Playbook:` line: its title, its path and the build it came from.
 - **Placeholders** are written `<Name>`, such as `<TargetIP>` or `<Username>`, and the note shows them in Ember.
+
+At the prompt, `playbook list` lists the box's playbooks by name, folder and title. Words after it keep only the playbooks with every one of them in the name, the folder or the title, in any case:
+
+```
+forest/dc01 > playbook list windows
+
+  name                     folder              title
+  always-install-elevated  06-privesc/windows  Windows privesc: AlwaysInstallElevated
+  potatoes                 06-privesc/windows  Windows privesc: SeImpersonate and potatoes
+  ...
+  windows-kernel           06-privesc/windows  Windows privesc: kernel exploits
+  port-forwarding          08-pivoting         Port forwarding on Windows
+  11 of 88 playbooks in playbooks 2026.11.23; playbook show <name> prints one
+```
+
+`playbook show <name>` prints one in the terminal: its `Playbook:` line, then the playbook without its fold markers, run block and `END OF` line. It is flush left, so a command copies cleanly, and its placeholders are left as they are, since only the note fills them in. It takes the name `:Pb` takes, or the playbook's path, such as `02-enum/smb`, and Tab completes the name from any part of it. When two installed packages hold the same name, it names both, and `playbook show <package>/<path>` picks one.
 
 A playbook starts with a run block that fills its placeholders in that playbook only:
 
