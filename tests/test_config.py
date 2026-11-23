@@ -153,3 +153,33 @@ def test_state_ignores_a_vpn_file_of_the_wrong_type(tmp_path):
     f = tmp_path / "state.toml"
     f.write_text('last_vpn_file = 3\nlast_platform = "htb"\n')
     assert load_state(f) == State("htb", None)
+
+
+def test_playbooks_setting_is_unset_true_or_false(tmp_path):
+    assert Settings().playbooks is None
+    assert _settings_for(tmp_path, "").playbooks is None
+    assert _settings_for(tmp_path, "playbooks = true\n").playbooks is True
+    assert _settings_for(tmp_path, "playbooks = false\n").playbooks is False
+
+
+def test_playbooks_setting_wrong_type(tmp_path):
+    with pytest.raises(ConfigError, match="config.toml: playbooks must be a bool"):
+        _settings_for(tmp_path, 'playbooks = "yes"\n')
+
+
+def test_state_round_trip_with_the_playbooks_answer(tmp_path):
+    f = tmp_path / "state.toml"
+    for state in (
+        State("thm", "lab.ovpn", True),
+        State(None, None, False),
+        State("htb", new_box_playbooks=True),
+        State(),
+    ):
+        save_state(f, state)
+        assert load_state(f) == state
+
+
+def test_state_ignores_a_playbooks_answer_of_the_wrong_type(tmp_path):
+    f = tmp_path / "state.toml"
+    f.write_text('new_box_playbooks = "yes"\nlast_platform = "htb"\n')
+    assert load_state(f) == State("htb")

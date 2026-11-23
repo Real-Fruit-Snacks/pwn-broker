@@ -103,7 +103,7 @@ Phases 1 and 3 are built. Phase 2 is built last, is specified in full in section
   vim/vimrc                      loaded with vim -u
   vim/nightshift.vim             Nightshift colours for vim
   run/                           which box is open and its lock, running tools, recording windows, the running VPN
-  state.toml                     last-used values, rebuilt when missing
+  state.toml                     last-used values and the answer about new boxes' playbooks, rebuilt when missing
   tools/<name>/<version>/        phase 3
   upload/<name>/                 phase 3
   cache/                         phase 3: downloaded zips and the tool index
@@ -1701,6 +1701,16 @@ Added in 0.1.9, because the note window was the only place to see which playbook
 - **`playbook show <name>`** prints one in the terminal: the `Playbook:` line, then the playbook without its fold markers, its run block and its `END OF` line, which only mean something in vim. It takes the name `:Pb` takes, the path, or the package and path; a name two packages hold fails and names both. A file that does not start as a built playbook is shown whole under its path.
 - The text is a package's, so it goes out the way `scan log` and `vpn log` lines do: flush left so a command copies cleanly, with a control character shown as `?`. Placeholders are left as they are, in keeping with the non-goal above: filling in is the note's job.
 - Tab after `playbook show` completes the name from any part of it, in any case, as `:Pb` does, from the folders on disk only.
+
+#### In new boxes
+
+Added in 0.1.10, because nearly every box wants the playbooks and `tool install playbooks` was a step to remember in each one.
+
+- **Asked once, at the first new box, not by the installer.** `curl … | sh` gives the installer the script itself on stdin, so it has no terminal to ask on unless it opens `/dev/tty`, and an install with none, in CI or a script, would have to guess. `--from` contacts nothing, and the playbooks come from the index. And no box exists yet: playbooks belong to a box, which records their build and gives them back at `finish`.
+- **The question comes once the box is made**, `install playbooks in new boxes? [Y/n]`, and the answer goes in `state.toml` beside the last platform and VPN file. An install that is upgraded asks at its first new box, too. Interrupting the question saves nothing, installs nothing and opens the box; the next new box asks again.
+- **With yes, the install is `tool install playbooks`, run by the launch**, after the box holds the open lock, so no other launch sweeps a half-made install as leftovers, and before the note window opens, so its vim has them from the start. A failed install is a `warn` line with the reason and `tool install playbooks tries again`; the box opens all the same, and the answer stays, so the next new box tries again.
+- **`playbooks = true` or `false` in `config.toml` wins** over the saved answer, and with it set nothing is asked. A line after the answer names the setting.
+- **Only `new`.** A resumed box is already set up, and a reopened or imported box offers the tools it recorded, at their builds.
 
 #### search
 

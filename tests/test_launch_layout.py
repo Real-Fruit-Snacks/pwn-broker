@@ -88,6 +88,10 @@ Target 2
   ok    10.10.10.162 answered in 1 ms
   ok    box forest created
 
+  install playbooks in new boxes? [Y/n] > n
+
+  new boxes go without them; playbooks = true in {config} installs them
+
 """
 
 
@@ -96,11 +100,13 @@ def test_a_whole_launch_into_a_new_box_with_two_targets(env, quiet, monkeypatch)
         "1", "forest", "", "", "windows", "easy",
         "", "10.10.10.161", "forest.htb.local", "", "dc01",
         "y", "10.10.10.162", "", "internal", "",
-        "", "n",
+        "", "n", "n",
     ]  # fmt: skip
     env.console, out = term(monkeypatch, *answers)
     assert start(env, []) == 0
-    assert out.getvalue() == LAUNCH_INTO_A_NEW_BOX.format(version=__version__)
+    assert out.getvalue() == LAUNCH_INTO_A_NEW_BOX.format(
+        version=__version__, config=env.paths.config_file
+    )
 
 
 def test_the_events_of_a_launch_into_a_new_box(env, quiet):

@@ -943,6 +943,14 @@ def step_ping(s: State) -> None:
 def step_box_created(s: State) -> None:
     t = s.prompt
     t.wait(ok(f"box {BOX} created"), "the box created line")
+    # cli._playbooks_for_new_box: the first new box on a machine asks once; the index here has no playbooks
+    t.answer(confirm("install playbooks in new boxes?", True), "n", "the playbooks question")
+    t.wait(
+        whole_line(f"{INDENT}new boxes go without them; playbooks = true in {OPT / 'config.toml'} installs them"),
+        "the line that says how to change the answer",
+    )
+    saved = read_toml(OPT / "state.toml")
+    check(saved.get("new_box_playbooks") is False, f"{OPT / 'state.toml'} keeps the answer", repr(saved))
     t.wait(PROMPT, "the prompt")
     found = one_note_window(s, "after the new box")
     s.window = (found.pid, found.ppid)
