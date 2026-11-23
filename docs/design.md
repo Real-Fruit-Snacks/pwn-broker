@@ -1671,13 +1671,14 @@ root = "files/playbooks"
 - **Installing** unpacks it into `/opt/pwn-broker/tools/playbooks/<version>-<build>/` like any tool, writes nothing to `bin/` or `upload/`, and records it in `box.toml` like any tool.
 - **One build at a time, as for any tool** (section 8.6). If an unfinished box still holds an older build, `tool install playbooks` stops and names that box: finish it or remove the playbooks there first, or install that build to share it. Letting builds sit side by side was considered and dropped, because the installed list is keyed by name throughout and reworking that is not worth it for an unfinished box.
 - **The note window finds the open box's playbooks** through `/opt/pwn-broker/run/notes`: one folder per line, the `root` of each `notes` package installed for the open box. The app writes it at launch, resume, `tool install` and `tool remove`, and empties it at `quit` and `finish`.
-- `tool install playbooks` prints, after its `ok` line, how many playbooks it holds and how to read one:
+- `tool install playbooks` prints, after its `ok` line, how many playbooks it holds and how to read and list them (the `list` line since 0.1.11):
 
 ```
 forest/dc01 > tool install playbooks
 
   ok    playbooks 2026.11.19 installed (64 playbooks)
-  read  :Pb <name>   in the note window
+  read  :Pb <name>      in the note window
+  list  playbook list   at the prompt
 ```
 
 - `finish`, `export`, `import` and reopening a box treat it as they treat any tool. Reopening an archived box installs the same build, so the playbooks it was worked with come back with it.
@@ -1707,9 +1708,10 @@ Added in 0.1.9, because the note window was the only place to see which playbook
 Added in 0.1.10, because nearly every box wants the playbooks and `tool install playbooks` was a step to remember in each one.
 
 - **Asked once, at the first new box, not by the installer.** `curl … | sh` gives the installer the script itself on stdin, so it has no terminal to ask on unless it opens `/dev/tty`, and an install with none, in CI or a script, would have to guess. `--from` contacts nothing, and the playbooks come from the index. And no box exists yet: playbooks belong to a box, which records their build and gives them back at `finish`.
-- **The question comes once the box is made**, `install playbooks in new boxes? [Y/n]`, and the answer goes in `state.toml` beside the last platform and VPN file. An install that is upgraded asks at its first new box, too. Interrupting the question saves nothing, installs nothing and opens the box; the next new box asks again.
-- **With yes, the install is `tool install playbooks`, run by the launch**, after the box holds the open lock, so no other launch sweeps a half-made install as leftovers, and before the note window opens, so its vim has them from the start. A failed install is a `warn` line with the reason and `tool install playbooks tries again`; the box opens all the same, and the answer stays, so the next new box tries again.
-- **`playbooks = true` or `false` in `config.toml` wins** over the saved answer, and with it set nothing is asked. A line after the answer names the setting.
+- **The question comes once the box is made**, `install playbooks in this box and every new box? [Y/n]`, naming both, since the box just made is the first to get them, and the answer goes in `state.toml` beside the last platform and VPN file. An install that is upgraded asks at its first new box, too. Interrupting the question saves nothing, installs nothing and opens the box; the next new box asks again.
+- **With yes, the install is `tool install playbooks`, run by the launch**, after the box holds the open lock, so no other launch sweeps a half-made install as leftovers, and before the note window opens, so its vim has them from the start. A failed install is a `warn` line with the reason and `try again with: tool install playbooks`; the box opens all the same, and the answer stays, so the next new box tries again.
+- **`playbooks = true` or `false` in `config.toml` wins** over the saved answer, and with it set nothing is asked.
+- **The answer is confirmed before the install starts**, on an `ok` line, `saved: new boxes get the playbooks` or `saved: new boxes start without playbooks`, so it shows while the download runs. Under it, detail lines in the form the launch checks use (`start one with: vpn start`) say what to type to change it: the setting, and after a no, `tool install playbooks` for the one box. An answer that cannot be saved is a `warn` line instead, with `the next new box asks again`.
 - **Only `new`.** A resumed box is already set up, and a reopened or imported box offers the tools it recorded, at their builds.
 
 #### search

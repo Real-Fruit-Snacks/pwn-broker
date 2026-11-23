@@ -1,10 +1,12 @@
 """What the launch, the start menu and the questions put on screen, as TermConsole writes it."""
 
 import io
+from dataclasses import replace
 
 import pytest
 
-from pwn_broker import __version__, checks, cli, lifecycle, notewindow, privilege
+import toolkit
+from pwn_broker import __version__, checks, cli, lifecycle, notewindow, privilege, toolhooks
 from pwn_broker.checks import CheckResult
 from pwn_broker.cli import start
 from pwn_broker.console import FakeConsole, TermConsole
@@ -88,9 +90,11 @@ Target 2
   ok    10.10.10.162 answered in 1 ms
   ok    box forest created
 
-  install playbooks in new boxes? [Y/n] > n
+  install playbooks in this box and every new box? [Y/n] > n
 
-  new boxes go without them; playbooks = true in {config} installs them
+  ok    saved: new boxes start without playbooks
+        for this box only: tool install playbooks
+        for every new box: playbooks = true in {config}
 
 """
 
@@ -106,6 +110,36 @@ def test_a_whole_launch_into_a_new_box_with_two_targets(env, quiet, monkeypatch)
     assert start(env, []) == 0
     assert out.getvalue() == LAUNCH_INTO_A_NEW_BOX.format(
         version=__version__, config=env.paths.config_file
+    )
+
+
+THE_PLAYBOOKS_QUESTION_ANSWERED_YES = """\
+  ok    box forest created
+
+  install playbooks in this box and every new box? [Y/n] > 
+
+  ok    saved: new boxes get the playbooks
+        to change it: playbooks = false in {config}
+  ok    playbooks 2026.11.19 installed (2 playbooks)
+  read  :Pb <name>      in the note window
+  list  playbook list   at the prompt
+
+"""
+
+
+def test_the_playbooks_question_answered_yes(env, quiet, monkeypatch, tmp_path):
+    folder = tmp_path / "index"
+    home = tmp_path / "user"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setattr(toolhooks, "user_home", lambda: home)
+    monkeypatch.setattr(toolhooks.tooldata, "_root_home", lambda: tmp_path / "no-root-home")
+    toolkit.write_index(folder, [toolkit.make_notes_entry(folder)[1]])
+    env.settings = replace(env.settings, tools_index=str(folder))
+    env.console, out = term(monkeypatch, "forest", "", "", "", "", "n", "")
+    assert start(env, ["new"]) == 0
+    shown = out.getvalue()
+    assert shown[shown.index("  ok    box forest created"):] == THE_PLAYBOOKS_QUESTION_ANSWERED_YES.format(
+        config=env.paths.config_file
     )
 
 

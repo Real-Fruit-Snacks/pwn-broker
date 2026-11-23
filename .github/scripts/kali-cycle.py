@@ -944,10 +944,11 @@ def step_box_created(s: State) -> None:
     t = s.prompt
     t.wait(ok(f"box {BOX} created"), "the box created line")
     # cli._playbooks_for_new_box: the first new box on a machine asks once; the index here has no playbooks
-    t.answer(confirm("install playbooks in new boxes?", True), "n", "the playbooks question")
+    t.answer(confirm("install playbooks in this box and every new box?", True), "n", "the playbooks question")
+    t.wait(whole_line(ok("saved: new boxes start without playbooks")), "the line that says the answer is saved")
     t.wait(
-        whole_line(f"{INDENT}new boxes go without them; playbooks = true in {OPT / 'config.toml'} installs them"),
-        "the line that says how to change the answer",
+        whole_line(f"{DETAIL}for every new box: playbooks = true in {OPT / 'config.toml'}"),
+        "the line that says how to change it",
     )
     saved = read_toml(OPT / "state.toml")
     check(saved.get("new_box_playbooks") is False, f"{OPT / 'state.toml'} keeps the answer", repr(saved))

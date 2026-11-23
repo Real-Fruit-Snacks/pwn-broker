@@ -205,7 +205,8 @@ def _show(
     if version is not None and item.notes:
         count = sum(1 for p in Path(item.notes).rglob("*.md") if p.is_file())
         console.ok(f"{item.name} {version} installed ({count} playbooks)")
-        console.info("read  :Pb <name>   in the note window")
+        console.info("read  :Pb <name>      in the note window")
+        console.info("list  playbook list   at the prompt")
     elif version is not None:
         console.ok(f"{item.name} {version} installed")
     for command in item.commands:
