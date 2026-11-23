@@ -103,7 +103,7 @@ Phases 1 and 3 are built. Phase 2 is built last, is specified in full in section
   vim/vimrc                      loaded with vim -u
   vim/nightshift.vim             Nightshift colours for vim
   run/                           which box is open and its lock, running tools, recording windows, the running VPN
-  state.toml                     last-used values and the answer about new boxes' playbooks, rebuilt when missing
+  state.toml                     last-used values and the answers about new boxes' playbooks and report tool, rebuilt when missing
   tools/<name>/<version>/        phase 3
   upload/<name>/                 phase 3
   cache/                         phase 3: downloaded zips and the tool index
@@ -469,11 +469,12 @@ forest/dc01 > finish
   targets  2
   files    47
   archive  ~/pwn-broker/wrapped/2026-11-14_htb_forest.finished.tar.gz
+  report   none: tool install report adds the tool that builds one
 
   finish this box? [y/N] >
 ```
 
-The labels pad to the longest one in the list, and the phases' rows (`tools`, `runtimes`, `hosts`) join it, one tool or runtime per row.
+The labels pad to the longest one in the list, and the phases' rows (`tools`, `runtimes`, `hosts`) join it, one tool or runtime per row. The `report` row says whether the report is built at step 7 (section 8.15).
 
 Nothing happens before a yes. Then, in order:
 
@@ -483,10 +484,11 @@ Nothing happens before a yes. Then, in order:
 4. Correct file ownership if needed.
 5. Write the archive under a temporary name, read it back, and compare it with the manifest. Only then give it its final name.
 6. Copy it to the `copy_to` folder, if one is set, and verify the copy.
-7. Undo what the box changed on Kali (phases 2 and 3).
-8. Ask whether to remove the working folder. The default is no. On yes, the folder is kept, with a `warn` line, when the note has unsaved changes or when the note on disk is no longer the file that was archived (`warn  the note changed after the archive was made; the folder was kept`). Otherwise the note window is closed (section 6.6) and the folder removed. If the window does not close (its vim, or the terminal started for it, is still running), the folder is kept: `warn  the note window did not close; the folder was kept`.
+7. Build the report beside the archive, when the box has the report tool, and copy it to `copy_to` too (section 8.15).
+8. Undo what the box changed on Kali (phases 2 and 3).
+9. Ask whether to remove the working folder. The default is no. On yes, the folder is kept, with a `warn` line, when the note has unsaved changes or when the note on disk is no longer the file that was archived (`warn  the note changed after the archive was made; the folder was kept`). Otherwise the note window is closed (section 6.6) and the folder removed. If the window does not close (its vim, or the terminal started for it, is still running), the folder is kept: `warn  the note window did not close; the folder was kept`.
 
-If any step fails, nothing after it runs, nothing is removed, and the box goes back to active. A finished archive is never overwritten without asking.
+If any step up to 6 fails, nothing after it runs, nothing is removed, and the box goes back to active. Step 7 is the exception: a report that fails is a `warn` line, and the finish goes on. A finished archive is never overwritten without asking.
 
 A finished box whose working folder I kept shows in the launch menu as a box to reopen. Reopening sets it back to active. Finishing it again asks before replacing the earlier archive. A new box of the same name on the same day has its own `-2` archive (section 6.4), so that question is only ever about the same box.
 
@@ -1743,6 +1745,18 @@ Added in 0.1.10, because nearly every box wants the playbooks and `tool install 
 - `placeholders.toml`'s full list beyond the names above, and its format.
 - How `:Pb`'s list is laid out on screen, within the note window's existing popup style.
 - How `pwn-shop`'s whole-archive source refuses links and entries that would escape `files/`, matching section 8.5's rules.
+
+### 8.15 The report at finish
+
+Added in 0.1.12. [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report) turns a finished or exported archive into a private report folder; pwn-shop packages it as `report`, and `tool install report` puts its `pwn-report` command on the box like any tool.
+
+- **Built by `finish`, from the finished archive.** After the archive is written and copied, and before the undo steps, which take the report tool off with the rest. So the report needs no step of its own, and always matches the final archive.
+- **Run, never imported.** `/opt/pwn-broker/bin/pwn-report build <archive> -o <folder>`, with no shell, the environment other tool runs get, the archive's folder as its working folder, and 600 seconds. Status 0 with the folder in place is a report built; anything else is one not built, and pwn-report's `fail  <reason>` line, when there is one, is the reason given. No pwn-report code runs in pwn-broker's process, so its Python and its version are its own.
+- **Only when the box has it.** The box's current tools include `report` and its command is in `/opt/pwn-broker/bin`. `finish`'s summary says which, before the archive is made: `report  will be built beside the archive`, or `report  none: tool install report adds the tool that builds one`.
+- **Beside the archive, never replacing one.** `<archive minus .tar.gz>.report`, or the first free `.report-2`, `.report-3`, ... for a box finished again after it is reopened or imported. With `copy_to`, the folder is copied there through a `.part` folder renamed into place, as the archive is.
+- **A report never fails, hangs or undoes `finish`.** A `fail` line, a status with no line, a folder said built but not there, a command that cannot run and a bug in this code are each a `warn` line, `the report was not built: <why>`, and `finish` goes on to its undo steps; the archive is not touched. Past 600 seconds the run gets SIGTERM, which pwn-report answers by removing its staging folder, then SIGKILL after 5 seconds, and any `.<report>.tmp-*` folder left beside the archive is removed. Ctrl-C while it runs stops the report the same way, and a Ctrl-C anywhere else in the report step, its copy to `copy_to` included, is a `warn` line too: none of them stops the finish or skips its undo steps.
+- **New boxes**, as for the playbooks: the 0.1.10 question is now one per offered package, playbooks then report, each asked, saved and installed in turn, with its own setting (`report = true` or `false`) and saved answer (`new_box_report` in `state.toml`). The playbooks' question and lines are unchanged. For the report tool: `install the report tool in this box and every new box? [Y/n]`, then `saved: new boxes get the report tool` or `saved: new boxes start without the report tool`, with the same detail lines worded for it. An index without a `report` package is a `warn` line, `report tool not installed: <why>`, as a failed playbooks install is.
+- **Not at `export`, and no `report` command at the prompt.** Both can come later; the report is for the box as finished.
 
 ## 9. What finish puts back
 

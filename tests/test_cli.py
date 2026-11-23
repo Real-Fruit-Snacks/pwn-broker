@@ -852,14 +852,16 @@ BOX_ANSWERS = ["forest", "", "", "", "", "n"]
 
 @pytest.fixture
 def shop(env, tmp_path, monkeypatch):
-    """A folder index holding the stand-in playbooks, for env's launches to install from."""
+    """A folder index holding the stand-in playbooks, for env's launches to install from. The
+    report tool's question, which comes after the playbooks', is settled here, so these tests see
+    the playbooks' alone; the report tool's own tests below ask both."""
     folder = tmp_path / "index"
     home = tmp_path / "user"
     home.mkdir(exist_ok=True)
     monkeypatch.setattr(toolhooks, "user_home", lambda: home)
     monkeypatch.setattr(toolhooks.tooldata, "_root_home", lambda: tmp_path / "no-root-home")
     toolkit.write_index(folder, [toolkit.make_notes_entry(folder)[1]])
-    env.settings = replace(env.settings, tools_index=str(folder))
+    env.settings = replace(env.settings, tools_index=str(folder), report=False)
     return folder
 
 
@@ -992,3 +994,127 @@ def test_an_answer_that_cannot_be_saved_says_so_and_still_installs(env, quiet, s
 def test_resuming_a_box_never_asks_about_playbooks(env, quiet, shop, box, ran):
     assert start(env, ["resume", "forest"]) == 0
     assert PLAYBOOKS_QUESTION not in env.console.asked and not has_playbooks(env, box)
+
+
+# ---- the report tool in new boxes
+
+REPORT_QUESTION = "install the report tool in this box and every new box?"
+
+
+@pytest.fixture
+def report_shop(env, tmp_path, monkeypatch):
+    """A folder index holding the stand-in playbooks and a stand-in report tool: both questions are
+    asked, the playbooks' first."""
+    from pwn_broker.shell import cmd_tool
+
+    folder = tmp_path / "index"
+    home = tmp_path / "user"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setattr(toolhooks, "user_home", lambda: home)
+    monkeypatch.setattr(toolhooks.tooldata, "_root_home", lambda: tmp_path / "no-root-home")
+    monkeypatch.setattr(cmd_tool, "_lookup", lambda command, path=None: None)
+    _zip, report = toolkit.make_entry(
+        folder,
+        {
+            "name": "report", "version": "0.1.0",
+            "description": "Private, evidence-linked reports from pwn-broker archives",
+            "command": [{"name": "pwn-report", "type": "binary", "path": "files/pwn-report"}],
+        },
+        {"files/pwn-report": b"#!/bin/sh\necho report\n"},
+    )  # fmt: skip
+    toolkit.write_index(folder, [toolkit.make_notes_entry(folder)[1], report])
+    env.settings = replace(env.settings, tools_index=str(folder))
+    return folder
+
+
+def has_report(env, box):
+    item = toolstate.load_installed(env.paths).get("report")
+    return item is not None and box.id in item.users
+
+
+def test_after_the_playbooks_the_first_new_box_asks_about_the_report_tool(env, quiet, report_shop, ran):
+    env.console = FakeConsole([*BOX_ANSWERS, "n", ""])
+    assert start(env, ["new"]) == 0
+    box = ran[-1].box
+    assert env.console.asked[-2:] == [PLAYBOOKS_QUESTION, REPORT_QUESTION]
+    assert has_report(env, box) and not has_playbooks(env, box)
+    assert load_state(env.paths.state_file).new_box_report is True
+    shown = env.console.lines
+    # the playbooks' answer and its lines, unchanged, then the report tool's, then its install
+    at = shown.index(("ok", "saved: new boxes start without playbooks"))
+    assert shown[at + 1 : at + 6] == [
+        ("detail", "for this box only: tool install playbooks"),
+        ("detail", f"for every new box: playbooks = true in {env.paths.config_file}"),
+        ("ok", "saved: new boxes get the report tool"),
+        ("detail", f"to change it: report = false in {env.paths.config_file}"),
+        ("ok", "report 0.1.0 installed"),
+    ]
+
+
+def test_no_to_the_report_tool_installs_nothing_and_is_not_asked_again(env, quiet, report_shop, ran):
+    env.console = FakeConsole([*BOX_ANSWERS, "", "n"])
+    assert start(env, ["new"]) == 0
+    assert has_playbooks(env, ran[-1].box) and not has_report(env, ran[-1].box)
+    assert load_state(env.paths.state_file).new_box_report is False
+    shown = env.console.lines
+    at = shown.index(("ok", "saved: new boxes start without the report tool"))
+    assert shown[at + 1 : at + 3] == [
+        ("detail", "for this box only: tool install report"),
+        ("detail", f"for every new box: report = true in {env.paths.config_file}"),
+    ]
+    env.console = FakeConsole(["second", "", "", "", "", "n"])
+    assert start(env, ["new"]) == 0
+    assert REPORT_QUESTION not in env.console.asked and PLAYBOOKS_QUESTION not in env.console.asked
+    assert not has_report(env, ran[-1].box) and has_playbooks(env, ran[-1].box)
+
+
+@pytest.mark.parametrize(
+    "setting, saved, installs",
+    [(True, None, True), (True, False, True), (False, True, False), (False, None, False), (None, True, True)],
+)
+def test_the_report_setting_wins_over_the_saved_answer(env, quiet, report_shop, ran, setting, saved, installs):
+    env.settings = replace(env.settings, playbooks=False, report=setting)
+    save_state(env.paths.state_file, State("htb", new_box_report=saved))
+    env.console = FakeConsole(BOX_ANSWERS)
+    assert start(env, ["new"]) == 0
+    assert REPORT_QUESTION not in env.console.asked
+    assert has_report(env, ran[-1].box) is installs
+    assert load_state(env.paths.state_file).new_box_report is saved
+
+
+def test_an_index_without_the_report_tool_is_a_warning_and_the_box_still_opens(env, quiet, shop, ran):
+    env.settings = replace(env.settings, report=None)
+    env.console = FakeConsole([*BOX_ANSWERS, "n", ""])
+    assert start(env, ["new"]) == 0 and len(ran) == 1
+    warned = [t for t in lines(env, "warn") if t.startswith("report tool not installed: ")]
+    assert len(warned) == 1
+    shown = env.console.lines
+    assert shown[shown.index(("warn", warned[0])) + 1] == ("detail", "try again with: tool install report")
+    assert lines(env, "fail") == []
+    assert load_state(env.paths.state_file).new_box_report is True
+
+
+def test_cancelling_the_report_question_saves_no_answer_and_still_opens_the_box(env, quiet, report_shop, ran):
+    # the answers run out at the report tool's question, as Ctrl-C there would
+    env.console = FakeConsole([*BOX_ANSWERS, "n"])
+    assert start(env, ["new"]) == 0 and len(ran) == 1
+    assert env.console.asked[-1] == REPORT_QUESTION
+    assert "report tool skipped; the next new box asks again" in lines(env, "info")
+    state = load_state(env.paths.state_file)
+    assert state.new_box_report is None and state.new_box_playbooks is False
+    assert not has_report(env, ran[-1].box)
+
+
+def test_resumed_and_imported_boxes_are_never_asked_about_the_report_tool(env, quiet, report_shop, box, ran, monkeypatch):
+    assert start(env, ["resume", "forest"]) == 0
+    monkeypatch.setattr(lifecycle, "import_box", lambda *a: box)
+    assert start(env, ["import", "a.tar.gz"]) == 0
+    assert REPORT_QUESTION not in env.console.asked and PLAYBOOKS_QUESTION not in env.console.asked
+    assert not has_report(env, box)
+
+
+def test_a_reopened_box_is_never_asked_about_the_report_tool(env, quiet, report_shop, ran):
+    _, done = two_boxes(env)
+    env.console = FakeConsole(["4"])
+    assert start(env, []) == 0 and ran[-1].box.path == done.path
+    assert REPORT_QUESTION not in env.console.asked and PLAYBOOKS_QUESTION not in env.console.asked

@@ -96,6 +96,12 @@ Target 2
         for this box only: tool install playbooks
         for every new box: playbooks = true in {config}
 
+  install the report tool in this box and every new box? [Y/n] > n
+
+  ok    saved: new boxes start without the report tool
+        for this box only: tool install report
+        for every new box: report = true in {config}
+
 """
 
 
@@ -104,7 +110,7 @@ def test_a_whole_launch_into_a_new_box_with_two_targets(env, quiet, monkeypatch)
         "1", "forest", "", "", "windows", "easy",
         "", "10.10.10.161", "forest.htb.local", "", "dc01",
         "y", "10.10.10.162", "", "internal", "",
-        "", "n", "n",
+        "", "n", "n", "n",
     ]  # fmt: skip
     env.console, out = term(monkeypatch, *answers)
     assert start(env, []) == 0
@@ -134,11 +140,58 @@ def test_the_playbooks_question_answered_yes(env, quiet, monkeypatch, tmp_path):
     monkeypatch.setattr(toolhooks, "user_home", lambda: home)
     monkeypatch.setattr(toolhooks.tooldata, "_root_home", lambda: tmp_path / "no-root-home")
     toolkit.write_index(folder, [toolkit.make_notes_entry(folder)[1]])
-    env.settings = replace(env.settings, tools_index=str(folder))
+    # the report tool's question, which follows, has its own screen below
+    env.settings = replace(env.settings, tools_index=str(folder), report=False)
     env.console, out = term(monkeypatch, "forest", "", "", "", "", "n", "")
     assert start(env, ["new"]) == 0
     shown = out.getvalue()
     assert shown[shown.index("  ok    box forest created"):] == THE_PLAYBOOKS_QUESTION_ANSWERED_YES.format(
+        config=env.paths.config_file
+    )
+
+
+THE_REPORT_QUESTION_ANSWERED_YES = """\
+  ok    box forest created
+
+  install playbooks in this box and every new box? [Y/n] > n
+
+  ok    saved: new boxes start without playbooks
+        for this box only: tool install playbooks
+        for every new box: playbooks = true in {config}
+
+  install the report tool in this box and every new box? [Y/n] > 
+
+  ok    saved: new boxes get the report tool
+        to change it: report = false in {config}
+  ok    report 0.1.0 installed
+  run   pwn-report   from any terminal
+
+"""
+
+
+def test_the_report_question_answered_yes(env, quiet, monkeypatch, tmp_path):
+    from pwn_broker.shell import cmd_tool
+
+    folder = tmp_path / "index"
+    home = tmp_path / "user"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setattr(toolhooks, "user_home", lambda: home)
+    monkeypatch.setattr(toolhooks.tooldata, "_root_home", lambda: tmp_path / "no-root-home")
+    monkeypatch.setattr(cmd_tool, "_lookup", lambda command, path=None: None)
+    _zip, report = toolkit.make_entry(
+        folder,
+        {
+            "name": "report", "version": "0.1.0",
+            "command": [{"name": "pwn-report", "type": "binary", "path": "files/pwn-report"}],
+        },
+        {"files/pwn-report": b"#!/bin/sh\necho report\n"},
+    )  # fmt: skip
+    toolkit.write_index(folder, [toolkit.make_notes_entry(folder)[1], report])
+    env.settings = replace(env.settings, tools_index=str(folder))
+    env.console, out = term(monkeypatch, "forest", "", "", "", "", "n", "n", "")
+    assert start(env, ["new"]) == 0
+    shown = out.getvalue()
+    assert shown[shown.index("  ok    box forest created"):] == THE_REPORT_QUESTION_ANSWERED_YES.format(
         config=env.paths.config_file
     )
 

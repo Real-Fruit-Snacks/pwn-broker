@@ -59,9 +59,10 @@ The release file. Downloaded, it is checked against `SHA256SUMS.txt` before anyt
 | Install without `--from` | The release file and its checksum | This repository's release |
 | `tool install` | Packages and the index | `pwn-shop`'s releases, or a folder on disk |
 | A new box, when new boxes get the playbooks | The playbooks and the index | `pwn-shop`'s releases, or a folder on disk |
+| A new box, when new boxes get the report tool | The report tool, its runtime and the index | `pwn-shop`'s releases, or a folder on disk |
 | Launch | Whether a newer release exists | This repository's releases; `check_updates = false` turns it off |
 
-Nothing else, apart from a ping to each new target's first IP and OpenVPN when you start it. With `--from` and a folder for `tools_index`, the install, the tool commands and a new box's playbooks contact nothing.
+Nothing else, apart from a ping to each new target's first IP and OpenVPN when you start it. With `--from` and a folder for `tools_index`, the install, the tool commands and a new box's playbooks and report tool contact nothing. The report `finish` builds contacts nothing either: pwn-report reads the archive on disk and writes the report beside it.
 
 ### asciinema
 
@@ -444,6 +445,38 @@ Afterwards the `Fill in:` line shows the values used, and a placeholder still on
 - Marks `y` and `z` are overwritten each time a run block runs.
 - The search looks only below the run block (`\%>'y`), so a playbook whose `END OF` line you deleted stops there and changes nothing, even with another copy above it. With another copy of the same playbook below it, the fill runs down to that copy's end, your own lines between included.
 
+### Reports
+
+`tool install report` gets [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report), the `pwn-report` command, on the `python-3.13` runtime. With it in the box, `finish` builds a report from the finished archive and puts it beside the archive, after the archive is written and copied and before the tools come off:
+
+```
+  ok    archive /home/kali/pwn-broker/wrapped/2026-11-23_htb_forest.finished.tar.gz
+  report  building beside the archive
+  ok    report /home/kali/pwn-broker/wrapped/2026-11-23_htb_forest.finished.report
+  ok    report 0.1.0 removed
+  ok    python-3.13 3.13.18 removed (runtime)
+```
+
+- **What it holds.** `report.md`, with the box, its targets and flags, a timeline from the archive's own records and an index of the evidence, each file with its SHA-256; `report.json` and `report.toml`; a copy of the notes and of the scans, screenshots and exploits, each linked from the index; and `SHA256SUMS`. Loot, recordings and the `files/` and `upload/` folders are indexed but not copied. It is private: it never reads `creds.toml`, `lists/`, a target's `creds/` or `tooldata/`, but it copies the notes and the scans as they are, and they can hold a password you typed. [pwn-report's guide](https://github.com/Real-Fruit-Snacks/pwn-report/blob/main/docs/guide.md) has the rest.
+- **`finish`'s summary says first** whether one will be built: `report  will be built beside the archive`, or `report  none: tool install report adds the tool that builds one`.
+- **A report is never replaced.** A box finished again after it is reopened or imported puts its report beside the first, as `.report-2`, then `.report-3`.
+- **With `copy_to`** set, the report is copied there too, with an `ok    copy <path>` line; a copy that fails is a `warn` line.
+- **A report that fails** is a `warn` line, `the report was not built: <why>`, and `finish` goes on; the archive is not touched. pwn-report has 600 seconds: after that it is stopped, any half-made report folder is removed, and the line says it took longer than that. Ctrl-C while it runs stops the report, not the finish.
+- **New boxes can get it as they are made**, the way they get the playbooks: after the playbooks' question, the first new box asks `install the report tool in this box and every new box? [Y/n]` and keeps the answer in `/opt/pwn-broker/state.toml`. Answered yes:
+
+  ```
+    install the report tool in this box and every new box? [Y/n] >
+
+    ok    saved: new boxes get the report tool
+          to change it: report = false in /opt/pwn-broker/config.toml
+    ok    python-3.13 3.13.18 installed (runtime, 34 MB)
+    ok    report 0.1.0 installed
+    run   pwn-report   from any terminal
+  ```
+
+  Answered `n`, the lines under `saved: new boxes start without the report tool` are `for this box only: tool install report` and `for every new box: report = true in /opt/pwn-broker/config.toml`. `report = true` or `false` in `config.toml` decides instead, and then nothing is asked. An install that fails is a `warn` line, `report tool not installed: <why>`, then `try again with: tool install report`, and the box opens all the same.
+- pwn-broker never imports pwn-report. It runs `/opt/pwn-broker/bin/pwn-report build <archive> -o <folder>`, with no shell and the environment it gives every tool. Status 0 with the folder in place is a report built; anything else is one not built, with pwn-report's own `fail` line as the reason.
+
 ### Kali's copies, sudo, and one build per machine
 
 - **Kali's own copies are never touched.** An install writes a launcher for each command into `/opt/pwn-broker/bin`, and that folder decides which copy a bare command name runs. If Kali already has a command of the same name, install prints a `warn` line with its path and says the installed one wins. `tool list` has a `kali` column that says whether Kali already has a command of that name.
@@ -568,9 +601,10 @@ It also takes files back from the target. A `PUT` to the same address and random
 
 ## Finish, export and import
 
-`finish` shows a summary (the box, its targets, its files, the archive's path, the `/etc/hosts` lines and tools it will remove) and asks `finish this box? [y/N]`. A tool another unfinished box has is listed as `(will be kept; forest still uses it)`, and a tool that was not installed again when the box was imported or reopened is not listed, since there is nothing to remove. Then it:
+`finish` shows a summary (the box, its targets, its files, the archive's path, whether a report will be built, the `/etc/hosts` lines and tools it will remove) and asks `finish this box? [y/N]`. A tool another unfinished box has is listed as `(will be kept; forest still uses it)`, and a tool that was not installed again when the box was imported or reopened is not listed, since there is nothing to remove. Then it:
 
 - writes `~/pwn-broker/wrapped/<box folder>.finished.tar.gz`, and a copy to `copy_to` if that is set;
+- builds the report beside it when the box has the report tool, `<box folder>.finished.report`, and copies that to `copy_to` too ([Reports](#reports));
 - removes the box's `/etc/hosts` lines after the archive is verified, takes off the tools and runtimes no other unfinished box uses, with a line for each (`ok    kerbrute 1.0.3 removed`, or `ok    kerbrute 1.0.3 kept; forest still uses it` for a tool another box has), and asks whether to stop the app's VPN if it is still up (the default keeps it);
 - asks `remove working folder? [y/N]`, and on yes closes the note window and removes the folder, unless the note has unsaved changes, any file in the box was made or changed since the archive was written, or the note's window did not close. A `warn` line says which, and the folder stays.
 
@@ -591,7 +625,7 @@ Unpacking refuses any entry that would land outside the box folder, and an archi
 | Setting | Default | Meaning |
 |---|---|---|
 | `home` | `~/pwn-broker` | Where `active/`, `wrapped/` and `tools.log` live |
-| `copy_to` | not set | A second folder every finished archive and export is also copied to |
+| `copy_to` | not set | A second folder every finished archive, report and export is also copied to |
 | `default_platform` | `htb` | Platform used when a box is created |
 | `terminal` | `x-terminal-emulator` | What opens the note window |
 | `check_updates` | `true` | Look for a newer release at launch |
@@ -600,5 +634,6 @@ Unpacking refuses any entry that would land outside the box folder, and an archi
 | `scan_full` | `-p- --min-rate 5000` | nmap's options for the first stage of `scan full` |
 | `scan_udp` | `-sU --top-ports 100` | nmap's options for `scan udp` |
 | `playbooks` | not set | Whether each new box gets the playbooks. Not set, the first new box asks, and the answer is kept in `/opt/pwn-broker/state.toml` |
+| `report` | not set | Whether each new box gets the report tool. Not set, the first new box asks, after the playbooks' question, and the answer is kept in `/opt/pwn-broker/state.toml` |
 
 Two environment variables are read as well. `PWN_BROKER_OPT` is the install folder, for the installer and the app alike (default `/opt/pwn-broker`). `PWN_BROKER_HOME` is where the boxes live when `home` is not set in `config.toml`.

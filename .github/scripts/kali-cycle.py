@@ -19,6 +19,7 @@ is where it comes from.
 import argparse
 import codecs
 import fcntl
+import hashlib
 import os
 import pty
 import re
@@ -65,6 +66,9 @@ TOOL_LINE = "hello-tool ran"
 PY_TOOL, PY_VERSION, PY_BUILD = "hello-py", "1.0.0", 1
 PY_LINE = "hello-py-py 1.0"
 RUNTIME, RUNTIME_VERSION, RUNTIME_BUILD = "python-3.13", "3.13.18", 1  # toolkit.make_runtime
+# pwn-shop's published report package, served from the folder index on the runtime above
+REPORT, REPORT_VERSION, REPORT_BUILD = "report", "0.1.0", 1
+REPORT_COMMAND = "pwn-report"
 TOOLS = OPT / "tools"
 TOOL_LOG = HOME / "pwn-broker" / "tools.log"  # paths.AppPaths.tool_log: home / "tools.log"
 INTERPRETER = "import sys; print(tuple(sys.version_info[:2])); print(sys.prefix); print(sys.base_prefix)"
@@ -648,6 +652,7 @@ class State:
         self.finished: Path | None = None
         # the upstream archive kali-cycle.sh downloaded and checked
         self.runtime_archive: Path | None = None
+        self.report_package: Path | None = None
         self.runtime_sha256 = ""
         # each test package's SHA-256 by name, as the index gives it
         self.sha256: dict[str, str] = {}
@@ -835,8 +840,9 @@ def prepare(s: State) -> None:
         examples=[PY_TOOL],
     )
     check(python_tool.requires == [RUNTIME], f"{PY_TOOL} requires {RUNTIME}", repr(python_tool))
-    s.sha256 = {e.name: e.sha256 for e in (entry, runtime, python_tool)}
-    toolkit.write_index(TOOL_INDEX, [entry, runtime, python_tool])
+    report = report_entry(s.report_package)
+    s.sha256 = {e.name: e.sha256 for e in (entry, runtime, python_tool, report)}
+    toolkit.write_index(TOOL_INDEX, [entry, runtime, python_tool, report])
     check((TOOL_INDEX / "index.toml").is_file(), f"a folder index in {TOOL_INDEX}")
     check(read_toml(TOOL_INDEX / "index.toml").get("schema") == 2, "the index is schema 2")
 
@@ -846,6 +852,23 @@ def prepare(s: State) -> None:
     lead = "" if not existing or existing.endswith("\n") else "\n"
     settings.write_text(f'{existing}{lead}tools_index = "{TOOL_INDEX}"\n', encoding="utf-8")
     EVIDENCE.write("config.toml", settings.read_text(encoding="utf-8"))
+
+
+def report_entry(package: Path | None):
+    """pwn-shop's report zip, as kali-cycle.sh downloaded and checked it, in the folder index with
+    the entry pwn-shop's own index gives it."""
+    from pwn_broker.filescan import sha256_file
+    from pwn_broker.toolindex import BuildEntry
+
+    check(package is not None and package.is_file(), f"the report package is at {package}")
+    name = f"{REPORT}-{REPORT_VERSION}-{REPORT_BUILD}.zip"
+    shutil.copyfile(package, TOOL_INDEX / name)
+    size, sha256 = (TOOL_INDEX / name).stat().st_size, sha256_file(TOOL_INDEX / name)
+    note(f"{REPORT} {REPORT_VERSION}-{REPORT_BUILD}: {size} bytes, sha256 {sha256}")
+    return BuildEntry(
+        name=REPORT, version=REPORT_VERSION, build=REPORT_BUILD, kind="kali", needs_root=False,
+        commands=[REPORT_COMMAND], file=name, url="", size=size, sha256=sha256, requires=[RUNTIME],
+    )  # fmt: skip
 
 
 def found_by_zsh(command: str) -> None:
@@ -943,15 +966,24 @@ def step_ping(s: State) -> None:
 def step_box_created(s: State) -> None:
     t = s.prompt
     t.wait(ok(f"box {BOX} created"), "the box created line")
-    # cli._playbooks_for_new_box: the first new box on a machine asks once; the index here has no playbooks
+    # cli._offers_for_new_box: the first new box on a machine asks once about each; the index here has no playbooks
     t.answer(confirm("install playbooks in this box and every new box?", True), "n", "the playbooks question")
     t.wait(whole_line(ok("saved: new boxes start without playbooks")), "the line that says the answer is saved")
     t.wait(
         whole_line(f"{DETAIL}for every new box: playbooks = true in {OPT / 'config.toml'}"),
         "the line that says how to change it",
     )
+    # then the report tool's: answered no here, so a later step installs it by hand
+    t.answer(confirm("install the report tool in this box and every new box?", True), "n", "the report tool's question")
+    t.wait(whole_line(ok("saved: new boxes start without the report tool")), "the line that says the report answer is saved")
+    t.wait(whole_line(f"{DETAIL}for this box only: tool install {REPORT}"), "the line that says how to install it in this box")
+    t.wait(
+        whole_line(f"{DETAIL}for every new box: report = true in {OPT / 'config.toml'}"),
+        "the line that says how to change the report answer",
+    )
     saved = read_toml(OPT / "state.toml")
     check(saved.get("new_box_playbooks") is False, f"{OPT / 'state.toml'} keeps the answer", repr(saved))
+    check(saved.get("new_box_report") is False, f"{OPT / 'state.toml'} keeps the report tool's answer", repr(saved))
     t.wait(PROMPT, "the prompt")
     found = one_note_window(s, "after the new box")
     s.window = (found.pid, found.ppid)
@@ -1309,12 +1341,51 @@ def step_python_tool(s: State) -> None:
     )
 
 
+REPORT_PACKAGE = f"{REPORT} {REPORT_VERSION}-{REPORT_BUILD}"
+REPORT_LINE = f"{REPORT_COMMAND} {REPORT_VERSION}"
+
+
+def step_report_tool(s: State) -> None:
+    t = s.prompt
+    s.logged = len(tool_log())
+    start = t.pos
+    t.type(f"tool install {REPORT}\r")
+    # the runtime is in place already, for hello-py
+    t.wait(ok(f"{REPORT} {REPORT_VERSION} installed"), "the report tool's installed line", timeout=300)
+    t.wait(f"{INDENT}run   {REPORT_COMMAND}   from any terminal", "the report tool's run line")
+    t.wait(PROMPT, "the prompt after tool install")
+    out = t.text()[start : t.pos]
+    check(not any(line.startswith(("warn  ", "fail  ")) for line in lines_of(out)), "tool install printed no warn or fail line", readable(out))
+    check(RUNTIME_INSTALLED.search(out) is None, f"{RUNTIME} was not installed again", readable(out))
+    tool_runs(f"{REPORT_COMMAND} --version", REPORT_LINE)
+    logged_since(s, s.logged, [("install", REPORT_PACKAGE)], f"{TOOL_LOG} has an install line for {REPORT}")
+
+
+def report_built(folder: Path) -> None:
+    """The report finish built: pwn-report's files, and its SHA256SUMS holds."""
+    names = sorted(p.name for p in folder.iterdir()) if folder.is_dir() else []
+    check({"report.md", "report.json", "report.toml", "SHA256SUMS"} <= set(names), f"{folder} holds the report", repr(names))
+    sums = (folder / "SHA256SUMS").read_text(encoding="utf-8").splitlines() if "SHA256SUMS" in names else []
+    rows = [line.split("  ", 1) for line in sums]
+    wrong = [
+        row for row in rows
+        if len(row) != 2 or hashlib.sha256((folder / row[1]).read_bytes()).hexdigest() != row[0]
+    ]  # fmt: skip
+    check(rows and not wrong, f"{folder}'s SHA256SUMS holds for its {len(rows)} files", repr(wrong or sums))
+    check(not list(WRAPPED.glob(f".{folder.name}.tmp-*")), f"no staging folder is left beside {folder}")
+
+
 # toolhooks.summary: the box's tools in the order they were installed, one per row with the
 # label on the first (toolhooks._one_per_row), then the runtimes freed; each row a line of its own
 TOOLS_SUMMARY = [
     whole_line(field_row("tools", f"{TOOL} {TOOL_VERSION}   (will be removed)", SUMMARY_LONGEST)),
     whole_line(field_row("", f"{PY_TOOL} {PY_VERSION}   (will be removed)", SUMMARY_LONGEST)),
+    whole_line(field_row("", f"{REPORT} {REPORT_VERSION}   (will be removed)", SUMMARY_LONGEST)),
 ]
+# lifecycle.finish_box: its own row after the archive's, before the hooks' rows
+REPORT_SUMMARY = whole_line(field_row("report", "will be built beside the archive", SUMMARY_LONGEST))
+# reportflow.build: a field of its own, then pwn-report's result as an ok line
+REPORT_BUILDING = whole_line(field_row("report", "building beside the archive", "report"))
 RUNTIMES_SUMMARY = whole_line(field_row("runtimes", f"{RUNTIME} {RUNTIME_VERSION}   (will be removed)", SUMMARY_LONGEST))
 # hostflow.summary
 HOSTS_SUMMARY = whole_line(field_row("hosts", "1 line to remove from /etc/hosts", SUMMARY_LONGEST))
@@ -1325,9 +1396,10 @@ WINDOW_LEFT = warn("the note window did not close; the folder was kept")
 
 
 def summary(t: Terminal, s: State | None = None) -> None:
-    """lifecycle.finish_box's summary, in its order: box, targets, files, archive, then the hooks' rows."""
+    """lifecycle.finish_box's summary, in its order: box, targets, files, archive, report, then the hooks' rows."""
     if s is not None:
         t.wait(whole_line(field_row("box", f"{BOX} ({PLATFORM}), started {s.day}", SUMMARY_LONGEST)), "the summary's box line")
+    t.wait(REPORT_SUMMARY, "the summary's report line")
     for n, row in enumerate(TOOLS_SUMMARY, 1):
         t.wait(row, f"the summary's tools row {n}")
     t.wait(RUNTIMES_SUMMARY, "the summary's runtimes line")
@@ -1336,6 +1408,7 @@ def summary(t: Terminal, s: State | None = None) -> None:
 FINISHED = [
     ("finish", f"{TOOL} {TOOL_VERSION}-{TOOL_BUILD}"),
     ("finish", PY_PACKAGE),
+    ("finish", REPORT_PACKAGE),
     ("finish", RUNTIME_PACKAGE),
 ]
 
@@ -1355,6 +1428,10 @@ def step_finish(s: State) -> None:
     summary(t, s)
     t.answer(confirm("finish this box?", False), "y", "the finish question")
     found = t.wait(re.compile(re.escape(ok("archive ")) + r"(\S+\.finished\.tar\.gz)"), "the archive line")
+    # reportflow.build, after the archive and before the undo steps take the report tool off
+    report = WRAPPED / f"{s.folder.name}.finished.report"
+    t.wait(REPORT_BUILDING, "the report building line")
+    t.wait(whole_line(ok(f"report {report}")), "the report line", timeout=120)
     # toolhooks.undo removes the runtime once no tool requires it, before kalihooks' lines
     t.wait(RUNTIME_REMOVED, "the runtime removed line")
     t.wait(ok("removed 1 line from /etc/hosts"), "the hosts lines removed")
@@ -1369,14 +1446,16 @@ def step_finish(s: State) -> None:
     check(WINDOW_LEFT not in out, "finish did not say the note window was left", readable(out))
     window_closed(s, "after finish")
 
-    check_hosts(s, s.hosts_before, "/etc/hosts is byte for byte what it was before step 3", "hosts.step17")
+    check_hosts(s, s.hosts_before, "/etc/hosts is byte for byte what it was before step 3", "hosts.step18")
     wait_until(lambda: not openvpns(), "no openvpn process is left")
     wait_until(lambda: run(["ip", "link", "show", "tun0"]).returncode != 0, "tun0 is gone")
     check(not (BIN / TOOL).exists(), f"{BIN / TOOL} is gone")
     check(not (BIN / PY_TOOL).exists(), f"{BIN / PY_TOOL} is gone")
+    check(not (BIN / REPORT_COMMAND).exists(), f"{BIN / REPORT_COMMAND} is gone")
     tools_left()
-    logged_since(s, s.logged, FINISHED, f"{TOOL_LOG} has a finish line for {TOOL}, {PY_TOOL} and {RUNTIME}")
+    logged_since(s, s.logged, FINISHED, f"{TOOL_LOG} has a finish line for {TOOL}, {PY_TOOL}, {REPORT} and {RUNTIME}")
     check(not s.folder.exists(), f"{s.folder} is gone")
+    report_built(report)
     archive = s.finished = Path(found[1])
     expected = WRAPPED / f"{s.folder.name}.finished.tar.gz"
     check(archive == expected and archive.is_file(), f"the finished archive is {expected}", str(archive))
@@ -1402,7 +1481,7 @@ def step_import(s: State) -> None:
         header=False,
     )
     t.answer(confirm("this box wants these lines in /etc/hosts. add them?", False), "y", "the import's /etc/hosts question")
-    t.wait(field_row("tools", f"{TOOL} {TOOL_VERSION}, {PY_TOOL} {PY_VERSION}", RESTORE_LONGEST), "the tools row")
+    t.wait(field_row("tools", f"{TOOL} {TOOL_VERSION}, {PY_TOOL} {PY_VERSION}, {REPORT} {REPORT_VERSION}", RESTORE_LONGEST), "the tools row")
     # toolhooks._restore asks first and installs in the box's order, a runtime before the tool
     # that requires it; lifecycle.import_box reports after its hooks; cli.start's
     # hostflow.on_open puts the line back, then opens the note: none is open since finish closed it
@@ -1410,6 +1489,7 @@ def step_import(s: State) -> None:
     t.wait(ok(f"{TOOL} {TOOL_VERSION} installed"), "the installed line")
     t.wait(RUNTIME_INSTALLED, "the runtime's installed line", timeout=300)
     t.wait(ok(f"{PY_TOOL} {PY_VERSION} installed"), f"{PY_TOOL}'s installed line", timeout=300)
+    t.wait(ok(f"{REPORT} {REPORT_VERSION} installed"), f"{REPORT}'s installed line", timeout=300)
     t.wait(ok(f"unpacked to {s.folder}"), "the unpacked line")
     t.wait(ok("1 targets"), "the targets line")
     t.wait(ok("/etc/hosts updated"), "the /etc/hosts updated line")
@@ -1425,7 +1505,7 @@ def step_import(s: State) -> None:
         s,
         s.hosts_before + hosts_line(s, [HOSTNAME, LATER]),
         "/etc/hosts has the box's line again",
-        "hosts.step18",
+        "hosts.step19",
     )
     resolves(LATER, s.ip)
     tool_runs()
@@ -1438,9 +1518,13 @@ def step_import(s: State) -> None:
     )
     logged_since(
         s, s.logged,
-        [("install", f"{TOOL} {TOOL_VERSION}-{TOOL_BUILD}"), ("install", RUNTIME_PACKAGE), ("install", PY_PACKAGE)],
-        f"{TOOL_LOG} has an install line for {TOOL}, then {RUNTIME}, then {PY_TOOL}",
-    )
+        [
+            ("install", f"{TOOL} {TOOL_VERSION}-{TOOL_BUILD}"), ("install", RUNTIME_PACKAGE),
+            ("install", PY_PACKAGE), ("install", REPORT_PACKAGE),
+        ],
+        f"{TOOL_LOG} has an install line for {TOOL}, then {RUNTIME}, then {PY_TOOL}, then {REPORT}",
+    )  # fmt: skip
+    tool_runs(f"{REPORT_COMMAND} --version", REPORT_LINE)
     t.type("quit\r")
     t.answer(confirm(f"export {BOX} before you go?", True), "n", "the export question")
     status = t.wait_exit("the prompt to end after quit")
@@ -1464,6 +1548,10 @@ def step_last_finish(s: State) -> None:
     t.answer(confirm("finish this box?", False), "y", "the finish question")
     t.answer(confirm("replace the existing archive?", False), "y", "the replace archive question")
     found = t.wait(re.compile(re.escape(ok("archive ")) + r"(\S+\.finished\.tar\.gz)"), "the archive line")
+    # the first finish's report is never replaced: this one goes beside it
+    first, report = (WRAPPED / f"{s.folder.name}.finished.{suffix}" for suffix in ("report", "report-2"))
+    t.wait(REPORT_BUILDING, "the report building line")
+    t.wait(whole_line(ok(f"report {report}")), "the second report's line", timeout=120)
     t.wait(RUNTIME_REMOVED, "the runtime removed line")
     t.wait(ok("removed 1 line from /etc/hosts"), "the hosts lines removed")
     t.answer(confirm("remove working folder?", False), "y", "the remove folder question")
@@ -1471,7 +1559,7 @@ def step_last_finish(s: State) -> None:
     status = t.wait_exit("the prompt to end after finish")
     check(status == 0, "pwn-broker ended with status 0", f"status {status}")
     out = t.text()[start:]
-    # kalihooks.vpn_question asks only while the app's VPN runs; none was started since step 17
+    # kalihooks.vpn_question asks only while the app's VPN runs; none was started since step 18
     check("stop it?" not in out, "finish asked no VPN question", readable(out))
     check(WINDOW_LEFT not in out, "finish did not say the note window was left", readable(out))
     window_closed(s, "after the last finish")
@@ -1479,12 +1567,15 @@ def step_last_finish(s: State) -> None:
     archive = Path(found[1])
     check(archive == s.finished and archive.is_file(), f"the replaced finished archive is {s.finished}", str(archive))
     verify(archive)
-    check_hosts(s, s.hosts_before, "/etc/hosts matches the original bytes once more", "hosts.step19")
+    check_hosts(s, s.hosts_before, "/etc/hosts matches the original bytes once more", "hosts.step20")
     tools_left()
     check(not (BIN / TOOL).exists(), f"{BIN / TOOL} is gone")
     check(not (BIN / PY_TOOL).exists(), f"{BIN / PY_TOOL} is gone")
-    logged_since(s, s.logged, FINISHED, f"{TOOL_LOG} has a finish line for {TOOL}, {PY_TOOL} and {RUNTIME} again")
+    check(not (BIN / REPORT_COMMAND).exists(), f"{BIN / REPORT_COMMAND} is gone")
+    logged_since(s, s.logged, FINISHED, f"{TOOL_LOG} has a finish line for {TOOL}, {PY_TOOL}, {REPORT} and {RUNTIME} again")
     check(not s.folder.exists(), f"{s.folder} is gone")
+    report_built(report)
+    report_built(first)
 
     # finish closed each note window it removed the folder of: no vim with the app's vimrc is left
     windows = [
@@ -1516,9 +1607,10 @@ STEPS = [
     (14, "vpn survives the prompt's terminal", step_vpn_daemon),
     (15, "a tool", step_tool),
     (16, "a Python tool on a real runtime", step_python_tool),
-    (17, "finish", step_finish),
-    (18, "import", step_import),
-    (19, "leftovers at the next launch", step_last_finish),
+    (17, "the report tool, pwn-shop's own package", step_report_tool),
+    (18, "finish, with a report", step_finish),
+    (19, "import", step_import),
+    (20, "leftovers at the next launch, a second report", step_last_finish),
 ]
 
 
@@ -1526,11 +1618,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--evidence", required=True, type=Path)
     parser.add_argument("--runtime-archive", required=True, type=Path, help="the checked upstream Python build")
+    parser.add_argument("--report-package", required=True, type=Path, help="pwn-shop's report package, checked")
     args = parser.parse_args()
     global EVIDENCE
     EVIDENCE = Evidence(args.evidence)
     state = State()
     state.runtime_archive = args.runtime_archive
+    state.report_package = args.report_package
     status = 0
     try:
         for number, title, step in STEPS:

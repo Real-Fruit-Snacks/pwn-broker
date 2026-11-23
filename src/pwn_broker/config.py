@@ -28,16 +28,19 @@ class Settings:
     scan_quick: str | None = None
     scan_full: str | None = None
     scan_udp: str | None = None
-    # whether a new box gets the playbooks; None leaves it to the answer saved in state.toml
+    # whether a new box gets the playbooks, and the report tool; None leaves it to the answer
+    # saved in state.toml
     playbooks: bool | None = None
+    report: bool | None = None
 
 
 @dataclass(frozen=True)
 class State:
     last_platform: str | None = None
     last_vpn_file: str | None = None
-    # the answer to the question the first new box asks; None until it is answered
+    # the answers to the questions the first new box asks; None until each is answered
     new_box_playbooks: bool | None = None
+    new_box_report: bool | None = None
 
 
 def _expand(text: str, home_dir: Path) -> Path:
@@ -97,6 +100,7 @@ def load(env: Mapping[str, str], home_dir: Path) -> tuple[AppPaths, Settings]:
         scan_full=_typed(data, "scan_full", str, config_file) or None,
         scan_udp=_typed(data, "scan_udp", str, config_file) or None,
         playbooks=_typed(data, "playbooks", bool, config_file),
+        report=_typed(data, "report", bool, config_file),
     )
 
     if settings.home is not None:
@@ -116,10 +120,12 @@ def load_state(state_file: Path) -> State:
     last = data.get("last_platform")
     vpn = data.get("last_vpn_file")
     playbooks = data.get("new_box_playbooks")
+    report = data.get("new_box_report")
     return State(
         last_platform=last if isinstance(last, str) else None,
         last_vpn_file=vpn if isinstance(vpn, str) else None,
         new_box_playbooks=playbooks if isinstance(playbooks, bool) else None,
+        new_box_report=report if isinstance(report, bool) else None,
     )
 
 
@@ -131,6 +137,8 @@ def save_state(state_file: Path, state: State) -> None:
         data["last_vpn_file"] = state.last_vpn_file
     if state.new_box_playbooks is not None:
         data["new_box_playbooks"] = state.new_box_playbooks
+    if state.new_box_report is not None:
+        data["new_box_report"] = state.new_box_report
     write_toml(state_file, data)
 
 

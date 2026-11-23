@@ -21,9 +21,8 @@ from pwn_broker.store import StoreError, load_box
 from pwn_broker.toolpkg import ToolError
 
 NO_ARCHIVE = "give the path of an exported box"
-PLAYBOOKS = "playbooks"
 PLAYBOOKS_QUESTION = "install playbooks in this box and every new box?"
-PLAYBOOKS_AGAIN = "try again with: tool install playbooks"
+REPORT_QUESTION = "install the report tool in this box and every new box?"
 # what a failed install raises; anything else is a bug, reported the same way
 _INSTALL_ERRORS = (ToolError, BoxError, StoreError, ValueError, OSError)
 SUBCOMMANDS = ("new", "import", "resume")
@@ -51,7 +50,7 @@ class Env:
     is_root: Callable[[], bool] = privilege.is_root
     run_privileged: Callable = privilege.run_privileged
     tunnel: Callable[[], vpn.Tunnel | None] = vpn.tunnel
-    # new_box made the box this launch opens, so it may get the playbooks once it is open
+    # new_box made the box this launch opens, so it may get the offered packages once it is open
     made_box: bool = False
 
 
@@ -130,56 +129,81 @@ def new_box(env: Env) -> Session:
     return session
 
 
-def _playbooks_for_new_box(env: Env, session: Session) -> None:
+@dataclass(frozen=True)
+class Offer:
+    """A package the first new box offers: asked once, and what the answer means."""
+
+    package: str  # its name in the index, for tool install
+    setting: str  # its key in config.toml and Settings
+    answer: str  # its key in state.toml and State
+    question: str
+    called: str  # what it is called in a line of its own: "playbooks skipped"
+    gets: str  # "saved: new boxes get the playbooks"
+    without: str  # "saved: new boxes start without playbooks"
+
+
+# asked in this order, each after the one before is answered and installed
+OFFERS = (
+    Offer("playbooks", "playbooks", "new_box_playbooks", PLAYBOOKS_QUESTION, "playbooks", "the playbooks", "playbooks"),
+    Offer("report", "report", "new_box_report", REPORT_QUESTION, "report tool", "the report tool", "the report tool"),
+)
+
+
+def _offers_for_new_box(env: Env, session: Session) -> None:
+    for offer in OFFERS:
+        _offer_for_new_box(env, session, offer)
+
+
+def _offer_for_new_box(env: Env, session: Session, offer: Offer) -> None:
     """The setting decides, else the answer saved for this machine, else the question,
     asked once: at the first new box after install or upgrade."""
     console = env.console
-    wanted = env.settings.playbooks
+    wanted = getattr(env.settings, offer.setting)
     if wanted is None:
-        wanted = config.load_state(env.paths.state_file).new_box_playbooks
+        wanted = getattr(config.load_state(env.paths.state_file), offer.answer)
     if wanted is None:
         try:
-            wanted = console.confirm(PLAYBOOKS_QUESTION, default=True)
+            wanted = console.confirm(offer.question, default=True)
         except Cancelled:
-            console.info("playbooks skipped; the next new box asks again")
+            console.info(f"{offer.called} skipped; the next new box asks again")
             return
-        _keep_playbooks_answer(env, wanted)
+        _keep_answer(env, offer, wanted)
     if wanted:
-        _install_playbooks(session)
+        _install_offered(session, offer)
 
 
-def _keep_playbooks_answer(env: Env, wanted: bool) -> None:
+def _keep_answer(env: Env, offer: Offer, wanted: bool) -> None:
     """Save the answer, then say what it means and how to change it, before any install."""
     console, path = env.console, env.paths.state_file
     try:
-        config.save_state(path, replace(config.load_state(path), new_box_playbooks=wanted))
+        config.save_state(path, replace(config.load_state(path), **{offer.answer: wanted}))
     except OSError as exc:
         console.warn(f"the answer could not be saved: {exc}")
         console.detail("the next new box asks again")
         return
     if wanted:
-        console.ok("saved: new boxes get the playbooks")
-        console.detail(f"to change it: playbooks = false in {env.paths.config_file}")
+        console.ok(f"saved: new boxes get {offer.gets}")
+        console.detail(f"to change it: {offer.setting} = false in {env.paths.config_file}")
     else:
-        console.ok("saved: new boxes start without playbooks")
-        console.detail("for this box only: tool install playbooks")
-        console.detail(f"for every new box: playbooks = true in {env.paths.config_file}")
+        console.ok(f"saved: new boxes start without {offer.without}")
+        console.detail(f"for this box only: tool install {offer.package}")
+        console.detail(f"for every new box: {offer.setting} = true in {env.paths.config_file}")
 
 
-def _install_playbooks(session: Session) -> None:
+def _install_offered(session: Session, offer: Offer) -> None:
     console = session.console
     try:
-        cmd_tool.tool_install(session, [PLAYBOOKS])
+        cmd_tool.tool_install(session, [offer.package])
         return
     except Cancelled:
         reason = "cancelled"
     except _INSTALL_ERRORS as exc:
         reason = str(exc)
     except Exception as exc:
-        # the playbooks are extra: a bug here must not keep the new box from opening
+        # the offered packages are extra: a bug here must not keep the new box from opening
         reason = f"unexpected error: {type(exc).__name__}: {exc}"
-    console.warn(f"playbooks not installed: {reason}")
-    console.detail(PLAYBOOKS_AGAIN)
+    console.warn(f"{offer.called} not installed: {reason}")
+    console.detail(f"try again with: tool install {offer.package}")
 
 
 def _date(value: datetime) -> str:
@@ -422,7 +446,7 @@ def start(env: Env, argv: list[str]) -> int:
         # once the box holds the open lock, so no other launch takes the install for leftovers,
         # and before the note window, so its vim has them from the start
         if env.made_box:
-            _playbooks_for_new_box(env, session)
+            _offers_for_new_box(env, session)
         if notewindow.find_note(env.paths, session.box) is not None:
             console.ok("the note is already open")
         elif not notewindow.open_note(env.paths, env.settings, session.box, env.environ):

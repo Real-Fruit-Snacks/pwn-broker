@@ -183,3 +183,32 @@ def test_state_ignores_a_playbooks_answer_of_the_wrong_type(tmp_path):
     f = tmp_path / "state.toml"
     f.write_text('new_box_playbooks = "yes"\nlast_platform = "htb"\n')
     assert load_state(f) == State("htb")
+
+
+def test_report_setting_is_unset_true_or_false(tmp_path):
+    assert Settings().report is None
+    assert _settings_for(tmp_path, "").report is None
+    assert _settings_for(tmp_path, "report = true\n").report is True
+    assert _settings_for(tmp_path, "report = false\n").report is False
+
+
+def test_report_setting_wrong_type(tmp_path):
+    with pytest.raises(ConfigError, match="config.toml: report must be a bool"):
+        _settings_for(tmp_path, 'report = "yes"\n')
+
+
+def test_state_round_trip_with_the_report_answer(tmp_path):
+    f = tmp_path / "state.toml"
+    for state in (
+        State("thm", "lab.ovpn", True, False),
+        State("htb", new_box_report=True),
+        State(None, None, None, False),
+    ):
+        save_state(f, state)
+        assert load_state(f) == state
+
+
+def test_state_ignores_a_report_answer_of_the_wrong_type(tmp_path):
+    f = tmp_path / "state.toml"
+    f.write_text('new_box_report = "yes"\nlast_platform = "htb"\n')
+    assert load_state(f) == State("htb")

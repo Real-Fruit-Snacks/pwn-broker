@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from pwn_broker import recstate
+from pwn_broker import recstate, reportflow
 from pwn_broker.archive import (
     ArchiveError,
     archive_path,
@@ -254,6 +254,7 @@ def finish_box(
         ("targets", str(len(session.targets))),
         ("files", str(len(files))),
         ("archive", str(dest)),
+        *reportflow.summary_rows(session),
     ]
     for hook in SUMMARY_HOOKS:
         rows.extend(hook(session))
@@ -298,6 +299,16 @@ def finish_box(
     if copy is not None:
         console.ok(f"copy {copy}")
     _report_left_out(console, left_out)
+    # after the archive and its copy, before the undo steps take the report tool off
+    try:
+        if reportflow.wanted(session):
+            reportflow.build(session, dest)
+    except KeyboardInterrupt:
+        # the report is extra: a stop in it, as in its copy, stops the report and not the finish
+        console.warn("the report step was interrupted")
+    except Exception as exc:
+        # the report is extra: nothing in it fails the finish
+        console.warn(f"the report was not built: {exc}")
     undo_failed = False
     for hook in UNDO_HOOKS:
         try:

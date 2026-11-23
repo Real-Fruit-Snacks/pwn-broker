@@ -45,6 +45,7 @@
             <li><a class="t-broker" href="./" aria-current="page">Broker<small>the box</small></a></li>
             <li><a class="t-shop" href="https://real-fruit-snacks.github.io/pwn-shop/">Shop<small>its tools</small></a></li>
             <li><a class="t-books" href="https://real-fruit-snacks.github.io/pwn-playbooks/">Playbooks<small>its notes</small></a></li>
+            <li><a class="t-report" href="https://real-fruit-snacks.github.io/pwn-report/">Report<small>its evidence</small></a></li>
         </ul>
     </nav>
 </header>
@@ -122,6 +123,7 @@
 <span class="ln o">  targets  1</span>
 <span class="ln o">  files    14</span>
 <span class="ln o">  archive  /home/kali/pwn-broker/wrapped/2026-11-14_htb_forest.finished.tar.gz</span>
+<span class="ln o">  report   none: tool install report adds the tool that builds one</span>
 <span class="ln o">  hosts    1 line to remove from /etc/hosts</span>
 
 <span class="ln"><span class="q">  finish this box? [y/N] &gt; </span>y</span>
@@ -177,6 +179,8 @@
                 <p class="why">A package from <a href="https://real-fruit-snacks.github.io/pwn-shop/">pwn-shop</a>'s index, with its size and SHA-256 checked and no install script: NetExec, Impacket, Certipy, Rubeus and the BloodHound collectors, PEASS-ng and pspy, the potatoes, ligolo-ng and chisel, and the rest of <a href="https://real-fruit-snacks.github.io/pwn-shop/#packages">its list</a>. The Python ones bring their own Python as a shared runtime that puts nothing on PATH. <code>finish</code> takes them off unless another unfinished box still uses them, and <code>tool history</code> lists every tool the box has had.</p></li>
             <li><span class="ch">Playbooks in the note</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>:Pb</code></span>
                 <p class="why"><code>tool install playbooks</code> gets <a href="https://real-fruit-snacks.github.io/pwn-playbooks/">pwn-playbooks</a>, short notes for one job each. <code>:Pb &lt;name&gt;</code> in the note window reads one in below the cursor, Tab completing the name from any part of it, and its few lines of vim fill in its <code>&lt;Placeholder&gt;</code> values in that playbook and nowhere else. At the prompt, <code>playbook list</code> lists them by folder and title and <code>playbook show &lt;name&gt;</code> prints one. The first new box on a machine asks whether new boxes should get them, and keeps the answer.</p></li>
+            <li><span class="ch">A report at finish</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>tool install report</code></span>
+                <p class="why">With <a href="https://real-fruit-snacks.github.io/pwn-report/">pwn-report</a> in the box, <code>finish</code> builds a private report beside the finished archive: <code>report.md</code> with the box, its targets and flags, a timeline from the archive's own records and an index of the evidence, each file with its SHA-256, and a copy of the scans, screenshots and exploits, linked from it. A report that fails is a warning and <code>finish</code> goes on; one is never replaced. New boxes can get the tool after one question, as they get the playbooks.</p></li>
             <li><span class="ch">Recording a window</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>record</code></span>
                 <p class="why">Typed in any terminal while a box is open, it records that window under a pinned asciinema 3.2.1 into the target's <code>recordings/</code>, with <code>[rec dc01]</code> in front of the prompt. Beside each <code>.cast</code> goes a <code>.txt</code> with the time on every line, for grep; <code>replay</code> plays them. Keystrokes are not recorded, but a password typed on a command line is.</p></li>
         </ul>
