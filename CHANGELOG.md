@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.12 (unreleased)
+
+With the `report` tool in the box, `finish` builds a private report from the finished archive and puts it beside it, `<box folder>.finished.report`, after the archive is written and before the tools come off. `tool install report` gets [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report) from pwn-shop. `finish`'s summary says whether a report will be built. A box finished again after it is reopened or imported puts its report beside the first, as `.report-2`; one is never replaced. With `copy_to` the report is copied there too. A report that fails, or takes longer than 600 seconds, is a `warn` line, and `finish` goes on.
+
+After the playbooks' question, the first new box on a machine asks `install the report tool in this box and every new box? [Y/n]`, with the same `saved:` and detail lines worded for it, and keeps the answer in `state.toml` as `new_box_report`; `report = true` or `false` in `config.toml` decides instead. The playbooks' question is unchanged.
+
 ## v0.1.11
 
 The playbooks question and the lines after it read more plainly. It now asks `install playbooks in this box and every new box? [Y/n]`, and the answer gets an `ok` line, `saved: new boxes get the playbooks` or `saved: new boxes start without playbooks`, with what to type to change it under it: the `config.toml` setting, and after a no, `tool install playbooks` for this box alone. A failed install ends `try again with: tool install playbooks`. Installing the playbooks, by `tool install playbooks` or in a new box, now also prints `list  playbook list   at the prompt` under the `read` line.

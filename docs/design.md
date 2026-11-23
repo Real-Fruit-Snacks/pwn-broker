@@ -103,7 +103,7 @@ Phases 1 and 3 are built. Phase 2 is built last, is specified in full in section
   vim/vimrc                      loaded with vim -u
   vim/nightshift.vim             Nightshift colours for vim
   run/                           which box is open and its lock, running tools, recording windows, the running VPN
-  state.toml                     last-used values and the answer about new boxes' playbooks, rebuilt when missing
+  state.toml                     last-used values and the answers about new boxes' playbooks and report tool, rebuilt when missing
   tools/<name>/<version>/        phase 3
   upload/<name>/                 phase 3
   cache/                         phase 3: downloaded zips and the tool index
@@ -1743,6 +1743,18 @@ Added in 0.1.10, because nearly every box wants the playbooks and `tool install 
 - `placeholders.toml`'s full list beyond the names above, and its format.
 - How `:Pb`'s list is laid out on screen, within the note window's existing popup style.
 - How `pwn-shop`'s whole-archive source refuses links and entries that would escape `files/`, matching section 8.5's rules.
+
+### 8.15 The report at finish
+
+Added in 0.1.12. [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report) turns a finished or exported archive into a private report folder; pwn-shop packages it as `report`, and `tool install report` puts its `pwn-report` command on the box like any tool.
+
+- **Built by `finish`, from the finished archive.** After the archive is written and copied, and before the undo steps, which take the report tool off with the rest. So the report needs no step of its own, and always matches the final archive.
+- **Run, never imported.** `/opt/pwn-broker/bin/pwn-report build <archive> -o <folder>`, with no shell, the environment other tool runs get, the archive's folder as its working folder, and 600 seconds. pwn-broker reads its one line: `ok    report <folder>` and status 0, or `fail  <reason>` and status 1. No pwn-report code runs in pwn-broker's process, so its Python and its version are its own.
+- **Only when the box has it.** The box's current tools include `report` and its command is in `/opt/pwn-broker/bin`. `finish`'s summary says which, before the archive is made: `report  will be built beside the archive`, or `report  none: tool install report adds the tool that builds one`.
+- **Beside the archive, never replacing one.** `<archive minus .tar.gz>.report`, or the first free `.report-2`, `.report-3`, ... for a box finished again after it is reopened or imported. With `copy_to`, the folder is copied there through a `.part` folder renamed into place, as the archive is.
+- **A report never fails, hangs or undoes `finish`.** A `fail` line, a status with no line, a folder said built but not there, a command that cannot run and a bug in this code are each a `warn` line, `the report was not built: <why>`, and `finish` goes on to its undo steps; the archive is not touched. Past 600 seconds the run gets SIGTERM, which pwn-report answers by removing its staging folder, then SIGKILL after 5 seconds, and any `.<report>.tmp-*` folder left beside the archive is removed. Ctrl-C while it runs stops the report the same way, not the finish.
+- **New boxes**, as for the playbooks: the 0.1.10 question is now one per offered package, playbooks then report, each asked, saved and installed in turn, with its own setting (`report = true` or `false`) and saved answer (`new_box_report` in `state.toml`). The playbooks' question and lines are unchanged. For the report tool: `install the report tool in this box and every new box? [Y/n]`, then `saved: new boxes get the report tool` or `saved: new boxes start without the report tool`, with the same detail lines worded for it. An index without a `report` package is a `warn` line, `report tool not installed: <why>`, as a failed playbooks install is.
+- **Not at `export`, and no `report` command at the prompt.** Both can come later; the report is for the box as finished.
 
 ## 9. What finish puts back
 
