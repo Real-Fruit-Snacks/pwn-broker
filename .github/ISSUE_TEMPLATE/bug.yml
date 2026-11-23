@@ -7,7 +7,7 @@ body:
     attributes:
       label: Versions
       description: Kali, Python (`python3 --version`), pwn-broker (`pwn-broker --version`)
-      placeholder: Kali 2025.4, Python 3.13.5, pwn-broker 0.1.10
+      placeholder: Kali 2025.4, Python 3.13.5, pwn-broker 0.1.11
     validations:
       required: true
   - type: dropdown

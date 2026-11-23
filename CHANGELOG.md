@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.1.11 (unreleased)
+## v0.1.11
 
 The playbooks question and the lines after it read more plainly. It now asks `install playbooks in this box and every new box? [Y/n]`, and the answer gets an `ok` line, `saved: new boxes get the playbooks` or `saved: new boxes start without playbooks`, with what to type to change it under it: the `config.toml` setting, and after a no, `tool install playbooks` for this box alone. A failed install ends `try again with: tool install playbooks`. Installing the playbooks, by `tool install playbooks` or in a new box, now also prints `list  playbook list   at the prompt` under the `read` line.
 
