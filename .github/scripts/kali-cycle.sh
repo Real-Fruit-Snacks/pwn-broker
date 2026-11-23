@@ -5,8 +5,9 @@
 #
 #   kali-cycle.sh prepare   with the network on: what a Kali desktop already has, Kali's zsh
 #                           settings for root, a copy of the checkout, a virtual environment on
-#                           Kali's own Python for the unit suite, and the pinned Python build
-#                           that the cycle's runtime package carries, checked
+#                           Kali's own Python for the unit suite, the pinned Python build that
+#                           the cycle's runtime package carries, and pwn-shop's published report
+#                           package, each checked
 #   kali-cycle.sh install   with the network off: shows that it is off, then installs the release
 #                           file with the real installer and checks what it installed
 #   kali-cycle.sh cycle     with the network on again: a virtual display, the unit suite with the
@@ -35,6 +36,11 @@ RUNTIME_URL="https://github.com/astral-sh/python-build-standalone/releases/downl
 RUNTIME_SIZE=35596130
 RUNTIME_SHA256=f2d2199eb25880e07863b391cf7124e7ffa1338b0d65600dfcec117c4223a7fb
 RUNTIME_ARCHIVE="$WORK/downloads/python.tar.gz"
+# pwn-shop's report package as published, with the size and SHA-256 its index gives it
+REPORT_URL="https://github.com/Real-Fruit-Snacks/pwn-shop/releases/download/report-v0.1.0-1/report-0.1.0-1.zip"
+REPORT_SIZE=33016
+REPORT_SHA256=2b74b0c40db80918410458c3c17c20964266872ad45c5da26db97112a90eb9fc
+REPORT_PACKAGE="$WORK/downloads/report-0.1.0-1.zip"
 
 export HOME=/root
 export DEBIAN_FRONTEND=noninteractive
@@ -136,10 +142,19 @@ prepare_kali() {
     [ "$size" = "$RUNTIME_SIZE" ] || stop "the Python build is $size bytes, not $RUNTIME_SIZE"
     echo "$RUNTIME_SHA256  $RUNTIME_ARCHIVE" | sha256sum -c - || stop "the Python build's SHA-256 is not $RUNTIME_SHA256"
     echo "$RUNTIME_ARCHIVE: $size bytes, SHA-256 as pinned"
+
+    say "5. pwn-shop's report package"
+    rm -f "$REPORT_PACKAGE"
+    echo "$REPORT_URL"
+    curl -fsSL --retry 3 -o "$REPORT_PACKAGE" "$REPORT_URL" || stop "the report package could not be downloaded"
+    size="$(wc -c <"$REPORT_PACKAGE" | tr -d ' ')"
+    [ "$size" = "$REPORT_SIZE" ] || stop "the report package is $size bytes, not $REPORT_SIZE"
+    echo "$REPORT_SHA256  $REPORT_PACKAGE" | sha256sum -c - || stop "the report package's SHA-256 is not $REPORT_SHA256"
+    echo "$REPORT_PACKAGE: $size bytes, SHA-256 as pinned"
 }
 
 network_off() {
-    say "5. the network is off"
+    say "6. the network is off"
     interfaces="$(ls /sys/class/net)"
     {
         echo "\$ ls /sys/class/net"
@@ -177,7 +192,7 @@ install_release() {
     [ -d "$CHECKOUT" ] || stop "$CHECKOUT is missing; run prepare first"
     network_off
 
-    say "6. the installer, from the release file"
+    say "7. the installer, from the release file"
     set -- /release/pwn-broker-*-linux-x86_64.tar.gz
     if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
         ls -la /release
@@ -210,7 +225,7 @@ install_release() {
     fi
     echo "/root/.zshrc is /etc/skel/.zshrc plus: $path_line"
 
-    say "7. the app's Python and Kali's"
+    say "8. the app's Python and Kali's"
     version_code='import platform, sys; print(platform.python_version(), sys.executable)'
     app_python="$("$OPT/app/bin/python" -I -c "$version_code")" || stop "$OPT/app/bin/python does not run"
     kali_python="$(python3 -I -c "$version_code")" || stop "Kali's python3 does not run"
@@ -236,7 +251,7 @@ run_cycle() {
     export SHELL=/usr/bin/zsh
     [ -x "$OPT/app/bin/python" ] || stop "$OPT/app/bin/python is missing; run install first"
 
-    say "8. a virtual display"
+    say "9. a virtual display"
     Xvfb :99 -screen 0 1280x800x24 -nolisten tcp >"$EVIDENCE/xvfb.txt" 2>&1 &
     export DISPLAY=:99
     tries=0
@@ -253,11 +268,11 @@ run_cycle() {
     echo "x-terminal-emulator is $terminal, which is $(readlink -f "$terminal")"
     update-alternatives --display x-terminal-emulator
 
-    say "9. /etc/hosts as it was"
+    say "10. /etc/hosts as it was"
     cp /etc/hosts "$EVIDENCE/hosts.before" || stop "cannot copy /etc/hosts"
     cat /etc/hosts
 
-    say "10. the unit suite in Kali as root"
+    say "11. the unit suite in Kali as root"
     venv_status="$(cat "$SUITE_VENV_STATUS" 2>/dev/null)" || venv_status=not-prepared
     if [ "$venv_status" = ready ]; then
         # DISPLAY is left out, as in the other jobs: no test may open a real window
@@ -275,9 +290,9 @@ run_cycle() {
     fi
     echo "unit suite: $SUITE_STATUS"
 
-    say "11. the cycle"
+    say "12. the cycle"
     "$OPT/app/bin/python" "$CHECKOUT/.github/scripts/kali-cycle.py" --evidence "$EVIDENCE" \
-        --runtime-archive "$RUNTIME_ARCHIVE"
+        --runtime-archive "$RUNTIME_ARCHIVE" --report-package "$REPORT_PACKAGE"
     CYCLE_STATUS=$?
 
     say "result"
