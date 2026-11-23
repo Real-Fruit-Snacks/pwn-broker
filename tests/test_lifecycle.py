@@ -95,6 +95,7 @@ def test_finish_shows_summary_before_asking(session):
         ("field", "targets  1"),
         ("field", f"files  {len(load_files(session.box))}"),
         ("field", f"archive  {archive}"),
+        ("field", "report  none: tool install report adds the tool that builds one"),
     ]
 
 
@@ -624,9 +625,9 @@ def test_summary_hook_lines_follow_the_existing_ones_before_the_question(session
     console.confirm = lambda q, default=False: shown.extend(console.events) or original(q, default)
     finish_box(session, **SAVED)
     # one list, so the hooks' labels line up with the summary's own
-    assert [k for k, _ in shown] == ["field"] * 6
+    assert [k for k, _ in shown] == ["field"] * 7
     assert [t for _, t in shown][-2:] == ["extra  one", "  two"]
-    assert shown[-3][1].startswith("archive  ")
+    assert shown[-4][1].startswith("archive  ") and shown[-3][1].startswith("report  ")
 
 
 def test_pre_pack_hooks_run_after_ownership_and_before_refresh(session, monkeypatch):
@@ -1188,3 +1189,77 @@ def test_an_imported_box_whose_lines_are_declined_opens_without_them(session, tm
     assert box is not None
     assert console.asked == ["this box wants these lines in /etc/hosts. add them?"]
     assert load_box(box.path).hosts == []
+
+
+# ---- the report at finish
+
+
+def _report_stand_in(session, tmp_path, monkeypatch, body):
+    from pwn_broker import reportflow
+    from pwn_broker.model import ToolRecord
+
+    session.box.tools.append(ToolRecord("report", "0.1.0", 1, "ab" * 32, NOW))
+    session.paths.bin.mkdir(parents=True, exist_ok=True)
+    (session.paths.bin / "pwn-report").write_text("")
+    script = tmp_path / "pwn-report-stand-in.py"
+    script.write_text(body, encoding="utf-8")
+    monkeypatch.setattr(reportflow, "_launcher", lambda s: [sys.executable, str(script)])
+
+
+_BUILDS = "import pathlib, sys\npathlib.Path(sys.argv[4]).mkdir()\nprint('ok    report ' + sys.argv[4])\n"
+
+
+def test_finish_builds_the_report_after_the_archive_and_before_the_tools_come_off(session, tmp_path, monkeypatch):
+    _report_stand_in(session, tmp_path, monkeypatch, _BUILDS)
+    monkeypatch.setattr(lifecycle, "UNDO_HOOKS", [lambda s: s.console.info("tools removed")])
+    answers(session, "y")
+    dest = finish_box(session, **SAVED)
+    folder = dest.with_name("2026-11-14_htb_forest.finished.report")
+    events = [event for event in session.console.events if event[0] in ("ok", "field", "info", "warn")]
+    assert ("field", "report  will be built beside the archive") in events
+    after = events[events.index(("ok", f"archive {dest}")) + 1 :]
+    assert after[:3] == [
+        ("field", "report  building beside the archive"),
+        ("ok", f"report {folder}"),
+        ("info", "tools removed"),
+    ]
+    assert folder.is_dir() and load_box(session.box.path).status == "finished"
+
+
+def test_finish_without_the_report_tool_builds_none(session, monkeypatch):
+    from pwn_broker import reportflow
+
+    monkeypatch.setattr(reportflow, "build", lambda *a, **k: pytest.fail("no report tool, no report"))
+    answers(session, "y")
+    dest = finish_box(session, **SAVED)
+    assert dest is not None
+    assert ("field", "report  none: tool install report adds the tool that builds one") in session.console.lines
+    assert not any(text.startswith("report  building") for _, text in session.console.lines)
+
+
+def test_a_report_that_fails_never_fails_finish(session, tmp_path, monkeypatch):
+    _report_stand_in(session, tmp_path, monkeypatch, "import sys\nsys.stderr.write('fail  no good\\n')\nsys.exit(1)\n")
+    undone = []
+    monkeypatch.setattr(lifecycle, "UNDO_HOOKS", [undone.append])
+    answers(session, "y")
+    dest = finish_box(session, **SAVED)
+    assert dest is not None and dest.exists() and undone == [session]
+    assert ("warn", "the report was not built: no good") in session.console.lines
+    assert load_box(session.box.path).status == "finished"
+
+
+def test_an_error_inside_the_report_step_never_fails_finish(session, tmp_path, monkeypatch):
+    from pwn_broker import reportflow
+
+    _report_stand_in(session, tmp_path, monkeypatch, _BUILDS)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("something nobody planned for")
+
+    monkeypatch.setattr(reportflow, "build", broken)
+    undone = []
+    monkeypatch.setattr(lifecycle, "UNDO_HOOKS", [undone.append])
+    answers(session, "y")
+    dest = finish_box(session, **SAVED)
+    assert dest is not None and undone == [session]
+    assert ("warn", "the report was not built: something nobody planned for") in session.console.lines
