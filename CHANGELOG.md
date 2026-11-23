@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.1.10 (unreleased)
+## v0.1.10
 
 The first `pwn-broker new` on a machine asks `install playbooks in new boxes? [Y/n]` once the box is made, and keeps the answer in `/opt/pwn-broker/state.toml`, so it is asked once. With yes, that box and every later new box get the playbooks before the note window opens, as `tool install playbooks` installs them. An install that fails, with no network for instance, is a `warn` line, and the box opens all the same. `playbooks = true` or `false` in `config.toml` decides instead, and then nothing is asked. A box that is resumed, reopened or imported is never asked: it already offers the tools it had.
 

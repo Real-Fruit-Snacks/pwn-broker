@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pwn-broker"
-version = "0.1.9"
+version = "0.1.10"
 description = "Keeps a box's targets, notes, creds and tools in order"
 readme = "README.md"
 license = { text = "MIT" }
