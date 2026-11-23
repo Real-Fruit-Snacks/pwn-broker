@@ -32,3 +32,5 @@ jobs:
           fail: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - if: always()
+        run: grep -n -i -E "guide\.md|tested\.md" lychee/out.md || cat lychee/out.md
