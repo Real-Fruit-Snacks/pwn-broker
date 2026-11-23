@@ -1263,3 +1263,49 @@ def test_an_error_inside_the_report_step_never_fails_finish(session, tmp_path, m
     dest = finish_box(session, **SAVED)
     assert dest is not None and undone == [session]
     assert ("warn", "the report was not built: something nobody planned for") in session.console.lines
+
+
+def test_a_stop_while_the_report_is_copied_never_skips_the_undo_steps(session, tmp_path, monkeypatch):
+    # Ctrl-C while the report is copied to copy_to, a slow share say: the copy goes, the finish goes on
+    from pwn_broker import reportflow
+
+    _report_stand_in(session, tmp_path, monkeypatch, _BUILDS)
+    out = tmp_path / "copies"
+    out.mkdir()
+    session.settings = Settings(copy_to=out)
+
+    def stopped(source, dest):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(reportflow, "_copy_into", stopped, raising=False)
+    undone = []
+    monkeypatch.setattr(lifecycle, "UNDO_HOOKS", [undone.append])
+    answers(session, "y")
+    try:
+        dest = finish_box(session, **SAVED)
+    except KeyboardInterrupt:
+        pytest.fail("a stop while the report was copied escaped finish")
+    assert dest is not None and undone == [session]
+    assert ("warn", f"the report was not copied to {out}: interrupted") in session.console.lines
+    assert sorted(p.name for p in out.iterdir()) == [dest.name]
+
+
+def test_a_stop_anywhere_in_the_report_step_never_skips_the_undo_steps(session, tmp_path, monkeypatch):
+    from pwn_broker import reportflow
+
+    _report_stand_in(session, tmp_path, monkeypatch, _BUILDS)
+
+    def stopped(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(reportflow, "build", stopped)
+    undone = []
+    monkeypatch.setattr(lifecycle, "UNDO_HOOKS", [undone.append])
+    answers(session, "y")
+    try:
+        dest = finish_box(session, **SAVED)
+    except KeyboardInterrupt:
+        pytest.fail("a stop in the report step escaped finish")
+    assert dest is not None and undone == [session]
+    assert ("warn", "the report step was interrupted") in session.console.lines
+    assert load_box(session.box.path).status == "finished"

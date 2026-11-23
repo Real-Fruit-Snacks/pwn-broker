@@ -62,6 +62,7 @@ forest/dc01 > finish
   targets  1
   files    14
   archive  /home/kali/pwn-broker/wrapped/2026-11-14_htb_forest.finished.tar.gz
+  report   none: tool install report adds the tool that builds one
   hosts    1 line to remove from /etc/hosts
 
   finish this box? [y/N] > y
@@ -85,7 +86,7 @@ Left out: the version line and the launch checks above `New box`, the `New crede
 - **Search.** `search <text>` looks through the current target's files, recordings and section of the note, and `search all <text>` through the whole box. [Guide](docs/guide.md#searching)
 - **Tools.** `tool install` from [`pwn-shop`](https://github.com/Real-Fruit-Snacks/pwn-shop): NetExec, Impacket, Certipy, bloodyAD, Rubeus and the BloodHound collectors for Active Directory, PEASS-ng and pspy, the potatoes, ligolo-ng and chisel, and the rest of [its list](https://github.com/Real-Fruit-Snacks/pwn-shop#whats-in-it). The Python ones bring their own Python, so Kali's is never used or shadowed. `finish` takes them off again. [Guide](docs/guide.md#tools)
 - **Playbooks.** `tool install playbooks` gets [pwn-playbooks](https://github.com/Real-Fruit-Snacks/pwn-playbooks), short notes for one job each, and `:Pb <name>` reads one into the note below the cursor, with the vim lines that fill in its placeholders. At the prompt, `playbook list` lists them by folder and title, and `playbook show <name>` prints one. The first new box on a machine asks whether new boxes should get them, and keeps the answer. [Guide](docs/guide.md#playbooks)
-- **Reports.** `tool install report` gets [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report), and with it in the box, `finish` builds a private report beside the finished archive: `report.md` with the box, its targets and flags, a timeline from the archive's own records and an index of the evidence, each file with its SHA-256 and a link to its copy. A report that fails is a warning, and `finish` goes on. The first new box asks whether new boxes should get it, after the playbooks' question. [Guide](docs/guide.md#reports)
+- **Reports.** `tool install report` gets [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report), and with it in the box, `finish` builds a private report beside the finished archive: `report.md` with the box, its targets and flags, a timeline from the archive's own records and an index of the evidence, each file with its SHA-256, and a copy of the scans, screenshots and exploits, linked from it. A report that fails is a warning, and `finish` goes on. The first new box asks whether new boxes should get it, after the playbooks' question. [Guide](docs/guide.md#reports)
 - **Finish, export, import.** `finish` archives the box to `~/pwn-broker/wrapped/` and closes it, `export` writes a snapshot and keeps working, and `pwn-broker import` unpacks either. [Guide](docs/guide.md#finish-export-and-import)
 
 `help` at the prompt lists every command; the [guide](docs/guide.md#every-command) has them all in one table.

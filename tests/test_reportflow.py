@@ -220,3 +220,44 @@ def test_the_installed_command_is_what_runs(session, archive):
     command.chmod(0o755)
     folder = reportflow.build(session, archive)
     assert folder == archive.parent / "2026-11-14_htb_forest.finished.report" and folder.is_dir()
+
+
+def test_the_copy_needs_no_file_modes_a_fat_copy_to_refuses(session, archive, stand_in, tmp_path, monkeypatch):
+    # a FAT or exFAT stick refuses chmod: the copy is by content alone, as the archive's is
+    stand_in("ok")
+    out = tmp_path / "stick"
+    out.mkdir()
+    session.settings = Settings(copy_to=out)
+
+    def refused(*args, **kwargs):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(shutil, "copystat", refused)
+    monkeypatch.setattr(shutil, "copymode", refused)
+    folder = reportflow.build(session, archive)
+    copy = out / folder.name
+    assert (copy / "report.md").read_text() == "# a report\n"
+    assert lines(session, "warn") == [] and ("ok", f"copy {copy}") in lines(session)
+
+
+def test_a_copy_to_that_has_gone_is_never_made_again(session, archive, stand_in, tmp_path):
+    # unmounted while pwn-report ran: nothing is written where the stick was
+    stand_in("ok")
+    gone = tmp_path / "media" / "stick"
+    session.settings = Settings(copy_to=gone)
+    assert reportflow.build(session, archive) is not None
+    (kind, text), = lines(session, "warn")
+    assert text.startswith(f"the report was not copied to {gone}: ")
+    assert not gone.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows gives a folder no mode bits")
+def test_the_copy_is_as_private_as_the_report(session, archive, stand_in, tmp_path):
+    import stat
+
+    stand_in("ok")
+    out = tmp_path / "copies"
+    out.mkdir()
+    session.settings = Settings(copy_to=out)
+    folder = reportflow.build(session, archive)
+    assert stat.S_IMODE((out / folder.name).stat().st_mode) == 0o700

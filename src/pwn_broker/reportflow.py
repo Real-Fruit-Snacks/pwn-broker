@@ -144,19 +144,46 @@ def _remove_staging(folder: Path) -> None:
 
 
 def _copy(session: Session, folder: Path) -> None:
-    """A copy of the report folder in copy_to, as the archive has; a failed copy is a warning."""
+    """A copy of the report folder in copy_to, as the archive has; a failed or stopped copy is a
+    warning, and leaves no part of itself behind."""
     copy_to = session.settings.copy_to
     if not copy_to:
         return
+    console = session.console
     final = copy_to / folder.name
     part = copy_to / f"{folder.name}.part"
     try:
+        # as copy_out: a copy_to that has gone, an unmounted stick, is never made again here
+        if not copy_to.is_dir():
+            raise OSError(f"{copy_to} is not a folder that exists")
         if os.path.lexists(final):
             raise OSError(f"{final.name} is there already")
-        shutil.copytree(folder, part)
-        os.replace(part, final)
+        part.mkdir(mode=0o700)
     except OSError as exc:
-        shutil.rmtree(part, ignore_errors=True)
-        session.console.warn(f"the report was not copied to {copy_to}: {exc}")
+        console.warn(f"the report was not copied to {copy_to}: {exc}")
         return
-    session.console.ok(f"copy {final}")
+    try:
+        _copy_into(folder, part)
+        os.replace(part, final)
+    except BaseException as exc:
+        shutil.rmtree(part, ignore_errors=True)
+        if not isinstance(exc, (OSError, KeyboardInterrupt)):
+            raise
+        reason = "interrupted" if isinstance(exc, KeyboardInterrupt) else exc
+        console.warn(f"the report was not copied to {copy_to}: {reason}")
+        return
+    console.ok(f"copy {final}")
+
+
+def _copy_into(source: Path, dest: Path) -> None:
+    """The report's files and folders by their content alone: no modes or times, which a FAT or
+    exFAT copy_to refuses, and folders made 0700, so the copy is as private as the report."""
+    for entry in sorted(source.iterdir()):
+        target = dest / entry.name
+        if entry.is_symlink():
+            raise OSError(f"{entry} is a link")
+        if entry.is_dir():
+            target.mkdir(mode=0o700)
+            _copy_into(entry, target)
+        else:
+            shutil.copyfile(entry, target)

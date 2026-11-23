@@ -50,7 +50,7 @@ class Env:
     is_root: Callable[[], bool] = privilege.is_root
     run_privileged: Callable = privilege.run_privileged
     tunnel: Callable[[], vpn.Tunnel | None] = vpn.tunnel
-    # new_box made the box this launch opens, so it may get the playbooks once it is open
+    # new_box made the box this launch opens, so it may get the offered packages once it is open
     made_box: bool = False
 
 

@@ -300,12 +300,15 @@ def finish_box(
         console.ok(f"copy {copy}")
     _report_left_out(console, left_out)
     # after the archive and its copy, before the undo steps take the report tool off
-    if reportflow.wanted(session):
-        try:
+    try:
+        if reportflow.wanted(session):
             reportflow.build(session, dest)
-        except Exception as exc:
-            # the report is extra: nothing in it fails the finish
-            console.warn(f"the report was not built: {exc}")
+    except KeyboardInterrupt:
+        # the report is extra: a stop in it, as in its copy, stops the report and not the finish
+        console.warn("the report step was interrupted")
+    except Exception as exc:
+        # the report is extra: nothing in it fails the finish
+        console.warn(f"the report was not built: {exc}")
     undo_failed = False
     for hook in UNDO_HOOKS:
         try:

@@ -457,7 +457,7 @@ Afterwards the `Fill in:` line shows the values used, and a placeholder still on
   ok    python-3.13 3.13.18 removed (runtime)
 ```
 
-- **What it holds.** `report.md`, with the box, its targets and flags, a timeline from the archive's own records and an index of the evidence, each file with its SHA-256 and a link to its copy; `report.json` and `report.toml`; a copy of the notes and of the evidence; and `SHA256SUMS`. It is private: it never reads `creds.toml`, `lists/`, a target's `creds/` or `tooldata/`, but it copies the notes and the scans as they are, and they can hold a password you typed. [pwn-report's guide](https://github.com/Real-Fruit-Snacks/pwn-report/blob/main/docs/guide.md) has the rest.
+- **What it holds.** `report.md`, with the box, its targets and flags, a timeline from the archive's own records and an index of the evidence, each file with its SHA-256; `report.json` and `report.toml`; a copy of the notes and of the scans, screenshots and exploits, each linked from the index; and `SHA256SUMS`. Loot, recordings and the `files/` and `upload/` folders are indexed but not copied. It is private: it never reads `creds.toml`, `lists/`, a target's `creds/` or `tooldata/`, but it copies the notes and the scans as they are, and they can hold a password you typed. [pwn-report's guide](https://github.com/Real-Fruit-Snacks/pwn-report/blob/main/docs/guide.md) has the rest.
 - **`finish`'s summary says first** whether one will be built: `report  will be built beside the archive`, or `report  none: tool install report adds the tool that builds one`.
 - **A report is never replaced.** A box finished again after it is reopened or imported puts its report beside the first, as `.report-2`, then `.report-3`.
 - **With `copy_to`** set, the report is copied there too, with an `ok    copy <path>` line; a copy that fails is a `warn` line.
@@ -475,7 +475,7 @@ Afterwards the `Fill in:` line shows the values used, and a placeholder still on
   ```
 
   Answered `n`, the lines under `saved: new boxes start without the report tool` are `for this box only: tool install report` and `for every new box: report = true in /opt/pwn-broker/config.toml`. `report = true` or `false` in `config.toml` decides instead, and then nothing is asked. An install that fails is a `warn` line, `report tool not installed: <why>`, then `try again with: tool install report`, and the box opens all the same.
-- pwn-broker never imports pwn-report. It runs `/opt/pwn-broker/bin/pwn-report build <archive> -o <folder>`, with no shell and the environment it gives every tool, and reads its one line.
+- pwn-broker never imports pwn-report. It runs `/opt/pwn-broker/bin/pwn-report build <archive> -o <folder>`, with no shell and the environment it gives every tool. Status 0 with the folder in place is a report built; anything else is one not built, with pwn-report's own `fail` line as the reason.
 
 ### Kali's copies, sudo, and one build per machine
 
