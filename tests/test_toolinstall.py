@@ -543,7 +543,8 @@ def test_install_notes_package(paths, box, tmp_path):
     ]
     assert console.lines == [
         ("ok", "playbooks 2026.11.19 installed (2 playbooks)"),
-        ("info", "read  :Pb <name>   in the note window"),
+        ("info", "read  :Pb <name>      in the note window"),
+        ("info", "list  playbook list   at the prompt"),
     ]
 
 

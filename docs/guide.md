@@ -377,12 +377,29 @@ Playbooks are short notes, one per job, that you read into the box's note and fi
 ```
 forest/dc01 > tool install playbooks
 
-  ok    playbooks 2026.11.20.1 installed (79 playbooks)
-  read  :Pb <name>   in the note window
+  ok    playbooks 2026.11.23 installed (88 playbooks)
+  read  :Pb <name>      in the note window
+  list  playbook list   at the prompt
 ```
 
 - **They come and go with the box, like a tool.** `finish` takes them off, the box records which build it had, and reopening or importing it installs that build again. One build is on the machine at a time: while an unfinished box still has an older build, `tool install playbooks` stops and names that box.
-- **New boxes can get them as they are made.** The first `pwn-broker new` on a machine asks `install playbooks in new boxes? [Y/n]` once the box is made, and keeps the answer in `/opt/pwn-broker/state.toml`. With yes, that box and every later new box get them before the note window opens, as `tool install playbooks` installs them, and the line after the install says how to stop it: `new boxes get them too; playbooks = false in /opt/pwn-broker/config.toml stops that`. An install that fails is a `warn` line, `playbooks not installed: <why>`, and the box opens all the same; `tool install playbooks` tries again. `playbooks = true` or `false` in `config.toml` decides instead, and then nothing is asked. A box that is resumed, reopened or imported is never asked: it offers the tools it had.
+- **New boxes can get them as they are made.** The first `pwn-broker new` on a machine asks once the box is made, and keeps the answer in `/opt/pwn-broker/state.toml`. With yes, that box and every later new box get them before the note window opens, as `tool install playbooks` installs them:
+
+  ```
+    ok    box forest created
+
+    install playbooks in this box and every new box? [Y/n] > 
+
+    ok    saved: new boxes get the playbooks
+          to change it: playbooks = false in /opt/pwn-broker/config.toml
+    ok    playbooks 2026.11.23 installed (88 playbooks)
+    read  :Pb <name>      in the note window
+    list  playbook list   at the prompt
+  ```
+
+  Answered `n`, the lines under `saved: new boxes start without playbooks` are `for this box only: tool install playbooks` and `for every new box: playbooks = true in /opt/pwn-broker/config.toml`.
+
+  An install that fails is a `warn` line, `playbooks not installed: <why>`, then `try again with: tool install playbooks`, and the box opens all the same. `playbooks = true` or `false` in `config.toml` decides instead, and then nothing is asked. A box that is resumed, reopened or imported is never asked: it offers the tools it had.
 - **`:Pb <name>`** in the note window reads one into the note below the cursor, never into the box at the top, and below a closed fold when the cursor is on one. Tab completes the name from any part of it, so `:Pb serv` finds `06-privesc/windows/services`. `:Pb` on its own lists them all to pick one by number.
 - **Each playbook is one fold.** Closed, it shows its `Playbook:` line: its title, its path and the build it came from.
 - **Placeholders** are written `<Name>`, such as `<TargetIP>` or `<Username>`, and the note shows them in Ember.

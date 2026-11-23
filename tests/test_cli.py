@@ -846,7 +846,7 @@ def test_a_new_box_keeps_the_rest_of_the_saved_state(env):
 
 # ---- playbooks in new boxes
 
-PLAYBOOKS_QUESTION = "install playbooks in new boxes?"
+PLAYBOOKS_QUESTION = "install playbooks in this box and every new box?"
 BOX_ANSWERS = ["forest", "", "", "", "", "n"]
 
 
@@ -887,9 +887,14 @@ def test_the_first_new_box_asks_about_playbooks_and_installs_them(env, quiet, sh
     assert shown.index(("ok", "box forest created")) < shown.index(("ok", installed_line(env)[0]))
     assert at_note == [True]
     assert load_state(env.paths.state_file).new_box_playbooks is True
-    assert lines(env, "info")[-1] == (
-        f"new boxes get them too; playbooks = false in {env.paths.config_file} stops that"
-    )
+    # the answer, then the install, then how to use them
+    after = shown[shown.index(("ok", "box forest created")) + 1 :]
+    assert after[:4] == [
+        ("ok", "saved: new boxes get the playbooks"),
+        ("detail", f"to change it: playbooks = false in {env.paths.config_file}"),
+        ("ok", installed_line(env)[0]),
+        ("info", "read  :Pb <name>      in the note window"),
+    ]
 
 
 def test_a_new_box_from_the_menu_asks_too(env, quiet, shop, ran):
@@ -904,6 +909,7 @@ def test_a_later_new_box_gets_them_without_asking(env, quiet, shop, ran):
     assert start(env, ["new"]) == 0
     assert PLAYBOOKS_QUESTION not in env.console.asked
     assert has_playbooks(env, ran[-1].box) and len(installed_line(env)) == 1
+    assert not any(t.startswith("saved: ") for t in lines(env, "ok"))
     assert load_state(env.paths.state_file) == State("htb", "lab.ovpn", True)
 
 
@@ -912,9 +918,13 @@ def test_no_installs_nothing_and_is_not_asked_again(env, quiet, shop, ran):
     assert start(env, ["new"]) == 0
     assert not has_playbooks(env, ran[-1].box) and installed_line(env) == []
     assert load_state(env.paths.state_file).new_box_playbooks is False
-    assert lines(env, "info")[-1] == (
-        f"new boxes go without them; playbooks = true in {env.paths.config_file} installs them"
-    )
+    shown = env.console.lines
+    after = shown[shown.index(("ok", "box forest created")) + 1 :]
+    assert after[:3] == [
+        ("ok", "saved: new boxes start without playbooks"),
+        ("detail", "for this box only: tool install playbooks"),
+        ("detail", f"for every new box: playbooks = true in {env.paths.config_file}"),
+    ]
     env.console = FakeConsole(["second", "", "", "", "", "n"])
     assert start(env, ["new"]) == 0
     assert PLAYBOOKS_QUESTION not in env.console.asked
@@ -943,7 +953,8 @@ def test_an_install_that_fails_is_a_warning_and_the_box_still_opens(env, quiet, 
     assert start(env, ["new"]) == 0 and len(ran) == 1
     warned = [t for t in lines(env, "warn") if t.startswith("playbooks not installed: ")]
     assert len(warned) == 1 and "missing" in warned[0]
-    assert "tool install playbooks tries again" in lines(env, "detail")
+    shown = env.console.lines
+    assert shown[shown.index(("warn", warned[0])) + 1] == ("detail", "try again with: tool install playbooks")
     assert lines(env, "fail") == []
     # the answer is kept, so the next new box tries again
     assert load_state(env.paths.state_file).new_box_playbooks is True
@@ -954,9 +965,28 @@ def test_cancelling_the_question_saves_no_answer_and_still_opens_the_box(env, qu
     env.console = FakeConsole(BOX_ANSWERS)
     assert start(env, ["new"]) == 0 and len(ran) == 1
     assert env.console.asked[-1] == PLAYBOOKS_QUESTION
-    assert "playbooks not installed; asked again at the next new box" in lines(env, "info")
+    assert "playbooks skipped; the next new box asks again" in lines(env, "info")
     assert load_state(env.paths.state_file).new_box_playbooks is None
     assert not has_playbooks(env, ran[-1].box)
+
+
+def test_an_answer_that_cannot_be_saved_says_so_and_still_installs(env, quiet, shop, ran, monkeypatch):
+    real_save = cli.config.save_state
+
+    def refuse_the_answer(path, state):
+        if state.new_box_playbooks is not None:
+            raise PermissionError("Permission denied")
+        real_save(path, state)
+
+    monkeypatch.setattr(cli.config, "save_state", refuse_the_answer)
+    env.console = FakeConsole([*BOX_ANSWERS, ""])
+    assert start(env, ["new"]) == 0
+    shown = env.console.lines
+    at = shown.index(("warn", "the answer could not be saved: Permission denied"))
+    assert shown[at + 1] == ("detail", "the next new box asks again")
+    assert not any(t.startswith("saved: ") for t in lines(env, "ok"))
+    assert has_playbooks(env, ran[-1].box)
+    assert load_state(env.paths.state_file).new_box_playbooks is None
 
 
 def test_resuming_a_box_never_asks_about_playbooks(env, quiet, shop, box, ran):

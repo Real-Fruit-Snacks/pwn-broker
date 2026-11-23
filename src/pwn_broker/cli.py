@@ -22,7 +22,8 @@ from pwn_broker.toolpkg import ToolError
 
 NO_ARCHIVE = "give the path of an exported box"
 PLAYBOOKS = "playbooks"
-PLAYBOOKS_QUESTION = "install playbooks in new boxes?"
+PLAYBOOKS_QUESTION = "install playbooks in this box and every new box?"
+PLAYBOOKS_AGAIN = "try again with: tool install playbooks"
 # what a failed install raises; anything else is a bug, reported the same way
 _INSTALL_ERRORS = (ToolError, BoxError, StoreError, ValueError, OSError)
 SUBCOMMANDS = ("new", "import", "resume")
@@ -136,30 +137,33 @@ def _playbooks_for_new_box(env: Env, session: Session) -> None:
     wanted = env.settings.playbooks
     if wanted is None:
         wanted = config.load_state(env.paths.state_file).new_box_playbooks
-    kept = False
     if wanted is None:
         try:
             wanted = console.confirm(PLAYBOOKS_QUESTION, default=True)
         except Cancelled:
-            console.info("playbooks not installed; asked again at the next new box")
+            console.info("playbooks skipped; the next new box asks again")
             return
-        kept = _keep_playbooks_answer(env, wanted)
+        _keep_playbooks_answer(env, wanted)
     if wanted:
         _install_playbooks(session)
-    if kept and wanted:
-        console.info(f"new boxes get them too; playbooks = false in {env.paths.config_file} stops that")
-    elif kept:
-        console.info(f"new boxes go without them; playbooks = true in {env.paths.config_file} installs them")
 
 
-def _keep_playbooks_answer(env: Env, wanted: bool) -> bool:
-    path = env.paths.state_file
+def _keep_playbooks_answer(env: Env, wanted: bool) -> None:
+    """Save the answer, then say what it means and how to change it, before any install."""
+    console, path = env.console, env.paths.state_file
     try:
         config.save_state(path, replace(config.load_state(path), new_box_playbooks=wanted))
     except OSError as exc:
-        env.console.warn(f"the answer could not be saved, so the next new box asks again: {exc}")
-        return False
-    return True
+        console.warn(f"the answer could not be saved: {exc}")
+        console.detail("the next new box asks again")
+        return
+    if wanted:
+        console.ok("saved: new boxes get the playbooks")
+        console.detail(f"to change it: playbooks = false in {env.paths.config_file}")
+    else:
+        console.ok("saved: new boxes start without playbooks")
+        console.detail("for this box only: tool install playbooks")
+        console.detail(f"for every new box: playbooks = true in {env.paths.config_file}")
 
 
 def _install_playbooks(session: Session) -> None:
@@ -168,15 +172,14 @@ def _install_playbooks(session: Session) -> None:
         cmd_tool.tool_install(session, [PLAYBOOKS])
         return
     except Cancelled:
-        console.info("playbooks not installed; tool install playbooks gets them")
-        return
+        reason = "cancelled"
     except _INSTALL_ERRORS as exc:
         reason = str(exc)
     except Exception as exc:
         # the playbooks are extra: a bug here must not keep the new box from opening
         reason = f"unexpected error: {type(exc).__name__}: {exc}"
     console.warn(f"playbooks not installed: {reason}")
-    console.detail("tool install playbooks tries again")
+    console.detail(PLAYBOOKS_AGAIN)
 
 
 def _date(value: datetime) -> str:
