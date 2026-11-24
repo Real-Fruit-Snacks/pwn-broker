@@ -81,6 +81,17 @@ def test_a_first_word_that_is_no_scope_is_searched_for(session, two):
     assert lines(session) == ["no hits for web01 in dc01"]
 
 
+def test_the_note_s_section_is_numbered_as_vim_numbers_it(session, two):
+    # a form feed pasted into the note, and the note saved with CRLF line ends
+    note = session.box.path / "notes.md"
+    text = note.read_text().replace("## enumeration\n", "## enumeration\x0cpasted\n")
+    note.write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
+    dispatch(session, "search password")
+    shown = lines(session)
+    at = shown.index("notes.md")
+    assert shown[at + 1 : at + 3] == ["    7  dc01 password guess", "    9  nested password"]
+
+
 def test_line_numbers_are_the_ones_vim_shows(session, two):
     # pasted tool output can hold a form feed or a line separator, which vim keeps inside a line
     loot = session.box.path / "targets" / "dc01" / "loot" / "dump.txt"
@@ -173,6 +184,14 @@ def test_search_skips_unfilled_playbook_lines(session, playbook):
     assert [h.text for h in found.hits] == ["smb on dc01: 10.10.10.161"]
     assert found.skipped == 1
     found = finder.search(session.box.path, "smb on dc01", None)
+    assert [h.text for h in found.hits] == ["smb on dc01: 10.10.10.161"]
+    assert found.skipped == 1
+
+
+def test_search_skips_unfilled_playbook_lines_in_a_note_saved_with_crlf(session, playbook):
+    # each line keeps its CR otherwise, and the run block's lines are not known for what they are
+    playbook.write_bytes(playbook.read_bytes().replace(b"\n", b"\r\n"))
+    found = finder.search(session.box.path, "smb on dc01", "dc01")
     assert [h.text for h in found.hits] == ["smb on dc01: 10.10.10.161"]
     assert found.skipped == 1
 

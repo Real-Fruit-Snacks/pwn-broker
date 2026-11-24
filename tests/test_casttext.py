@@ -429,12 +429,26 @@ def test_a_recording_that_takes_too_long_to_render_gets_no_text_copy(tmp_path, m
 
 def test_the_time_allowed_grows_with_the_recording(tmp_path, monkeypatch):
     # a real recording that size gets its text copy: the allowance is counted in its bytes
-    # pyte asks the screen once for each character it draws
-    ticking(monkeypatch, step=0.00001)
+    # a tick long enough that the base second alone is spent long before the end
+    now = ticking(monkeypatch, step=0.0005)
     monkeypatch.setattr(casttext, "RENDER_SECONDS", 1)
     path = write_cast(tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "o", "x" * 70 + "\r\n")] * 4000)
     out = casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
     assert out.read_text(encoding="utf-8").count("x" * 70) == 4000
+    assert now[0] > 2
+
+
+def test_refresh_counts_the_size_of_the_casts_it_writes(box, monkeypatch):
+    # stale casts only: a fresh text copy costs nothing
+    stale = _cast_in(box, "dc01", "2026-11-14_1432", events=[(0, "o", "x\r\n")] * 30)
+    fresh = _cast_in(box, "web01", "2026-11-14_1500", events=[(0, "o", "y\r\n")] * 300)
+    fresh.with_suffix(".txt").write_text("old\n", encoding="utf-8")
+    os.utime(fresh, ns=(1_000_000_000_000, 1_000_000_000_000))
+    sizes = []
+    real = casttext.allowance
+    monkeypatch.setattr(casttext, "allowance", lambda size: sizes.append(size) or real(size))
+    _refresh(box)
+    assert sizes == [stale.stat().st_size]
 
 
 def test_a_crafted_recording_is_stopped_in_about_the_time_it_is_allowed(tmp_path, monkeypatch):
