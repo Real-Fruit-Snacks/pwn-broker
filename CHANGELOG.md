@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.1.13 (unreleased)
+## v0.1.13
 
 Fixed: a relative `home` or `copy_to` in `config.toml`, or a relative `PWN_BROKER_HOME` or `PWN_BROKER_OPT`, named a different folder for the note window, `serve`, `scan`, `record` and the report, which each run from a folder of their own, so they failed or wrote elsewhere. Each must now be a whole path, such as `~/pwn-broker`, and pwn-broker says so at launch. An empty `PWN_BROKER_OPT` now means the default, as an empty `PWN_BROKER_HOME` does, not the current folder. With `copy_to` set to `wrapped/` itself, every `finish` warned that the report was there already, and `export` and `finish` copied the archive over itself; neither is copied now, as both are already there. A `.part` folder left in `copy_to` by a report copy that was cut off, by a power cut for instance, made every later copy of that report fail; it is now replaced, as the archive's `.part` file is.
 
