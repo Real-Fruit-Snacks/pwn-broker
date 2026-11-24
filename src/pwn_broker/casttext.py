@@ -535,9 +535,10 @@ def write(
     if allowed is None:
         allowed = allowance(cast_path.stat().st_size)
     head = _head(cast_path, box_name, box_id, target, started)
-    # A cast past its time, or one that fails part of the way in, gets a note when it had a fair
-    # share of time, so the next export, finish or replay does not spend that time on it again.
-    # Not when the casts before it spent the base: it is tried again then
+    # A note, so the next export, finish or replay does not spend the time on it again: for a cast
+    # past its time when it had a fair share (note), not when the casts before it spent the base;
+    # for one that fails part of the way in always, as it fails the same however long it is given,
+    # but not for a read error, which may be gone next time
     try:
         body = list(render(header, events(cast_path), tz, allowed.deadline))
     except _TooLong:
@@ -547,13 +548,12 @@ def write(
         why = "it had less than a second to render" if allowed.seconds < 1 else f"it took longer than {took} to render"
         raise OutOfTime(cast_path, f"{why}; replay still plays it") from None
     except CastError as exc:  # a bad line after the ones before it were drawn
-        if note and not isinstance(exc.__cause__, OSError):
+        if not isinstance(exc.__cause__, OSError):
             _note(cast_path, head, exc.reason)
         raise
     except Exception as exc:  # pyte's own failures on input it cannot handle, and a time past a date's
         failed = CastError(cast_path, f"could not be rendered ({type(exc).__name__})")
-        if note:
-            _note(cast_path, head, failed.reason)
+        _note(cast_path, head, failed.reason)
         raise failed from exc
     lines = [*head, *body]
     store.write_text(out, "\n".join(lines) + "\n")
@@ -571,8 +571,9 @@ _TAIL = 4096
 
 
 def _open_file(path: Path, writing: bool = False):
-    """The file opened without following a link, or None when it is anything but a regular file;
-    OSError when it cannot be opened (a link, where the system can refuse one)."""
+    """The file opened without following a link, or None when it is anything but a regular file,
+    or, to write, a file with another name too (a hard link), which a change in place would change
+    as well; OSError when it cannot be opened (a link, where the system can refuse one)."""
     flags = os.O_RDWR if writing else os.O_RDONLY
     for name in ("O_NOFOLLOW", "O_NONBLOCK", "O_BINARY"):
         flags |= getattr(os, name, 0)
@@ -582,7 +583,8 @@ def _open_file(path: Path, writing: bool = False):
     except OSError:
         fh.close()
         raise
-    if stat.S_ISREG(opened.st_mode) and stat.S_ISREG(there.st_mode) and os.path.samestat(opened, there):
+    plain = stat.S_ISREG(opened.st_mode) and stat.S_ISREG(there.st_mode) and os.path.samestat(opened, there)
+    if plain and (opened.st_nlink == 1 or not writing):
         return fh
     fh.close()
     return None
@@ -616,14 +618,19 @@ def has_copy(cast_path: Path) -> bool:
 def _note(cast_path: Path, head: list[str], why: str) -> None:
     """A text copy that says why there is none, or the one the cast already has with a last line
     saying where it stops, dated no earlier than its cast, so it is no longer stale; deleting it
-    tries again. A kept one is changed in place, and only its end is read, however large it is."""
+    tries again. A kept one is changed in place, and only its end is read, however large it is;
+    one that cannot be changed safely in place (a link put there, or a hard link) is replaced by
+    the note, which changes that name and nothing it points to."""
     out = text_path(cast_path)
-    if not os.path.lexists(out):
+    fh = None
+    if os.path.lexists(out):
+        try:
+            fh = _open_file(out, writing=True)
+        except OSError:
+            pass
+    if fh is None:
         store.write_text(out, "\n".join([*head, f"{_NOTE}{why}]"]) + "\n")
     else:
-        fh = _open_file(out, writing=True)
-        if fh is None:
-            raise CastError(cast_path, f"{out.name} is not a file")
         with fh:
             at, last = _last_line(fh)
             # a note or a stop line from an earlier time is replaced, so it is said once
@@ -687,6 +694,7 @@ def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None
         shown = cast_path.relative_to(box.path).as_posix()
         target_name = cast_path.parent.parent.name
         what = f"no text copy of {shown}"
+        fair = True
         try:
             if not stale(cast_path):
                 continue
@@ -704,15 +712,15 @@ def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None
                 cast_path, box_name=box.name, box_id=box.id, target=target_name, tz=tz,
                 allowed=allowed, note=fair,
             )  # fmt: skip
-        except OutOfTime as exc:
-            console.warn(f"{what}: {exc.reason}")
-            # one that ran out with the base already spent ends the rendering: the rest wait for
-            # the next export, finish or replay, so crafted casts cost one base, not each a call
-            stopped = not fair
         except CastError as exc:
             console.warn(f"{what}: {exc.reason}")
+            # one that ran out of time or failed with the base already spent ends the rendering:
+            # the rest wait for the next export, finish or replay, so crafted casts cost one base
+            # and one cast's time, not each their own
+            stopped = not fair
         except OSError as exc:
             console.warn(f"{what}: {exc.strerror or exc}")
+            stopped = not fair
     if left:
         them = "1 recording" if left == 1 else f"{left} recordings"
         console.warn(f"{them} got no text copy this time; the next export, finish or replay tries them again")

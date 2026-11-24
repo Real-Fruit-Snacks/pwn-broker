@@ -820,15 +820,40 @@ def test_a_cast_that_fails_partway_gets_a_note_and_is_not_tried_again(box):
     assert _refresh(box).lines == []
 
 
-def test_a_cast_that_fails_with_no_base_left_gets_no_note(box, monkeypatch):
-    # the cast before it spent the base: it is tried again next time, not marked
+def test_a_cast_that_fails_with_no_base_left_is_noted_and_ends_the_refresh(box, monkeypatch):
+    # a bad line fails however long it is given, so it is noted; and with the base spent it ends
+    # the rendering, as one out of time does, or casts that fail late would each spend their time
     ticking(monkeypatch)
     monkeypatch.setattr(casttext, "RENDER_SECONDS", 10)
     _cast_in(box, "dc01", "2026-11-14_1400", events=[(0, "o", "x\n" * 200)])
     bad = _cast_in(box, "dc01", "2026-11-14_1500")
     bad.write_bytes(cast_text([]).encode("utf-8") + BAD_LINE)
-    assert [kind for kind, _ in _refresh(box).lines] == ["warn", "warn"]
-    assert not bad.with_suffix(".txt").exists()
+    after = _cast_in(box, "dc01", "2026-11-14_1600")
+    warned = [text for kind, text in _refresh(box).lines if kind == "warn"]
+    assert len(warned) == 3 and "line 2 is not a valid event" in warned[1]
+    assert warned[2].startswith("1 recording got no text copy this time")
+    assert "\n[no text copy: line 2 is not a valid event (" in bad.with_suffix(".txt").read_text(encoding="utf-8")
+    assert casttext.stale(after)
+
+
+def test_a_cast_that_cannot_be_written_with_no_base_left_ends_the_refresh(box, monkeypatch):
+    ticking(monkeypatch)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 10)
+    _cast_in(box, "dc01", "2026-11-14_1400", events=[(0, "o", "x\n" * 200)])
+    _cast_in(box, "dc01", "2026-11-14_1500")
+    after = _cast_in(box, "dc01", "2026-11-14_1600")
+    write = casttext.write
+
+    def full(cast_path, **kwargs):
+        if cast_path.stem == "2026-11-14_1500":
+            raise OSError(28, "No space left on device")
+        return write(cast_path, **kwargs)
+
+    monkeypatch.setattr(casttext, "write", full)
+    warned = [text for kind, text in _refresh(box).lines if kind == "warn"]
+    assert len(warned) == 3 and warned[1].endswith("No space left on device")
+    assert warned[2].startswith("1 recording got no text copy this time")
+    assert casttext.stale(after)
 
 
 def test_a_time_past_what_a_date_can_hold_gets_a_note(tmp_path):
@@ -840,12 +865,13 @@ def test_a_time_past_what_a_date_can_hold_gets_a_note(tmp_path):
     assert path.with_suffix(".txt").read_text(encoding="utf-8").endswith("]\n")
 
 
-def test_a_failure_with_no_fair_share_or_from_reading_gets_no_note(tmp_path, monkeypatch):
-    # given no fair share it is tried again; a read error may be gone next time
+def test_a_failure_is_noted_whatever_its_share_but_a_read_error_is_not(tmp_path, monkeypatch):
+    # pyte fails the same way however long it is given; a read error may be gone next time
     path = write_cast(tmp_path / "recordings" / "odd.cast", [(0, "o", "a\r\n\x1b[?6h\x1b[5d")])
     with pytest.raises(CastError, match="could not be rendered"):
         casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ, note=False)
-    assert not path.with_suffix(".txt").exists()
+    assert path.with_suffix(".txt").read_text(encoding="utf-8").endswith("(AssertionError)]\n")
+    path.with_suffix(".txt").unlink()
 
     def unreadable(cast_path):
         yield 0.0, "o", "a\r\n"
@@ -946,7 +972,39 @@ def test_a_link_put_in_place_while_rendering_is_not_read_or_written_through(box,
     monkeypatch.setattr(casttext, "render", swapped)
     [(kind, _)] = _refresh(box).lines
     assert kind == "warn"
-    assert text.is_symlink() and mine.read_bytes() == b"not for the box\n"
+    # the link itself is replaced by the note; what it pointed to is left as it was
+    assert mine.read_bytes() == b"not for the box\n"
+    assert not text.is_symlink() and text.read_text(encoding="utf-8").endswith("(AssertionError)]\n")
+
+
+def test_a_kept_text_copy_with_another_name_is_not_changed_through_it(box, tmp_path, monkeypatch):
+    # a hard link: a line added in place would be added to the other file too, so the note
+    # replaces this name only
+    ticking(monkeypatch)
+    cast = _cast_in(box, "dc01", "2026-11-14_1432", events=[(0, "o", "x\n" * 200)])
+    mine = tmp_path / "mine.txt"
+    mine.write_bytes(b"not for the box\n")
+    text = cast.with_suffix(".txt")
+    os.link(mine, text)
+    _older(text, cast)
+    assert [kind for kind, _ in _refresh(box).lines] == ["warn"]
+    assert mine.read_bytes() == b"not for the box\n"
+    assert text.read_text(encoding="utf-8").startswith("box      forest")
+    assert text.read_text(encoding="utf-8").endswith("replay plays the cast]\n")
+
+
+def test_only_a_row_the_next_one_continues_is_read_to_the_screen_width(monkeypatch):
+    # the last flush reads each row to its last cell; a full read of each would cost the screen
+    asked = []
+    row_text = casttext._TextScreen._row_text
+
+    def counted(self, y, full=False):
+        asked.append(full)
+        return row_text(self, y, full)
+
+    monkeypatch.setattr(casttext._TextScreen, "_row_text", counted)
+    render([(0, "o", "a\r\nb\r\n" + "x" * 1500 + "\r\n")], cols=1000, rows=5)
+    assert asked.count(True) == 1
 
 
 @pytest.mark.parametrize(
