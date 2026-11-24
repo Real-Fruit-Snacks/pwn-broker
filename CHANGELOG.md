@@ -8,7 +8,7 @@ Fixed: a box read from disk, an imported one included, is now refused when its i
 
 Fixed: the note's vim kept a `~/.viminfo` with its registers and command history, so a password put into a playbook's run block stayed in your home folder after `finish`. The vimrc now keeps none.
 
-Fixed: a recording's text copy could take hours to make from a crafted `.cast` of a few hundred bytes, in an imported box for instance, and `finish` waited for it. It now gets 60 seconds and 30 more for each megabyte of the recording, which is far more than a real recording needs, shared by all the recordings one `export`, `finish` or `replay` writes; one past that gets a `warn` line and no text copy, and `replay` still plays it.
+Fixed: a recording's text copy could take hours to make from a crafted `.cast` of a few hundred bytes, in an imported box for instance, and `finish` waited for it. It now gets 60 seconds and 30 more for each megabyte of the recording, which is far more than a real recording needs, shared by all the recordings one `export`, `finish` or `replay` writes; one past that gets a `warn` line and no text copy, and `replay` still plays it. The time is looked at between pieces of each event as well, so one long run of text, which the terminal model draws in a single call, is stopped too.
 
 Fixed: `serve files` printed a PowerShell line with the file name bare after `-OutFile`, so a name with a space, `;` or `$` in it broke the line you paste on the target, or ran the rest of it there. Such a name is now quoted, with each of the four characters PowerShell takes as a single quote doubled, and so is a name starting with `-`, which PowerShell would read as a parameter.
 

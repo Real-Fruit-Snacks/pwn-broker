@@ -29,6 +29,10 @@ _ALTERNATE = frozenset({1049, 1047, 47})
 RENDER_SECONDS = 60
 RENDER_SECONDS_PER_MB = 30
 _clock = time.monotonic
+# pyte draws a run of plain text in one call, whose cost can grow with the square of its length
+# (combining marks) or with the screen's width for each character (insert mode): an event's data
+# is fed in pieces this long, so the deadline is looked at between them
+_FEED = 256
 
 
 class Allowance(NamedTuple):
@@ -391,7 +395,8 @@ def render(
     for elapsed, code, data in events:
         last = screen.now = elapsed
         if code == "o":
-            stream.feed(data)
+            for start in range(0, len(data), _FEED):
+                stream.feed(data[start : start + _FEED])
         elif code == "r" and (size := _size(data)):
             drawn.resize(lines=size[1], columns=size[0])
         if screen.taken:

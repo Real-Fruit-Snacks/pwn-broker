@@ -458,7 +458,27 @@ def test_refresh_gives_all_its_recordings_one_allowance(box, monkeypatch):
     console = _refresh(box)
     warned = [text for kind, text in console.lines if kind == "warn"]
     assert warned and all("took longer than 30 seconds to render" in text for text in warned)
-    assert now[0] < 30 + 3 * 25
+    # once between them, not 30 seconds each
+    assert now[0] < 30 + 10
+
+
+def test_one_long_run_of_text_is_timed_as_it_is_drawn(tmp_path, monkeypatch):
+    # pyte draws a run of plain text in one call: combining marks make that call slow in their
+    # number squared, and insert mode costs a shift for each character
+    ticking(monkeypatch)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 20)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS_PER_MB", 0)
+    path = write_cast(tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "o", "x" * 20_000)])
+    with pytest.raises(CastError, match="took longer than 20 seconds to render"):
+        casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
+
+
+def test_resizes_are_timed_too(tmp_path, monkeypatch):
+    ticking(monkeypatch)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 20)
+    path = write_cast(tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "r", "1000x1000"), (0, "r", "80x24")] * 25)
+    with pytest.raises(CastError, match="took longer than 20 seconds to render"):
+        casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
 
 
 def test_cast_files_are_in_name_order_and_only_casts(box):
