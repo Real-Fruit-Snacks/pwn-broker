@@ -73,7 +73,17 @@ def _report_left_out(console: Console, left_out: list[str]) -> None:
 
 def _copy(session: Session, dest: Path) -> Path | None:
     copy_to = session.settings.copy_to
-    return copy_out(dest, copy_to) if copy_to else None
+    if not copy_to or _same_folder(copy_to, dest.parent):
+        # copy_to is wrapped/ itself: the archive is there already
+        return None
+    return copy_out(dest, copy_to)
+
+
+def _same_folder(one: Path, other: Path) -> bool:
+    try:
+        return one.is_dir() and os.path.samefile(one, other)
+    except OSError:
+        return False
 
 
 def _rollback(box: Box) -> None:

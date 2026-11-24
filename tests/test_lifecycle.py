@@ -67,6 +67,16 @@ def test_export_copies_to_copy_to(session, tmp_path):
     assert len(kinds(session, "ok")) == 2
 
 
+def test_a_copy_to_that_is_the_wrapped_folder_copies_nothing(session):
+    # the archive is there already: copying it over itself only costs the time and says "copy"
+    session.paths.wrapped.mkdir(parents=True, exist_ok=True)
+    session.settings = Settings(copy_to=session.paths.wrapped)
+    path = export_box(session, **NOFIX)
+    assert path.parent == session.paths.wrapped and path.is_file()
+    assert not any(text.startswith("copy ") for text in kinds(session, "ok"))
+    assert sorted(p.name for p in session.paths.wrapped.iterdir()) == [path.name]
+
+
 def test_export_failure_reports_and_returns_none(session, monkeypatch):
     def boom(*args, **kwargs):
         raise ArchiveError("disk full")
