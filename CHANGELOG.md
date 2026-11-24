@@ -18,7 +18,7 @@ Fixed: a download of the tool index or a package over HTTPS followed a redirect 
 
 Fixed: `scan` ran nmap on an IPv6 target without `-6`, which nmap refuses, and a `scan full` whose first stage found only UDP ports, with flags of your own, ran its second stage with an empty port list. IPv6 targets are scanned with `-6`, and with no TCP port the full scan stops after its first stage.
 
-Fixed: text from a target or an archive could hold a format character, such as a right-to-left override, that reordered or hid what the terminal showed. Every line the app prints now shows format characters and line or paragraph separators as `?`, as it does control characters.
+Fixed: text from a target or an archive could hold a format character, such as a right-to-left override, that reordered or hid what the terminal showed. Every line the app prints now shows format characters and line or paragraph separators as `?`, as it does control characters. `cred list` marks such a secret with `*` and points to `cred show`, as it does one with a control character.
 
 Fixed: `serve` checked the free space for each upload on its own, so several uploads at once, each in its own thread, could together fill the disk past the 1 GiB it keeps free. Each upload now counts what the others still have to write.
 
