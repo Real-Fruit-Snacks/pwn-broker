@@ -9,8 +9,9 @@ name: release
 #   install.sh                                 the installer, from the checkout at the tag
 # install.sh downloads the other two from releases/latest/download/.
 #
-# The build job has read access only and runs all of the repository's code. Everything it
-# installs before the release file's SHA-256 is recorded is pinned by hash in this repository,
+# The build job has read access only and runs all of the repository's code. Every package it
+# installs before the release file's SHA-256 is recorded is pinned by hash in this repository
+# (the actions are pinned by tag, and setup-python gives the newest 3.13),
 # since code that ran there could replace the release file and SHA256SUMS.txt together and
 # sha256sum -c would still accept them. The SHA-256 is recorded right after the build, as a job
 # output. install.sh and the notes are set aside with the release file before anything unpinned

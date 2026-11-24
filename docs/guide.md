@@ -369,7 +369,7 @@ A Python tool can bring its own Python instead of using Kali's. Such a tool requ
 - The runtime's interpreter and the `pip` it carries are what run during the install: they make the tool's virtual environment and install the bundled wheels into it, isolated from your shell's settings (`-I`, `pip --isolated`, no `PYTHON*` or `PIP_*` variables, the tool's own folder as the working directory).
 - The first such tool on a machine costs the runtime: a download the app shows as 34 MB, about 100 MB unpacked, and the zip, which stays in the download cache until `tool cache clear`. A runtime carries its own OpenSSL and other libraries, fixed when a new build of the runtime is published, not when Kali updates.
 
-Build 3 of `certipy` and `targetedkerberoast` requires a runtime, and is the only build of each that is published: builds 1 and 2 were withdrawn on 2026-11-15, before any box had used them. The other four tools need no Python. The app still reads a package that runs on Kali's own Python (schema 1), and such a tool says so if Kali's Python cannot make its environment; none is published.
+Build 3 of `certipy` and `targetedkerberoast` requires a runtime, and is the only build of each that is published: builds 1 and 2 were withdrawn on 2026-11-15, before any box had used them. The tools that are not Python need no Python at all. The app still reads a package that runs on Kali's own Python (schema 1), and such a tool says so if Kali's Python cannot make its environment; none is published.
 
 ### Playbooks
 
