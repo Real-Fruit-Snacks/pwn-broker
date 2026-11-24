@@ -39,7 +39,8 @@ def report_folder(archive: Path) -> Path:
 
 
 def _command(session: Session) -> Path:
-    return session.paths.bin / COMMAND
+    # whole, as every path pwn-report is given: it runs in the archive's folder
+    return (session.paths.bin / COMMAND).absolute()
 
 
 def _launcher(session: Session) -> list[str]:
@@ -62,6 +63,7 @@ def build(session: Session, archive: Path) -> Path | None:
     """Builds the report beside the archive and copies it to copy_to when that is set. Returns the
     report folder, or None when no report was built; never raises for what pwn-report does."""
     console = session.console
+    archive = archive.absolute()
     folder = report_folder(archive)
     console.fields([("report", "building beside the archive")])
     problem = _run(session, archive, folder)
@@ -150,6 +152,9 @@ def _copy(session: Session, folder: Path) -> None:
     if not copy_to:
         return
     console = session.console
+    if _same_folder(copy_to, folder.parent):
+        # copy_to is wrapped/ itself: the report is there already, as the archive is
+        return
     final = copy_to / folder.name
     part = copy_to / f"{folder.name}.part"
     try:
@@ -158,6 +163,9 @@ def _copy(session: Session, folder: Path) -> None:
             raise OSError(f"{copy_to} is not a folder that exists")
         if os.path.lexists(final):
             raise OSError(f"{final.name} is there already")
+        if os.path.lexists(part):
+            # left by a copy the power or a kill stopped: it is replaced, as the archive's .part is
+            _discard(part)
         part.mkdir(mode=0o700)
     except OSError as exc:
         console.warn(f"the report was not copied to {copy_to}: {exc}")
@@ -173,6 +181,20 @@ def _copy(session: Session, folder: Path) -> None:
         console.warn(f"the report was not copied to {copy_to}: {reason}")
         return
     console.ok(f"copy {final}")
+
+
+def _same_folder(one: Path, other: Path) -> bool:
+    try:
+        return one.is_dir() and os.path.samefile(one, other)
+    except OSError:
+        return False
+
+
+def _discard(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
 
 
 def _copy_into(source: Path, dest: Path) -> None:

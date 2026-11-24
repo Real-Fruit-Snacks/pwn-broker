@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.13 (unreleased)
+
+Fixed: with a relative `home` or `PWN_BROKER_HOME`, `finish` warned that the report was not built, because pwn-report runs in the archive's folder and was given paths from where pwn-broker was started. With `copy_to` set to `wrapped/` itself, every `finish` warned that the report was there already; it now makes no copy, as the report is already there. A `.part` folder left in `copy_to` by a report copy that was cut off, by a power cut for instance, made every later copy of that report fail; it is now replaced, as the archive's `.part` file is.
+
 ## v0.1.12
 
 With the `report` tool in the box, `finish` builds a private report from the finished archive and puts it beside it, `<box folder>.finished.report`, after the archive is written and before the tools come off. `tool install report` gets [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report) from pwn-shop. `finish`'s summary says whether a report will be built. A box finished again after it is reopened or imported puts its report beside the first, as `.report-2`; one is never replaced. With `copy_to` the report is copied there too. A report that fails, or takes longer than 600 seconds, is a `warn` line, and `finish` goes on.

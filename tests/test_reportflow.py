@@ -261,3 +261,70 @@ def test_the_copy_is_as_private_as_the_report(session, archive, stand_in, tmp_pa
     session.settings = Settings(copy_to=out)
     folder = reportflow.build(session, archive)
     assert stat.S_IMODE((out / folder.name).stat().st_mode) == 0o700
+
+
+def test_a_relative_home_still_gets_its_report(session, archive, stand_in, tmp_path, monkeypatch):
+    # home = "pwn-broker" in config.toml: pwn-report runs in the archive's folder, so every path it
+    # is given is whole
+    from pwn_broker.paths import AppPaths
+
+    stand_in("ok")
+    monkeypatch.chdir(tmp_path)
+    session.paths = AppPaths(opt=session.paths.opt, home=Path("home"))
+    relative = Path("home") / "wrapped" / archive.name
+    folder = reportflow.build(session, relative)
+    assert lines(session, "warn") == []
+    assert (tmp_path / "home" / "wrapped" / "2026-11-14_htb_forest.finished.report" / "report.md").is_file()
+    assert folder is not None and folder.is_dir()
+
+
+def test_a_copy_to_that_is_the_wrapped_folder_is_no_warning(session, archive, stand_in):
+    # copy_to = wrapped/: the report is already there, as the archive is
+    stand_in("ok")
+    session.settings = Settings(copy_to=archive.parent)
+    folder = reportflow.build(session, archive)
+    assert folder is not None and folder.is_dir()
+    assert lines(session, "warn") == []
+    assert sorted(p.name for p in archive.parent.iterdir()) == sorted([archive.name, folder.name, "ran.json"])
+
+
+def test_a_part_folder_left_by_a_stopped_copy_is_no_obstacle(session, archive, stand_in, tmp_path):
+    # the power went during an earlier copy: its .part folder is replaced, as the archive's .part is
+    stand_in("ok")
+    out = tmp_path / "copies"
+    left = out / "2026-11-14_htb_forest.finished.report.part"
+    left.mkdir(parents=True)
+    (left / "report.md").write_text("half a copy")
+    session.settings = Settings(copy_to=out)
+    folder = reportflow.build(session, archive)
+    copy = out / folder.name
+    assert lines(session, "warn") == []
+    assert (copy / "report.md").read_text() == "# a report\n"
+    assert not list(out.glob("*.part"))
+
+
+def test_the_report_is_built_in_the_archive_folder(session, archive, stand_in):
+    import json
+
+    stand_in("ok")
+    reportflow.build(session, archive)
+    ran = json.loads((archive.parent / "ran.json").read_text())
+    assert Path(ran["cwd"]) == archive.parent
+    assert ran["argv"] == ["build", str(archive), "-o", str(archive.parent / "2026-11-14_htb_forest.finished.report")]
+
+
+def test_a_stopped_report_has_ended_before_finish_goes_on(session, archive, stand_in, monkeypatch):
+    stand_in("slow")
+    seen = []
+    real_end = reportflow._end
+
+    def stopped(process, timeout):
+        seen.append(process)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(reportflow, "_wait", stopped)
+    monkeypatch.setattr(reportflow, "KILL_AFTER", 1)
+    monkeypatch.setattr(reportflow, "_end", real_end)
+    assert reportflow.build(session, archive) is None
+    (process,) = seen
+    assert process.poll() is not None
