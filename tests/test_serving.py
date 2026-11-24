@@ -200,6 +200,18 @@ def test_find_and_offered_leave_out_links(served, tmp_path):
     assert "/link.txt" not in [p for p, _ in serving.offered(folder, tools)]
 
 
+def test_a_name_that_is_a_tool_s_folder_is_the_tool_s_only(tmp_path):
+    # as the listing says: under a tool's name only the tool's own files are served
+    folder, tools = tmp_path / "upload", tmp_path / "tools"
+    (tools / "pspy").mkdir(parents=True)
+    (tools / "pspy" / "pspy64").write_bytes(b"tool")
+    (folder / "pspy").mkdir(parents=True)
+    (folder / "pspy" / "mine.txt").write_text("mine")
+    assert "/pspy/mine.txt" not in [p for p, _ in serving.offered(folder, tools)]
+    assert serving.find(folder, tools, f"/{SECRET}/pspy/mine.txt", SECRET) is None
+    assert serving.find(folder, tools, f"/{SECRET}/pspy/pspy64", SECRET) == tools / "pspy" / "pspy64"
+
+
 # ---- the marker
 
 

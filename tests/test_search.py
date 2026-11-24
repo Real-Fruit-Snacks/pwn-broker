@@ -81,6 +81,16 @@ def test_a_first_word_that_is_no_scope_is_searched_for(session, two):
     assert lines(session) == ["no hits for web01 in dc01"]
 
 
+def test_line_numbers_are_the_ones_vim_shows(session, two):
+    # pasted tool output can hold a form feed or a line separator, which vim keeps inside a line
+    loot = session.box.path / "targets" / "dc01" / "loot" / "dump.txt"
+    loot.write_bytes("page one\x0cstill line one\u2028and here\r\npassword on line two\n".encode("utf-8"))
+    dispatch(session, "search password")
+    shown = lines(session)
+    at = shown.index("targets/dc01/loot/dump.txt")
+    assert shown[at + 1] == "    2  password on line two"
+
+
 def test_search_with_no_hits(session, two):
     dispatch(session, "search all nothing-like-this")
     assert lines(session) == ["no hits for nothing-like-this in the box"]

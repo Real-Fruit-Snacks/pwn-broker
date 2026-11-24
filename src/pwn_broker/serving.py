@@ -539,7 +539,8 @@ def find(folder: Path, tools: Path, request_path: str, secret: str) -> Path | No
     parts = parts[1:]
     if not parts or any(p in (".", "..") or not _visible(p) or "\\" in p or "\0" in p for p in parts):
         return None
-    for root in ((tools, folder) if (tools / parts[0]).is_dir() else (folder,)):
+    # under a tool's name only the tool's own files, as the listing has it
+    for root in ((tools,) if (tools / parts[0]).is_dir() else (folder,)):
         candidate = root.joinpath(*parts)
         # a link anywhere on the way is refused, as the listing leaves links out
         steps = [root.joinpath(*parts[: n + 1]) for n in range(len(parts))]

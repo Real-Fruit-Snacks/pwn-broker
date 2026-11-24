@@ -24,6 +24,8 @@ Fixed: `serve` checked the free space for each upload on its own, so several upl
 
 Fixed: a tool package could name a command `nmap`, and `scan`, which runs the first `nmap` on the PATH, would then run the package's, as `/opt/pwn-broker/bin` comes first. `nmap` is now a reserved command name, as the other programs the app runs by name are.
 
+Fixed: `search` numbered lines as Python splits them, so after a form feed or a line separator in pasted output its line numbers were past vim's. It now counts lines as vim does. And `serve` served a file of the target's own under a tool's name, as `upload/pspy/mine.txt` beside the `pspy` tool, which its list of files leaves out; under a tool's name it now serves only the tool's files, as the list says.
+
 ## v0.1.12
 
 With the `report` tool in the box, `finish` builds a private report from the finished archive and puts it beside it, `<box folder>.finished.report`, after the archive is written and before the tools come off. `tool install report` gets [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report) from pwn-shop. `finish`'s summary says whether a report will be built. A box finished again after it is reopened or imported puts its report beside the first, as `.report-2`; one is never replaced. With `copy_to` the report is copied there too. A report that fails, or takes longer than 600 seconds, is a `warn` line, and `finish` goes on.
