@@ -288,7 +288,7 @@ cast     2026-11-14_1432.cast
 
 Every line of text starts with the time its last character was drawn; an empty line and a `---- <date> ----` line have no time. The app replays the `.cast` through a terminal model (`pyte`) at the recorded size. Colours and control sequences are dropped, a line redrawn in place appears once as it last stood, a wrapped line is joined back into one, and a full-screen program (vim, less, a menu) is one line saying when it ran; the `.cast` holds it.
 
-The text is written when the window closes, so a window still recording has none until then. `export`, `finish` and `replay` write it for any recording whose text is missing or older than its `.cast`, so a window that was killed still gets one. A `.cast` that cannot be read gets a `warn` line naming it and no text. So does one that takes longer to render than a minute plus 30 seconds for each megabyte of it, far more than a real recording needs; `replay` still plays it. `export`, `finish` and `replay` give all the recordings they write that time between them.
+The text is written when the window closes, so a window still recording has none until then. `export`, `finish` and `replay` write it for any recording whose text is missing or older than its `.cast`, so a window that was killed still gets one. A `.cast` that cannot be read gets a `warn` line naming it and no text. So does one that takes longer to render than a minute plus 30 seconds for each megabyte of it, far more than a real recording needs; `replay` still plays it. `export`, `finish` and `replay` give all the recordings they write that time between them, and each at most 10 seconds and 30 for each megabyte of its own.
 
 ### Replay, and the other commands
 
