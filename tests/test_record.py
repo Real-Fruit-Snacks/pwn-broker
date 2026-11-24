@@ -1,4 +1,5 @@
 import io
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -6,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from casts import TZ, write_cast
+from casts import TZ, cast_text, write_cast
 from helpers import NOW
 from pwn_broker import boxes, boxlock, privilege, record, recorder
 from pwn_broker.boxes import add_target
@@ -539,6 +540,24 @@ def test_a_cast_that_cannot_be_read_is_a_warning(make_env, opened, dc01, paths, 
     )
     assert not (opened.path / "targets" / "dc01" / "recordings" / "2026-11-14_1432.txt").exists()
 
+
+
+def test_a_text_copy_from_before_is_kept_when_the_cast_cannot_be_rendered(make_env, opened, dc01, paths, clock):
+    # an export while the window recorded wrote a text copy; the whole cast then fails further in
+    def run(argv, **kwargs):
+        cast = Path(argv[-1])
+        cast.with_suffix(".txt").write_text("box      forest\n\n14:32:07  whoami\n", encoding="utf-8")
+        cast.write_text(cast_text([]) + '[broken\n[1, "o", "b"]\n', encoding="utf-8")
+        os.utime(cast.with_suffix(".txt"), ns=(1_000_000_000_000, 1_000_000_000_000))
+        return subprocess.CompletedProcess(argv, 0)
+
+    env = make_env(run=run)
+    assert record.run(env, []) == 0
+    assert env.console.lines[3][1].startswith(
+        "the text copy of targets/dc01/recordings/2026-11-14_1432.cast is not up to date: line 2 is not a valid event"
+    )
+    text = (opened.path / "targets" / "dc01" / "recordings" / "2026-11-14_1432.txt").read_text(encoding="utf-8")
+    assert "whoami" in text and "\n[the text copy stops here: line 2 is not a valid event (" in text
 
 def _expected_env(env, extra):
     return {**recorder.base_env(env.paths, env.environ, "dc01"), **extra}

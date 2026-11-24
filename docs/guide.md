@@ -288,7 +288,7 @@ cast     2026-11-14_1432.cast
 
 Every line of text starts with the time its last character was drawn; an empty line and a `---- <date> ----` line have no time. The app replays the `.cast` through a terminal model (`pyte`) at the recorded size. Colours and control sequences are dropped, a line redrawn in place appears once as it last stood, a wrapped line is joined back into one, and a full-screen program (vim, less, a menu) is one line saying when it ran; the `.cast` holds it.
 
-The text is written when the window closes, so a window still recording has none until then. `export`, `finish` and `replay` write it for any recording whose text is missing or older than its `.cast`, so a window that was killed still gets one. A `.cast` that cannot be read gets a `warn` line naming it and no text.
+The text is written when the window closes, so a window still recording has none until then. `export`, `finish` and `replay` write it for any recording whose text is missing or older than its `.cast`, so a window that was killed still gets one. A `.cast` whose first line cannot be read gets a `warn` line naming it and no text. One that fails further in, at a bad line or on output the terminal model cannot handle, gets a `warn` line and a text copy that says why. One that takes longer to render than 60 seconds for each megabyte of it and up to 10 seconds more from a minute that all the recordings one `export`, `finish` or `replay` writes share (`record` gives its own recording the whole minute) gets a `warn` line too, and a text copy that says it took too long; `replay` still plays it. Neither is tried again until its `.cast` changes: delete that text copy to try again. One that already has a text copy, from an `export` while its window recorded for instance, keeps it, with a last line saying where it stops, and the `warn` line says it is not up to date. Once the shared minute is spent, the first recording that runs out of time or fails ends the rendering, and a `warn` line says how many are left for the next time.
 
 ### Replay, and the other commands
 
@@ -369,7 +369,7 @@ A Python tool can bring its own Python instead of using Kali's. Such a tool requ
 - The runtime's interpreter and the `pip` it carries are what run during the install: they make the tool's virtual environment and install the bundled wheels into it, isolated from your shell's settings (`-I`, `pip --isolated`, no `PYTHON*` or `PIP_*` variables, the tool's own folder as the working directory).
 - The first such tool on a machine costs the runtime: a download the app shows as 34 MB, about 100 MB unpacked, and the zip, which stays in the download cache until `tool cache clear`. A runtime carries its own OpenSSL and other libraries, fixed when a new build of the runtime is published, not when Kali updates.
 
-Build 3 of `certipy` and `targetedkerberoast` requires a runtime, and is the only build of each that is published: builds 1 and 2 were withdrawn on 2026-11-15, before any box had used them. The other four tools need no Python. The app still reads a package that runs on Kali's own Python (schema 1), and such a tool says so if Kali's Python cannot make its environment; none is published.
+Build 3 of `certipy` and `targetedkerberoast` requires a runtime, and is the only build of each that is published: builds 1 and 2 were withdrawn on 2026-11-15, before any box had used them. The tools that are not Python need no Python at all. The app still reads a package that runs on Kali's own Python (schema 1), and such a tool says so if Kali's Python cannot make its environment; none is published.
 
 ### Playbooks
 
@@ -624,7 +624,7 @@ Unpacking refuses any entry that would land outside the box folder, and an archi
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `home` | `~/pwn-broker` | Where `active/`, `wrapped/` and `tools.log` live |
+| `home` | `~/pwn-broker` | Where `active/`, `wrapped/` and `tools.log` live; a whole path, as `copy_to` is |
 | `copy_to` | not set | A second folder every finished archive, report and export is also copied to |
 | `default_platform` | `htb` | Platform used when a box is created |
 | `terminal` | `x-terminal-emulator` | What opens the note window |

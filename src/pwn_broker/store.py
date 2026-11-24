@@ -9,6 +9,8 @@ from pathlib import Path
 import tomli_w
 
 from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
+from pwn_broker.hosts import BOX_ID, plain_ip
+from pwn_broker.paths import safe_name
 from pwn_broker.model import (
     Box,
     Cred,
@@ -180,6 +182,28 @@ _FILE = {
 }  # fmt: skip
 
 
+def _box_id(value: str) -> str:
+    # the id names the box's folders under /opt/pwn-broker/run and marks its /etc/hosts lines:
+    # one plain name, as the hosts file takes it
+    if not BOX_ID.fullmatch(value) or value in (".", ".."):
+        raise ValueError(f"not a box ID: {value!r}")
+    return value
+
+
+def _target(file: Path, data: dict) -> Target:
+    # as the app makes one: an imported archive's target names paths in the box and gives nmap
+    # its address, so a name that is not its folder's, or an address that is not one, is refused
+    target = _row(Target, data, _TARGET, "target")
+    if target.name != file.parent.name or safe_name(target.name) != target.name:
+        raise ValueError(f"the target name {target.name!r} is not the name of its folder")
+    for ip in target.ips:
+        if not isinstance(ip, str):
+            raise TypeError("target.ips has the wrong type")
+        if not plain_ip(ip):
+            raise ValueError(f"not an IP address: {ip!r}")
+    return target
+
+
 def _row(cls, row, kinds: dict, label: str):
     # the listed fields have the right types; a field the model does not have is still refused
     return cls(**{**row, **_checked(row, kinds, label)})
@@ -237,8 +261,10 @@ def load_box(folder: Path) -> Box:
             "schema", "id", "name", "platform", "os", "difficulty", "status",
             "started", "finished", "last_target", "flags", "tools", "hosts", "vpn",
         }  # fmt: skip
+        fields = _checked(data, _BOX, "box")
+        _box_id(fields["id"])
         return Box(
-            **_checked(data, _BOX, "box"),
+            **fields,
             finished=_optional(data, "finished", datetime, "box"),
             last_target=_optional(data, "last_target", str, "box"),
             flags=_flags(data.get("flags", {})),
@@ -262,7 +288,7 @@ def load_targets(box: Box) -> list[Target]:
     for file in sorted((box.path / "targets").glob("*/target.toml")):
         data = _read_checked(file, MAX_SMALL_TOML_BYTES)
         data.pop("schema")
-        targets.append(_build(file, lambda data=data: _row(Target, data, _TARGET, "target")))
+        targets.append(_build(file, lambda file=file, data=data: _target(file, data)))
     return sorted(targets, key=lambda t: t.added)
 
 

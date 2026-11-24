@@ -1,4 +1,4 @@
-from pwn_broker import boxes, hostflow, note, targetflow
+from pwn_broker import boxes, hostflow, note, scanning, serving, targetflow
 from pwn_broker.model import Target
 from pwn_broker.paths import safe_name
 from pwn_broker.questions import ask_target
@@ -100,11 +100,22 @@ def _not_recording(session: Session, target: Target, doing: str) -> None:
         )
 
 
+def _not_in_use(session: Session, target: Target, doing: str) -> None:
+    """A window recording for it, a scan of it and serve serving it each use the target's folder."""
+    _not_recording(session, target, doing)
+    checks = dict(alive=session.pid_alive, started=session.pid_started, cmdline=session.cmdline)
+    if scanning.running(session.paths, session.box.id, target.name, **checks):
+        raise ValueError(f"a scan of {target.name} is running. wait for it or scan stop, then {doing} it")
+    marker = serving.ours(session.paths, **checks)
+    if marker is not None and marker.box_id == session.box.id and marker.target == target.name:
+        raise ValueError(f"serve is serving {target.name}'s files. serve stop, then {doing} it")
+
+
 @command("target rename", "rename a target and its folder", "<target>")
 def target_rename(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, ("target name",))
     target = boxes.find_target(session.targets, name)
-    _not_recording(session, target, "rename")
+    _not_in_use(session, target, "rename")
     old = target.name
     new = session.console.ask("new name")
     try:
@@ -115,8 +126,8 @@ def target_rename(session: Session, args: list[str]) -> None:
         raise ValueError(f"{old} is already its name")
     before = note.title_text(target)
     had_line = old in session.box.hosts
-    # again: a window may have started recording while the question waited
-    _not_recording(session, target, "rename")
+    # again: a window, a scan or serve may have started while the question waited
+    _not_in_use(session, target, "rename")
     boxes.rename_target(session.box, session.targets, old, new, creds=session.creds)
     if session.current is target:
         set_current(session, target)
@@ -131,13 +142,13 @@ def target_rename(session: Session, args: list[str]) -> None:
 def target_remove(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, ("target name",))
     target = boxes.find_target(session.targets, name)
-    _not_recording(session, target, "remove")
+    _not_in_use(session, target, "remove")
     boxes.ensure_removable(session.box, target.name)
     if not session.console.confirm(f"remove target {target.name}?"):
         return
     had_line = target.name in session.box.hosts
-    # again: a window may have started recording while the question waited
-    _not_recording(session, target, "remove")
+    # again: a window, a scan or serve may have started while the question waited
+    _not_in_use(session, target, "remove")
     boxes.remove_target(session.box, session.targets, target.name)
     if session.current is target:
         set_current(session, session.targets[0] if session.targets else None)

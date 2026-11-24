@@ -11,6 +11,7 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -18,6 +19,7 @@ import string
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable
@@ -257,9 +259,23 @@ def offered(folder: Path, tools: Path) -> list[tuple[str, Path]]:
     return mine + _walk(tools, "/")
 
 
+# starting with a letter: PowerShell reads a word starting with - as a parameter, and one starting
+# with a digit as a number (0x10, 1kb)
+_PLAIN_NAME = re.compile(r"[A-Za-z][A-Za-z0-9._-]*")
+# PowerShell takes each of these as a single quote, and a doubled one as that character
+_SINGLE_QUOTES = "'\u2018\u2019\u201a\u201b"
+
+
+def _powershell_word(name: str) -> str:
+    # pasted into PowerShell on the target: a name with a space, ; or $ in it is one quoted word
+    if _PLAIN_NAME.fullmatch(name):
+        return name
+    return "'" + "".join(c * 2 if c in _SINGLE_QUOTES else c for c in name) + "'"
+
+
 def download_lines(os_name: str, link: str, name: str) -> list[str]:
     """The line to paste on the target for one file, by the box's OS; both kinds when it is neither."""
-    windows = f"iwr {link} -OutFile {name}"
+    windows = f"iwr {link} -OutFile {_powershell_word(name)}"
     linux = f"wget {link}"
     kind = os_name.strip().lower()
     if kind.startswith("win"):
@@ -312,13 +328,35 @@ def receive_into(loot: Path, name: str, size: int, reader) -> Path:
     """Write exactly `size` bytes from `reader` into loot/, under `name` or, when that is taken,
     `name-2` and on: never over a file that is there. Written to a temporary name first, which
     the box's file scan leaves out, so a cut transfer leaves nothing behind."""
-    from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
-
     if loot.is_symlink():
         raise OSError(f"{loot} is a link")
     loot.mkdir(parents=True, exist_ok=True)
-    if size > shutil.disk_usage(loot).free - ROOM_LEFT:
-        raise NoRoom()
+    # each upload has a thread of its own: it counts what the others still have to write
+    with _PROMISED.lock:
+        if size > shutil.disk_usage(loot).free - ROOM_LEFT - _PROMISED.bytes:
+            raise NoRoom()
+        _PROMISED.bytes += size
+    try:
+        return _write_into(loot, name, size, reader)
+    finally:
+        with _PROMISED.lock:
+            _PROMISED.bytes -= size
+
+
+class _Promised:
+    """The bytes the uploads still being written may yet take."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.bytes = 0
+
+
+_PROMISED = _Promised()
+
+
+def _write_into(loot: Path, name: str, size: int, reader) -> Path:
+    from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
+
     tmp = loot / f"{TEMP_PREFIX}{secrets.token_hex(8)}{TEMP_SUFFIX}"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     fd = os.open(tmp, flags, 0o600)
@@ -505,7 +543,8 @@ def find(folder: Path, tools: Path, request_path: str, secret: str) -> Path | No
     parts = parts[1:]
     if not parts or any(p in (".", "..") or not _visible(p) or "\\" in p or "\0" in p for p in parts):
         return None
-    for root in ((tools, folder) if (tools / parts[0]).is_dir() else (folder,)):
+    # under a tool's name only the tool's own files, as the listing has it
+    for root in ((tools,) if (tools / parts[0]).is_dir() else (folder,)):
         candidate = root.joinpath(*parts)
         # a link anywhere on the way is refused, as the listing leaves links out
         steps = [root.joinpath(*parts[: n + 1]) for n in range(len(parts))]

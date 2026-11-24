@@ -67,6 +67,16 @@ def test_export_copies_to_copy_to(session, tmp_path):
     assert len(kinds(session, "ok")) == 2
 
 
+def test_a_copy_to_that_is_the_wrapped_folder_copies_nothing(session):
+    # the archive is there already: copying it over itself only costs the time and says "copy"
+    session.paths.wrapped.mkdir(parents=True, exist_ok=True)
+    session.settings = Settings(copy_to=session.paths.wrapped)
+    path = export_box(session, **NOFIX)
+    assert path.parent == session.paths.wrapped and path.is_file()
+    assert not any(text.startswith("copy ") for text in kinds(session, "ok"))
+    assert sorted(p.name for p in session.paths.wrapped.iterdir()) == [path.name]
+
+
 def test_export_failure_reports_and_returns_none(session, monkeypatch):
     def boom(*args, **kwargs):
         raise ArchiveError("disk full")
@@ -982,6 +992,25 @@ def test_import_of_a_new_box_that_cannot_be_opened_leaves_nothing(paths, tmp_pat
     assert import_box(paths, Settings(), console, archive, lambda: NOW) is None
     assert [k for k, _ in console.lines] == ["fail"]
     assert not paths.active.exists() or list(paths.active.iterdir()) == []
+
+
+def test_import_refuses_a_target_whose_name_leaves_the_box(session, tmp_path):
+    # a crafted archive: its target's name would build paths outside the box folder
+    box_toml = (session.box.path / "box.toml").read_text(encoding="utf-8").replace(session.box.id, "id-crafted")
+    target = (session.box.path / "targets" / "dc01" / "target.toml").read_text(encoding="utf-8")
+    assert 'name = "dc01"' in target
+    target = target.replace('name = "dc01"', 'name = "../../../escaped"')
+    archive = boxless_archive(
+        tmp_path / "x.tar.gz",
+        "2026-11-14_htb_crafted",
+        {"box.toml": box_toml.encode(), "targets/dc01/target.toml": target.encode()},
+    )
+    console = FakeConsole()
+    assert import_box(session.paths, Settings(), console, archive, lambda: NOW) is None
+    [line] = [t for k, t in console.lines if k == "fail"]
+    assert line.startswith("import failed: the box in the archive cannot be opened: ")
+    assert not (session.paths.active / "2026-11-14_htb_crafted").exists()
+    assert not (session.paths.home / "escaped").exists()
 
 
 def test_export_and_finish_go_through_with_a_file_whose_name_is_not_utf8(session):

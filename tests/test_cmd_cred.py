@@ -747,7 +747,12 @@ def test_cred_list_flags_a_secret_with_a_tab(session):
     assert info == [NOTE_ONE.format(2)]
 
 
-@pytest.mark.parametrize("secret", [" lead", "trail ", "  both  ", "\u00a0nbsp", "x\x1b[0m", "a\x00b"])
+@pytest.mark.parametrize(
+    "secret",
+    [" lead", "trail ", "  both  ", "\u00a0nbsp", "x\x1b[0m", "a\x00b",
+     # the format characters and separators the console shows as ?
+     "pass\u202eword", "pass\u200bword", "pass\u2028word", "pass\u2029word"],
+)  # fmt: skip
 def test_cred_list_flags_edge_space_and_control_characters(session, secret):
     _seed(session, secret=secret)
     rows, info = _list(session)

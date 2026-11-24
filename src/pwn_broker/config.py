@@ -51,6 +51,14 @@ def _expand(text: str, home_dir: Path) -> Path:
     return Path(text)
 
 
+def _whole(path: Path, label: str) -> Path:
+    # the note window, serve, scan and record each run from a folder of their own, so a relative
+    # path would name a different place in each
+    if not (path.as_posix().startswith("/") or path.is_absolute()):
+        raise ConfigError(f"{label} must be a whole path, such as ~/pwn-broker, not {str(path)!r}")
+    return path
+
+
 def _index_setting(text: str | None, home_dir: Path) -> str | None:
     if not text:
         return None
@@ -76,7 +84,8 @@ def _typed(data: dict, key: str, kind: type, path: Path):
 
 
 def load(env: Mapping[str, str], home_dir: Path) -> tuple[AppPaths, Settings]:
-    opt = Path(env["PWN_BROKER_OPT"]) if "PWN_BROKER_OPT" in env else DEFAULT_OPT
+    # an empty one is "not set", as PWN_BROKER_HOME is, never the current folder
+    opt = _whole(Path(env["PWN_BROKER_OPT"]), "PWN_BROKER_OPT") if env.get("PWN_BROKER_OPT") else DEFAULT_OPT
     config_file = opt / "config.toml"
     data = _read_toml(config_file)
 
@@ -85,8 +94,8 @@ def load(env: Mapping[str, str], home_dir: Path) -> tuple[AppPaths, Settings]:
     defaults = Settings()
     settings = Settings(
         # an empty string is "not set", never the current folder
-        home=_expand(home_text, home_dir) if home_text else None,
-        copy_to=_expand(copy_text, home_dir) if copy_text else None,
+        home=_whole(_expand(home_text, home_dir), f"{config_file}: home") if home_text else None,
+        copy_to=_whole(_expand(copy_text, home_dir), f"{config_file}: copy_to") if copy_text else None,
         default_platform=_typed(data, "default_platform", str, config_file)
         or defaults.default_platform,
         terminal=_typed(data, "terminal", str, config_file) or defaults.terminal,
@@ -106,7 +115,7 @@ def load(env: Mapping[str, str], home_dir: Path) -> tuple[AppPaths, Settings]:
     if settings.home is not None:
         home = settings.home
     elif env.get("PWN_BROKER_HOME"):
-        home = Path(env["PWN_BROKER_HOME"])
+        home = _whole(Path(env["PWN_BROKER_HOME"]), "PWN_BROKER_HOME")
     else:
         home = home_dir / "pwn-broker"
     return AppPaths(opt=opt, home=home), settings

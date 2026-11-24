@@ -514,6 +514,54 @@ def test_a_target_with_a_value_of_the_wrong_kind_is_a_store_error(box, dc01, cha
 
 
 @pytest.mark.parametrize(
+    "change",
+    [
+        # an imported archive's target.toml: its name builds paths, its addresses reach nmap
+        set_to("name", "../../../escaped"),
+        set_to("name", "other"),
+        set_to("ips", ["--script=/tmp/x.nse", "10.10.10.161"]),
+        set_to("ips", ["10.10.10.161 -iL /etc/passwd"]),
+        # ipaddress takes any character in an IPv6 scope ID
+        set_to("ips", ["fe80::1%;id"]),
+        set_to("ips", ["fe80::1%$(id)"]),
+        set_to("ips", ["fe80::1%a\nb"]),
+        # ssh and URLs read the host after an @
+        set_to("ips", ["fe80::1%a@evil.example"]),
+    ],
+)
+def test_a_target_the_app_would_not_have_made_is_a_store_error(box, dc01, change):
+    rewrite(box.path / "targets" / "dc01" / "target.toml", change)
+    with pytest.raises(StoreError, match="invalid content"):
+        load_targets(box)
+
+
+@pytest.mark.parametrize("ip", ["fe80::1%eth0", "fe80::1%wg+0", "fe80::1%br-1a2b", "fe80::1%2"])
+def test_a_link_local_address_with_an_interface_still_loads(box, dc01, ip):
+    # an interface may be named with a +, as Linux allows; a box an earlier version made opens
+    rewrite(box.path / "targets" / "dc01" / "target.toml", set_to("ips", [ip, "10.10.10.161"]))
+    [target] = load_targets(box)
+    assert target.ips == [ip, "10.10.10.161"]
+
+
+def test_a_target_whose_folder_is_not_a_name_the_app_makes_is_a_store_error(box, dc01):
+    folder = box.path / "targets" / "-Evil"
+    folder.mkdir()
+    data = read_toml(box.path / "targets" / "dc01" / "target.toml")
+    data["name"] = "-Evil"
+    write_toml(folder / "target.toml", data)
+    with pytest.raises(StoreError, match="invalid content"):
+        load_targets(box)
+
+
+@pytest.mark.parametrize("box_id", ["..", ".", "../outside", "a b", ""])
+def test_a_box_id_that_is_not_one_plain_name_is_a_store_error(box, box_id):
+    # the id names folders under /opt/pwn-broker/run and marks the box's /etc/hosts lines
+    rewrite(box.path / "box.toml", set_to("id", box_id))
+    with pytest.raises(StoreError, match="invalid content"):
+        load_box(box.path)
+
+
+@pytest.mark.parametrize(
     "cred",
     [
         "none",

@@ -688,7 +688,7 @@ RESERVED = (
     "sh bash dash zsh fish env "
     "sudo sudoedit su doas pkexec run0 passwd login ssh scp sftp gpg "
     "python python3 pip pip3 "
-    "chown cp rm kill ip ping tar vim openvpn x-terminal-emulator pwn-broker record asciinema "
+    "chown cp rm kill ip ping tar vim openvpn x-terminal-emulator pwn-broker record asciinema nmap "
     "sed cut mkdir cat ls mv ln vi grep awk find head tail chmod id uname test "
     "whoami hostname sleep touch tee which ps tput dircolors xargs timeout nohup "
     "less more pager man nano editor "
@@ -755,10 +755,10 @@ def test_every_program_the_app_runs_by_name_is_reserved():
     # /opt/pwn-broker/bin is first on PATH, so a launcher by one of these names would be run by
     # the app itself, as root when the app is. The scan sees only an argument list written out
     # where a program is started; one built in a variable or returned from a function has to be
-    # named in `named` below by hand, as vim, sudo, the VPN and the terminal are
+    # named in `named` below by hand, as vim, sudo, nmap, the VPN and the terminal are
     scanned = _programs_named_at_call_sites()
     assert {"chown", "cp", "ping", "ip", "kill"} <= scanned  # the scan still finds them
-    named = scanned | {"sudo", "vim", vpnctl.COMMAND, config.Settings().terminal}
+    named = scanned | {"sudo", "vim", "nmap", vpnctl.COMMAND, config.Settings().terminal}
     assert sorted(n for n in named if "/" not in n and toolpkg.valid_command_name(n)) == []
 
 

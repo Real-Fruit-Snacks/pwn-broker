@@ -138,6 +138,16 @@ call Put('normal_bg', synIDattr(hlID('Normal'), 'bg#', 'gui'))
     assert got["normal_bg"].upper() == "#0C0D10"
 
 
+def test_no_history_or_register_is_kept_outside_the_box(box, note, work):
+    # a password typed into a playbook's run block is in register q and the :s history: vim's
+    # ~/.viminfo would keep both after finish, outside the box
+    got = run_vim(box.path, work, r"""
+call Put('viminfo', &viminfo)
+call Put('viminfofile', &viminfofile)
+""")
+    assert got["viminfo"] == "" and got["viminfofile"] == "NONE"
+
+
 def test_target_folds_start_closed_and_show_their_title(box, note, work, dc01, web):
     got = run_vim(box.path, work, r"""
 let box_end = 1

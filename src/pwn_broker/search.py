@@ -71,10 +71,19 @@ def _text(path: Path) -> str | None:
     return data.decode("utf-8", "replace")
 
 
+def vim_lines(text: str) -> list[str]:
+    """The lines as vim numbers them: split at line breaks alone, a CR before one dropped. Python's
+    splitlines also splits at a form feed or a line separator, which pasted output can hold."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return [line[:-1] if line.endswith("\r") else line for line in lines]
+
+
 def note_section(text: str, target: str) -> list[tuple[int, str]]:
     """The lines of one target's section of the note, with their line numbers: from its fold's
     start to the matching end, nested folds included. Empty when the target has none."""
-    lines = text.splitlines()
+    lines = vim_lines(text)
     for n, line in enumerate(lines):
         if not line.startswith("Target: ") or n == 0 or lines[n - 1].strip() != FOLD_START:
             continue
@@ -124,7 +133,7 @@ def search(box_path: Path, text: str, target: str | None) -> Result:
         note = box_path / NOTE_NAME
         body = _text(note) if note.is_file() and not note.is_symlink() else None
         if body is not None:
-            look(NOTE_NAME, note_section(body, target), template_lines(body.splitlines()))
+            look(NOTE_NAME, note_section(body, target), template_lines(vim_lines(body)))
     for root in roots:
         for path in _files(root, box_path):
             rel = path.relative_to(box_path).as_posix()
@@ -136,7 +145,7 @@ def search(box_path: Path, text: str, target: str | None) -> Result:
                 continue
             body = _text(path)
             if body is not None:
-                lines = body.splitlines()
+                lines = vim_lines(body)
                 template = template_lines(lines) if rel == NOTE_NAME else frozenset()
                 look(rel, enumerate(lines, start=1), template)
     return Result(hits, more, files, too_large, skipped)

@@ -1,4 +1,5 @@
 import os
+import unicodedata
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from typing import Protocol, TextIO
@@ -78,9 +79,19 @@ _CONTROLS = {
 _CELL_CONTROLS = {**_CONTROLS, 0x09: " "}
 
 
+# and the format characters, which reorder or hide text (a right-to-left override, an isolate, a
+# zero-width space), and the line and paragraph separators: text from a target or an archive must
+# show as what it is
+_HIDDEN = ("Cf", "Zl", "Zp")
+
+
 def shown(text: str, *, cell: bool = False) -> str:
-    """The text as the console writes it: each control character as "?" (and in a cell, a tab as a space)."""
-    return text.translate(_CELL_CONTROLS if cell else _CONTROLS)
+    """The text as the console writes it: each control or format character as "?" (and in a cell,
+    a tab as a space)."""
+    text = text.translate(_CELL_CONTROLS if cell else _CONTROLS)
+    if text.isascii():
+        return text
+    return "".join("?" if unicodedata.category(c) in _HIDDEN else c for c in text)
 
 
 def terminal_width(stream: TextIO) -> int | None:

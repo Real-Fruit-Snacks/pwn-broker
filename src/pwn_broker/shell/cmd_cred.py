@@ -93,8 +93,9 @@ def cred_add(session: Session, args: list[str]) -> None:
 
 
 def _table_hides(secret: str) -> bool:
-    # a table turns a tab into spaces and cannot show edge whitespace or control characters
-    return secret != secret.strip() or any(unicodedata.category(ch) == "Cc" for ch in secret)
+    # a table turns a tab into spaces and cannot show edge whitespace, or the control and format
+    # characters and the separators the console shows as ?
+    return secret != secret.strip() or any(unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") for ch in secret)
 
 
 @command("cred list", "list the credentials")
