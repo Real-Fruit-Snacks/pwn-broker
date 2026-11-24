@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime
 
 import pytest
@@ -398,6 +399,66 @@ def test_refresh_for_one_target_leaves_the_others(box):
     theirs = _cast_in(box, "web01", "2026-11-14_1432")
     _refresh(box, target="dc01")
     assert mine.with_suffix(".txt").exists() and not theirs.with_suffix(".txt").exists()
+
+
+# ---- the time a text copy may take: a few bytes can fill and clear a 1000 by 1000 screen
+
+FILL_AND_CLEAR = "\x1b#8\x1b[2J"
+
+
+def ticking(monkeypatch, step=1.0):
+    """casttext's clock, moving on by `step` seconds each time it is read."""
+    now = [0.0]
+
+    def clock():
+        now[0] += step
+        return now[0]
+
+    monkeypatch.setattr(casttext, "_clock", clock)
+    return now
+
+
+def test_a_recording_that_takes_too_long_to_render_gets_no_text_copy(tmp_path, monkeypatch):
+    ticking(monkeypatch)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 20)
+    path = write_cast(tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "o", "x\r\n")] * 50)
+    with pytest.raises(CastError, match="took longer than 20 seconds to render"):
+        casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
+    assert not path.with_suffix(".txt").exists()
+
+
+def test_the_time_allowed_grows_with_the_recording(tmp_path, monkeypatch):
+    # a real recording that size gets its text copy: the allowance is counted in its bytes
+    # pyte asks the screen once for each character it draws
+    ticking(monkeypatch, step=0.00001)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 1)
+    path = write_cast(tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "o", "x" * 70 + "\r\n")] * 4000)
+    out = casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
+    assert out.read_text(encoding="utf-8").count("x" * 70) == 4000
+
+
+def test_a_crafted_recording_is_stopped_in_about_the_time_it_is_allowed(tmp_path, monkeypatch):
+    # the real clock: each pair fills and clears the whole screen in a few bytes
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 2)
+    path = write_cast(
+        tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "o", FILL_AND_CLEAR * 400)], cols=300, rows=300
+    )
+    started = time.monotonic()
+    with pytest.raises(CastError, match="took longer than 2 seconds to render"):
+        casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
+    assert time.monotonic() - started < 20
+
+
+def test_refresh_gives_all_its_recordings_one_allowance(box, monkeypatch):
+    # an archive of many small crafted casts cannot take the allowance once for each
+    now = ticking(monkeypatch)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 30)
+    for name in ("2026-11-14_1432", "2026-11-14_1500", "2026-11-14_1600"):
+        _cast_in(box, "dc01", name, events=[(0, "o", "x\r\n")] * 20)
+    console = _refresh(box)
+    warned = [text for kind, text in console.lines if kind == "warn"]
+    assert warned and all("took longer than 30 seconds to render" in text for text in warned)
+    assert now[0] < 30 + 3 * 25
 
 
 def test_cast_files_are_in_name_order_and_only_casts(box):

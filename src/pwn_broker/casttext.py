@@ -2,6 +2,7 @@
 
 import copy
 import re
+import time
 import unicodedata
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
@@ -19,6 +20,50 @@ from pwn_broker.model import Box
 
 # private modes that switch to the alternate screen
 _ALTERNATE = frozenset({1049, 1047, 47})
+
+# The time a text copy may take. pyte's work is counted in the screen's cells, not in the cast's
+# bytes: three bytes fill a 1000 by 1000 screen and four clear it, so a crafted cast of a few
+# hundred bytes took minutes. A cast gets this many seconds and this many more for each megabyte
+# of it, room for a real recording that size on a slow machine; one that takes longer gets no text
+# copy. refresh gives the casts it writes one allowance between them.
+RENDER_SECONDS = 60
+RENDER_SECONDS_PER_MB = 30
+_clock = time.monotonic
+
+
+class Allowance(NamedTuple):
+    deadline: float
+    seconds: int
+
+
+def allowance(size: int) -> Allowance:
+    """From now, for casts of `size` bytes in all."""
+    seconds = RENDER_SECONDS + RENDER_SECONDS_PER_MB * size / 1_000_000
+    return Allowance(_clock() + seconds, round(seconds))
+
+
+class _TooLong(Exception):
+    pass
+
+
+class _Timed:
+    """The screen, with the deadline checked before each thing the stream asks of it."""
+
+    def __init__(self, screen: pyte.Screen, deadline: float) -> None:
+        self._screen = screen
+        self._deadline = deadline
+
+    def __getattr__(self, name: str):
+        value = getattr(self._screen, name)
+        if not callable(value):
+            return value
+
+        def timed(*args, **kwargs):
+            if _clock() > self._deadline:
+                raise _TooLong
+            return value(*args, **kwargs)
+
+        return timed
 
 
 class _Line(NamedTuple):
@@ -334,10 +379,13 @@ class _Clock:
             yield f"{self.time_of(line.time)}  {text}"
 
 
-def render(header: Header, events: Iterable[tuple[float, str, str]], tz: tzinfo) -> Iterator[str]:
-    """The body lines of the text copy, without line breaks."""
+def render(
+    header: Header, events: Iterable[tuple[float, str, str]], tz: tzinfo, deadline: float | None = None
+) -> Iterator[str]:
+    """The body lines of the text copy, without line breaks; _TooLong past the deadline."""
     screen = _TextScreen(header.cols, header.rows)
-    stream = pyte.Stream(screen)
+    drawn = screen if deadline is None else _Timed(screen, deadline)
+    stream = pyte.Stream(drawn)
     clock = _Clock(header.timestamp, tz)
     last = 0.0
     for elapsed, code, data in events:
@@ -345,7 +393,7 @@ def render(header: Header, events: Iterable[tuple[float, str, str]], tz: tzinfo)
         if code == "o":
             stream.feed(data)
         elif code == "r" and (size := _size(data)):
-            screen.resize(lines=size[1], columns=size[0])
+            drawn.resize(lines=size[1], columns=size[0])
         if screen.taken:
             yield from clock.lines(screen.taken)
             screen.taken.clear()
@@ -366,12 +414,19 @@ def _started(cast_path: Path, header: Header, tz: tzinfo) -> str:
         raise CastError(cast_path, f"the start time {header.timestamp} cannot be shown as a date") from exc
 
 
-def write(cast_path: Path, *, box_name: str, box_id: str, target: str, tz: tzinfo) -> Path:
+def write(
+    cast_path: Path, *, box_name: str, box_id: str, target: str, tz: tzinfo, allowed: Allowance | None = None
+) -> Path:
     header = read_header(cast_path)
     # first: every time in the text is the start time plus a little
     started = _started(cast_path, header, tz)
+    if allowed is None:
+        allowed = allowance(cast_path.stat().st_size)
     try:
-        body = list(render(header, events(cast_path), tz))
+        body = list(render(header, events(cast_path), tz, allowed.deadline))
+    except _TooLong:
+        reason = f"it took longer than {allowed.seconds} seconds to render; replay still plays it"
+        raise CastError(cast_path, reason) from None
     except (CastError, OSError):
         raise
     except Exception as exc:  # pyte's own failures on input it cannot handle
@@ -424,12 +479,21 @@ def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None
     A recording still being written is read as far as its last whole line. A cast that cannot be
     read gets one warn line and no text; the others are still written.
     """
-    for cast_path in cast_files(box, target):
+    casts = cast_files(box, target)
+    size = 0
+    for cast_path in casts:
+        try:
+            if stale(cast_path):
+                size += cast_path.stat().st_size
+        except OSError:
+            pass  # said below, when its text copy is written
+    allowed = allowance(size)
+    for cast_path in casts:
         shown = cast_path.relative_to(box.path).as_posix()
         target_name = cast_path.parent.parent.name
         try:
             if stale(cast_path):
-                write(cast_path, box_name=box.name, box_id=box.id, target=target_name, tz=tz)
+                write(cast_path, box_name=box.name, box_id=box.id, target=target_name, tz=tz, allowed=allowed)
         except CastError as exc:
             console.warn(f"no text copy of {shown}: {exc.reason}")
         except OSError as exc:
