@@ -425,6 +425,16 @@ def _started(cast_path: Path, header: Header, tz: tzinfo) -> str:
         raise CastError(cast_path, f"the start time {header.timestamp} cannot be shown as a date") from exc
 
 
+def _head(cast_path: Path, box_name: str, box_id: str, target: str, started: str) -> list[str]:
+    return [
+        f"box      {box_name}  {box_id}",
+        f"target   {target}",
+        f"started  {started}",
+        f"cast     {cast_path.name}",
+        "",
+    ]
+
+
 def write(
     cast_path: Path, *, box_name: str, box_id: str, target: str, tz: tzinfo, allowed: Allowance | None = None
 ) -> Path:
@@ -437,19 +447,16 @@ def write(
         body = list(render(header, events(cast_path), tz, allowed.deadline))
     except _TooLong:
         reason = f"it took longer than {allowed.seconds} seconds to render; replay still plays it"
+        # a text copy that says so, newer than its cast, so the next export, finish or replay does
+        # not spend the time on it again; deleting it tries again
+        note = f"[no text copy: it took longer than {allowed.seconds} seconds to make; replay plays the cast]"
+        store.write_text(text_path(cast_path), "\n".join([*_head(cast_path, box_name, box_id, target, started), note]) + "\n")
         raise CastError(cast_path, reason) from None
     except (CastError, OSError):
         raise
     except Exception as exc:  # pyte's own failures on input it cannot handle
         raise CastError(cast_path, f"could not be rendered ({type(exc).__name__})") from exc
-    lines = [
-        f"box      {box_name}  {box_id}",
-        f"target   {target}",
-        f"started  {started}",
-        f"cast     {cast_path.name}",
-        "",
-        *body,
-    ]
+    lines = [*_head(cast_path, box_name, box_id, target, started), *body]
     out = text_path(cast_path)
     store.write_text(out, "\n".join(lines) + "\n")
     return out
@@ -491,27 +498,18 @@ def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None
     read gets one warn line and no text; the others are still written.
     """
     casts = cast_files(box, target)
-    size = 0
-    for cast_path in casts:
-        try:
-            if stale(cast_path):
-                size += cast_path.stat().st_size
-        except OSError:
-            pass  # said below, when its text copy is written
-    shared = allowance(size)
+    # the base is shared, spent as the time goes by; the time by size is each cast's own, from its
+    # own start, so casts that overrun spend the base and never another cast's time
+    base_ends = _clock() + RENDER_SECONDS
     for cast_path in casts:
         shown = cast_path.relative_to(box.path).as_posix()
         target_name = cast_path.parent.parent.name
         try:
             if stale(cast_path):
-                # its own allowance or what is left of the shared one, whichever ends first, so a
-                # crafted cast early in the order cannot spend the time the others are given
-                own = allowance(cast_path.stat().st_size, base=RENDER_SECONDS_EACH)
-                if own.deadline <= shared.deadline:
-                    allowed = own
-                else:
-                    # what is left of the shared time, and its warning says that much
-                    allowed = Allowance(shared.deadline, max(0, round(shared.deadline - _clock())))
+                now = _clock()
+                base = min(RENDER_SECONDS_EACH, max(0.0, base_ends - now))
+                seconds = base + RENDER_SECONDS_PER_MB * cast_path.stat().st_size / 1_000_000
+                allowed = Allowance(now + seconds, round(seconds))
                 write(cast_path, box_name=box.name, box_id=box.id, target=target_name, tz=tz, allowed=allowed)
         except CastError as exc:
             console.warn(f"no text copy of {shown}: {exc.reason}")

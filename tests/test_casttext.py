@@ -418,13 +418,15 @@ def ticking(monkeypatch, step=1.0):
     return now
 
 
-def test_a_recording_that_takes_too_long_to_render_gets_no_text_copy(tmp_path, monkeypatch):
+def test_a_recording_that_takes_too_long_to_render_gets_a_text_copy_saying_so(tmp_path, monkeypatch):
     ticking(monkeypatch)
     monkeypatch.setattr(casttext, "RENDER_SECONDS", 20)
     path = write_cast(tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "o", "x\r\n")] * 50)
     with pytest.raises(CastError, match="took longer than 20 seconds to render"):
         casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
-    assert not path.with_suffix(".txt").exists()
+    text = path.with_suffix(".txt").read_text(encoding="utf-8")
+    assert text.endswith("[no text copy: it took longer than 20 seconds to make; replay plays the cast]\n")
+    assert "  x" not in text  # no line of the recording
 
 
 def test_the_time_allowed_grows_with_the_recording(tmp_path, monkeypatch):
@@ -436,20 +438,6 @@ def test_the_time_allowed_grows_with_the_recording(tmp_path, monkeypatch):
     out = casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
     assert out.read_text(encoding="utf-8").count("x" * 70) == 4000
     assert now[0] > 2
-
-
-def test_refresh_counts_the_size_of_the_casts_it_writes(box, monkeypatch):
-    # stale casts only: a fresh text copy costs nothing
-    stale = _cast_in(box, "dc01", "2026-11-14_1432", events=[(0, "o", "x\r\n")] * 30)
-    fresh = _cast_in(box, "web01", "2026-11-14_1500", events=[(0, "o", "y\r\n")] * 300)
-    fresh.with_suffix(".txt").write_text("old\n", encoding="utf-8")
-    os.utime(fresh, ns=(1_000_000_000_000, 1_000_000_000_000))
-    sizes = []
-    real = casttext.allowance
-    monkeypatch.setattr(casttext, "allowance", lambda size, base=None: sizes.append(size) or real(size, base))
-    _refresh(box)
-    # the shared allowance first, from the stale casts alone
-    assert sizes[0] == stale.stat().st_size and fresh.stat().st_size not in sizes
 
 
 def test_a_crafted_recording_is_stopped_in_about_the_time_it_is_allowed(tmp_path, monkeypatch):
@@ -492,7 +480,8 @@ def test_a_slow_cast_first_leaves_the_others_their_time(box, monkeypatch):
     console = _refresh(box)
     warned = [text for kind, text in console.lines if kind == "warn"]
     assert len(warned) == 1 and "2026-11-14_1432.cast" in warned[0]
-    assert real.with_suffix(".txt").exists() and not slow.with_suffix(".txt").exists()
+    assert "y" in real.with_suffix(".txt").read_text(encoding="utf-8")
+    assert "[no text copy: it took longer than" in slow.with_suffix(".txt").read_text(encoding="utf-8")
 
 
 def test_a_slow_cast_first_leaves_a_small_real_one_its_time(box, monkeypatch):
@@ -505,7 +494,8 @@ def test_a_slow_cast_first_leaves_a_small_real_one_its_time(box, monkeypatch):
     console = _refresh(box)
     warned = [text for kind, text in console.lines if kind == "warn"]
     assert len(warned) == 1 and "2026-11-14_1432.cast" in warned[0]
-    assert real.with_suffix(".txt").exists() and not slow.with_suffix(".txt").exists()
+    assert "y" in real.with_suffix(".txt").read_text(encoding="utf-8")
+    assert "[no text copy: it took longer than" in slow.with_suffix(".txt").read_text(encoding="utf-8")
 
 
 def test_a_cast_stopped_by_the_shared_time_says_the_time_it_had(box, monkeypatch):
@@ -522,6 +512,32 @@ def test_a_cast_stopped_by_the_shared_time_says_the_time_it_had(box, monkeypatch
     assert "took longer than 25 seconds" in warned[0]
     left = int(re.search(r"took longer than (\d+) seconds", warned[1])[1])
     assert left < 6
+
+
+def test_slow_casts_first_leave_a_real_one_its_time_by_size(box, monkeypatch):
+    # however many crafted casts come first and however long each overruns, they spend only the
+    # shared base: a real recording after them still has its own time by size, from its own start
+    ticking(monkeypatch, step=0.001)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 20)
+    for minute in ("00", "01", "02"):
+        _cast_in(box, "dc01", f"2026-11-14_14{minute}", events=[(0, "o", "x\n" * 20_000)])
+    real = _cast_in(box, "dc01", "2026-11-14_1500", events=[(0, "o", "y" * 2000 + "\r\n")])
+    console = _refresh(box)
+    warned = [text for kind, text in console.lines if kind == "warn"]
+    assert len(warned) == 3 and not any("1500.cast" in text for text in warned)
+    assert "y" * 2000 in real.with_suffix(".txt").read_text(encoding="utf-8")
+
+
+def test_a_cast_that_ran_out_of_time_is_not_tried_again(box, monkeypatch):
+    # its text copy says so, and it is no longer older than its cast
+    ticking(monkeypatch)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS_EACH", 10)
+    slow = _cast_in(box, "dc01", "2026-11-14_1432", events=[(0, "o", "x\n" * 200)])
+    first = _refresh(box)
+    assert [kind for kind, _ in first.lines] == ["warn"]
+    text = slow.with_suffix(".txt").read_text(encoding="utf-8")
+    assert text.startswith("box      forest") and "took longer than" in text and "replay" in text
+    assert _refresh(box).lines == []
 
 
 def test_text_the_parser_alone_takes_in_is_timed_too(tmp_path, monkeypatch):
