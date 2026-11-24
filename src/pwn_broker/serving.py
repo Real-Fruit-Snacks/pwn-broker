@@ -259,8 +259,9 @@ def offered(folder: Path, tools: Path) -> list[tuple[str, Path]]:
     return mine + _walk(tools, "/")
 
 
-# not starting with -, which PowerShell would read as a parameter
-_PLAIN_NAME = re.compile(r"[A-Za-z0-9._][A-Za-z0-9._-]*")
+# starting with a letter: PowerShell reads a word starting with - as a parameter, and one starting
+# with a digit as a number (0x10, 1kb)
+_PLAIN_NAME = re.compile(r"[A-Za-z][A-Za-z0-9._-]*")
 # PowerShell takes each of these as a single quote, and a doubled one as that character
 _SINGLE_QUOTES = "'\u2018\u2019\u201a\u201b"
 

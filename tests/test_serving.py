@@ -154,8 +154,10 @@ def test_download_lines_follow_the_box_s_os(os_name, expected):
         # PowerShell takes each of these as a single quote too; doubled, each stays in the string
         ("a\u2019; x.ps1", "'a\u2019\u2019; x.ps1'"),
         ("\u2018a\u201a\u201b.ps1", "'\u2018\u2018a\u201a\u201a\u201b\u201b.ps1'"),
-        # a name starting with - would be read as a parameter
+        # a name starting with - would be read as a parameter, and one starting with a digit as a number
         ("-Headers", "'-Headers'"),
+        ("0x10", "'0x10'"),
+        ("1kb", "'1kb'"),
     ],
 )
 def test_a_file_name_that_is_not_plain_is_quoted_for_powershell(name, shown):

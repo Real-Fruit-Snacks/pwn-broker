@@ -128,6 +128,16 @@ def test_target_rejects_bad_ip_scope_and_duplicate_name(box):
     assert len(targets) == 1
 
 
+@pytest.mark.parametrize("ip", ["fe80::1%;id", "fe80::1%$(id)", "fe80::1%a b"])
+def test_a_typed_address_whose_scope_is_not_an_interface_name_is_refused(box, ip):
+    with pytest.raises(BoxError, match="not an IP address"):
+        add(box, [], "a", ips=[ip])
+
+
+def test_a_typed_link_local_address_with_an_interface_is_taken(box):
+    assert add(box, [], "a", ips=["fe80::1%eth0"]).ips == ["fe80::1%eth0"]
+
+
 def test_add_target_refuses_a_hostname_another_target_has(box):
     targets = []
     add(box, targets, "web", hostnames=["Board.htb"])
