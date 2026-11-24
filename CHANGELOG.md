@@ -8,6 +8,8 @@ Fixed: a box read from disk, an imported one included, is now refused when its i
 
 Fixed: the note's vim kept a `~/.viminfo` with its registers and command history, so a password put into a playbook's run block stayed in your home folder after `finish`. The vimrc now keeps none.
 
+Fixed: a recording's text copy could take hours to make from a crafted `.cast` of a few hundred bytes, in an imported box for instance, and `finish` waited for it. It now gets 60 seconds and 30 more for each megabyte of the recording, which is far more than a real recording needs, shared by all the recordings one `export`, `finish` or `replay` writes; one past that gets a `warn` line and no text copy, and `replay` still plays it.
+
 ## v0.1.12
 
 With the `report` tool in the box, `finish` builds a private report from the finished archive and puts it beside it, `<box folder>.finished.report`, after the archive is written and before the tools come off. `tool install report` gets [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report) from pwn-shop. `finish`'s summary says whether a report will be built. A box finished again after it is reopened or imported puts its report beside the first, as `.report-2`; one is never replaced. With `copy_to` the report is copied there too. A report that fails, or takes longer than 600 seconds, is a `warn` line, and `finish` goes on.
