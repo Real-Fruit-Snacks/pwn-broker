@@ -16,6 +16,8 @@ Fixed: `target rename` and `target remove` went ahead while a scan of the target
 
 Fixed: a download of the tool index or a package over HTTPS followed a redirect to plain HTTP, where anyone on the way could rewrite the index, its hashes included, as it is not signed. Such a redirect is now refused.
 
+Fixed: `scan` ran nmap on an IPv6 target without `-6`, which nmap refuses, and a `scan full` whose first stage found only UDP ports, with flags of your own, ran its second stage with an empty port list. IPv6 targets are scanned with `-6`, and with no TCP port the full scan stops after its first stage.
+
 ## v0.1.12
 
 With the `report` tool in the box, `finish` builds a private report from the finished archive and puts it beside it, `<box folder>.finished.report`, after the archive is written and before the tools come off. `tool install report` gets [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report) from pwn-shop. `finish`'s summary says whether a report will be built. A box finished again after it is reopened or imported puts its report beside the first, as `.report-2`; one is never replaced. With `copy_to` the report is copied there too. A report that fails, or takes longer than 600 seconds, is a `warn` line, and `finish` goes on.

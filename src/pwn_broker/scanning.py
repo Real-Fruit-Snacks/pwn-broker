@@ -8,6 +8,7 @@ command and says in one line. A marker per target names the runner by its proces
 time and its command line, as the file server's does.
 """
 
+import ipaddress
 import json
 import os
 import re
@@ -333,20 +334,23 @@ def _record(spec: dict, mode: str, status: int, ports: list[str], base: Path) ->
 
 def run_plan(spec: dict, run: Callable[[list[str]], int] = _run) -> None:
     nmap, ip, folder = spec["nmap"], spec["ip"], Path(spec["folder"])
+    # nmap takes an IPv6 address only with -6
+    six = ["-6"] if ipaddress.ip_address(ip).version == 6 else []
     for mode in spec["plan"]:
         base = folder / f"{spec['stamp']}-{mode}"
         if mode == "full":
             first = folder / f"{spec['stamp']}-full-ports"
-            status = run([nmap, *spec["flags"]["full"], "-oA", str(first), ip])
+            status = run([nmap, *six, *spec["flags"]["full"], "-oA", str(first), ip])
             ports = open_ports(first.with_suffix(".gnmap"))
-            if status == 0 and ports:
-                listed = ",".join(p.split("/")[0] for p in ports if p.endswith("/tcp"))
-                status = run([nmap, *FULL_DETAIL, "-p", listed, "-oA", str(base), ip])
+            # flags of the user's own can find UDP ports alone: then no TCP port is left to detail
+            listed = ",".join(p.split("/")[0] for p in ports if p.endswith("/tcp"))
+            if status == 0 and listed:
+                status = run([nmap, *six, *FULL_DETAIL, "-p", listed, "-oA", str(base), ip])
                 ports = open_ports(base.with_suffix(".gnmap")) or ports
             else:
                 base = first
         else:
-            status = run([nmap, *spec["flags"][mode], "-oA", str(base), ip])
+            status = run([nmap, *six, *spec["flags"][mode], "-oA", str(base), ip])
             ports = open_ports(base.with_suffix(".gnmap"))
         _record(spec, mode, status, ports, base)
 

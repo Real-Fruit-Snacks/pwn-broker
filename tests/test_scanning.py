@@ -121,6 +121,30 @@ def test_a_bare_scan_runs_quick_then_full_and_records_each(tmp_path):
     assert [d.mode for d in records(tmp_path)] == ["quick", "full"]
 
 
+@pytest.mark.parametrize("plan", [["quick"], ["full"], ["udp"]])
+def test_an_ipv6_target_is_scanned_with_dash_6(tmp_path, plan):
+    # nmap takes an IPv6 address only with -6
+    spec, fake = plan_spec(tmp_path, plan), Nmap()
+    spec["ip"] = "2001:db8::1"
+    scanning.run_plan(spec, run=fake)
+    assert fake.calls and all(call[1] == "-6" and call[-1] == "2001:db8::1" for call in fake.calls)
+
+
+def test_an_ipv4_target_is_scanned_without_dash_6(tmp_path):
+    spec, fake = plan_spec(tmp_path, ["quick"]), Nmap()
+    scanning.run_plan(spec, run=fake)
+    assert "-6" not in fake.calls[0]
+
+
+def test_a_full_scan_whose_first_stage_finds_only_udp_ports_stops_there(tmp_path):
+    # flags of the user's own can make the first stage find UDP ports: there is no TCP port to detail
+    spec, fake = plan_spec(tmp_path, ["full"]), Nmap(ports="53/open/udp//domain///")
+    scanning.run_plan(spec, run=fake)
+    assert len(fake.calls) == 1
+    [done] = records(tmp_path)
+    assert done.ports == ["53/udp"] and done.file.endswith("-full-ports.nmap")
+
+
 def test_a_failed_nmap_is_recorded_with_its_status(tmp_path):
     spec, fake = plan_spec(tmp_path, ["udp"]), Nmap(status=1)
     scanning.run_plan(spec, run=fake)
