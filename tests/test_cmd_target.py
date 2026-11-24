@@ -667,3 +667,33 @@ def test_serving_another_target_does_not_stop_a_rename(session, system):
     session.console = FakeConsole(["dc"])
     dispatch(session, "target rename dc01")
     assert ("ok", "target dc01 is now dc") in session.console.lines
+
+
+def test_a_scan_started_while_rename_asks_stops_the_rename(session, system):
+    system.programs["nmap"] = "/usr/bin/nmap"
+
+    class Late(FakeConsole):
+        def ask(self, label, default=None):
+            saved, session.console = session.console, FakeConsole()
+            dispatch(session, "scan quick")
+            session.console = saved
+            return super().ask(label, default)
+
+    session.console = Late(["dc"])
+    dispatch(session, "target rename dc01")
+    assert session.console.lines == [("fail", "a scan of dc01 is running. wait for it or scan stop, then rename it")]
+    assert [t.name for t in session.targets] == ["dc01"]
+
+
+def test_serve_started_while_remove_asks_stops_the_remove(session, system):
+    _add(session, "web", "10.10.10.2")
+
+    class Late(FakeConsole):
+        def confirm(self, question, default=False):
+            _serving(session, system, target="web")
+            return super().confirm(question, default)
+
+    session.console = Late(["y"])
+    dispatch(session, "target remove web")
+    assert session.console.lines == [("fail", "serve is serving web's files. serve stop, then remove it")]
+    assert [t.name for t in session.targets] == ["dc01", "web"]
