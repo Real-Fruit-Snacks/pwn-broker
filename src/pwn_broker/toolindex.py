@@ -251,7 +251,9 @@ def _parse_bytes(raw: bytes) -> Index:
 
 
 class _SafeRedirect(urllib.request.HTTPRedirectHandler):
-    # urllib follows a redirect to ftp:// on its own; only http and https are followed here
+    # urllib follows a redirect to ftp:// on its own; only http and https are followed here, and
+    # from https only https: the index is not signed, so plain http would let anyone on the way
+    # rewrite it, hashes and all
     def http_error_302(self, req, fp, code, msg, headers):
         target = headers.get("location") or headers.get("uri")
         if target is not None:
@@ -259,6 +261,9 @@ class _SafeRedirect(urllib.request.HTTPRedirectHandler):
             if not is_url(full):
                 fp.close()
                 raise ToolError(f"{req.full_url} redirects to {full}, which is not http or https")
+            if req.full_url.lower().startswith("https://") and not full.lower().startswith("https://"):
+                fp.close()
+                raise ToolError(f"{req.full_url} redirects to {full}, which is not https")
         return super().http_error_302(req, fp, code, msg, headers)
 
     http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302

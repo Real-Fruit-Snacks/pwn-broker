@@ -14,6 +14,8 @@ Fixed: `serve files` printed a PowerShell line with the file name bare after `-O
 
 Fixed: `target rename` and `target remove` went ahead while a scan of the target was running or `serve` was serving its files, so `scan stop` no longer found the scan, `finish` stayed blocked by it, and `serve` answered from a folder that had moved. They now refuse until the scan ends or `serve stop`, as they do for a window still recording.
 
+Fixed: a download of the tool index or a package over HTTPS followed a redirect to plain HTTP, where anyone on the way could rewrite the index, its hashes included, as it is not signed. Such a redirect is now refused.
+
 ## v0.1.12
 
 With the `report` tool in the box, `finish` builds a private report from the finished archive and puts it beside it, `<box folder>.finished.report`, after the archive is written and before the tools come off. `tool install report` gets [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report) from pwn-shop. `finish`'s summary says whether a report will be built. A box finished again after it is reopened or imported puts its report beside the first, as `.report-2`; one is never replaced. With `copy_to` the report is copied there too. A report that fails, or takes longer than 600 seconds, is a `warn` line, and `finish` goes on.

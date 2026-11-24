@@ -976,6 +976,24 @@ def test_a_redirect_away_from_http_is_refused_for_a_zip_too(monkeypatch, tmp_pat
         toolindex.download(URL, tmp_path / "x.zip", 100, 5)
 
 
+@pytest.mark.parametrize("code", [301, 302, 307])
+def test_a_redirect_from_https_to_http_is_refused(monkeypatch, code):
+    # the index is not signed: once it came over https, a redirect may not hand it to plain http
+    secure = "https://example.invalid/index.toml"
+    plain = "http://example.invalid/index.toml"
+    handler = stand_in(monkeypatch, {secure: (code, plain, b""), plain: (200, None, b"schema = 1\n")})
+    with pytest.raises(ToolError, match="not https"):
+        toolindex._fetch_index(secure, 2)
+    assert handler.asked == [secure]
+
+
+def test_a_redirect_from_https_to_http_is_refused_for_a_zip_too(monkeypatch, tmp_path):
+    secure = "https://example.invalid/x.zip"
+    stand_in(monkeypatch, {secure: (302, "http://example.invalid/x.zip", b"")})
+    with pytest.raises(ToolError, match="not https"):
+        toolindex.download(secure, tmp_path / "x.zip", 100, 5)
+
+
 def test_a_redirect_to_https_is_followed(monkeypatch):
     other = "https://elsewhere.invalid/index.toml"
     handler = stand_in(monkeypatch, {URL: (302, other, b""), other: (200, None, b"schema = 1\n")})
