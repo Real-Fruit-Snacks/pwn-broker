@@ -298,6 +298,13 @@ def test_info_is_one_list_with_the_sudo_form_in_the_value_column(session, shop):
     assert all(line[column - 2 : column] == "  " and line[column] != " " for line in shown)
 
 
+def test_an_address_whose_scope_holds_shell_syntax_stays_a_placeholder(session, shop):
+    session.current.ips[:] = ["fe80::1%$(id)"]
+    run(session, "tool install kerbrute")
+    joined = "\n".join(lines(run(session, "tool info kerbrute"), "field"))
+    assert "--dc <ip> " in joined
+
+
 def test_a_value_that_looks_like_a_placeholder_is_not_filled_again(session, shop):
     # not a plain name, so it is not filled in at all, and never read as a placeholder
     session.creds.append(make_cred(domain="{ip}"))

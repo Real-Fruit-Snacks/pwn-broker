@@ -51,6 +51,22 @@ def _check_id(box_id: str) -> None:
         raise HostsError(f"not a box ID: {box_id!r}")
 
 
+# an address as the app takes one: an IPv6 scope ID, when there is one, is an interface name
+_PLAIN_IP = re.compile(r"[0-9A-Fa-f.:]+(?:%[A-Za-z0-9._-]+)?")
+
+
+def plain_ip(value: str) -> bool:
+    """An IP address that ipaddress takes and whose IPv6 scope ID, if it has one, is only letters,
+    digits, dots, hyphens and underscores: ipaddress itself takes any character there."""
+    if not _PLAIN_IP.fullmatch(value):
+        return False
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _parse_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
     if IP_CHARS.fullmatch(value):
         try:

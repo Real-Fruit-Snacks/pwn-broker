@@ -1,4 +1,3 @@
-import ipaddress
 import os
 import re
 import shutil
@@ -166,13 +165,9 @@ def _last_domain(session: Session) -> str:
 
 def _plain(value: str) -> str:
     # the examples are pasted into a shell: only a plain name or an address goes in
-    if hosts.valid_hostname(value):
+    if hosts.valid_hostname(value) or hosts.plain_ip(value):
         return value
-    try:
-        ipaddress.ip_address(value)
-    except ValueError:
-        return ""
-    return value
+    return ""
 
 
 def fill_examples(session: Session, text: str) -> str:

@@ -1,4 +1,3 @@
-import ipaddress
 import os
 import shutil
 import sys
@@ -7,6 +6,7 @@ from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
+from pwn_broker import hosts
 from pwn_broker.model import Box, Cred, Target
 from pwn_broker.paths import AppPaths, box_folder_name, safe_name
 from pwn_broker.store import (
@@ -115,10 +115,8 @@ def _validate(ips: list[str], hostnames: list[str], scope: str) -> None:
     if not ips and not hostnames:
         raise BoxError("a target needs at least one IP address or hostname")
     for ip in ips:
-        try:
-            ipaddress.ip_address(ip)
-        except ValueError as exc:
-            raise BoxError(f"not an IP address: {ip}") from exc
+        if not hosts.plain_ip(ip):
+            raise BoxError(f"not an IP address: {ip}")
     if scope not in SCOPES:
         raise BoxError(f"scope must be external or internal, not {scope}")
 

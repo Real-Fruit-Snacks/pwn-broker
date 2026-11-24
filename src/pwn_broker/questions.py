@@ -1,10 +1,10 @@
-import ipaddress
 from dataclasses import dataclass, field
 from datetime import date
 
 from pwn_broker.boxes import SCOPES, BoxError, find_target, parse_values
 from pwn_broker.console import Console
 from pwn_broker.creds import KINDS, CredError, check_field, has_edge_space, last_domain
+from pwn_broker.hosts import plain_ip
 from pwn_broker.model import Cred, Target
 from pwn_broker.paths import safe_name
 from pwn_broker.session import Session
@@ -20,9 +20,7 @@ class TargetAnswers:
 
 def _bad_ip(values: list[str]) -> str | None:
     for value in values:
-        try:
-            ipaddress.ip_address(value)
-        except ValueError:
+        if not plain_ip(value):
             return value
     return None
 

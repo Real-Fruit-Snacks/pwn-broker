@@ -1,4 +1,3 @@
-import ipaddress
 import os
 import shutil
 import tempfile
@@ -10,7 +9,7 @@ from pathlib import Path
 import tomli_w
 
 from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
-from pwn_broker.hosts import BOX_ID
+from pwn_broker.hosts import BOX_ID, plain_ip
 from pwn_broker.paths import safe_name
 from pwn_broker.model import (
     Box,
@@ -200,7 +199,8 @@ def _target(file: Path, data: dict) -> Target:
     for ip in target.ips:
         if not isinstance(ip, str):
             raise TypeError("target.ips has the wrong type")
-        ipaddress.ip_address(ip)
+        if not plain_ip(ip):
+            raise ValueError(f"not an IP address: {ip!r}")
     return target
 
 

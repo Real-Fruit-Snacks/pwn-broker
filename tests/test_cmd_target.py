@@ -48,6 +48,12 @@ def test_ask_target_reasks_until_ip_or_hostname():
     assert console.asked[:5] == ["ip", "hostname", "ip", "hostname", "scope"]
 
 
+def test_ask_target_reasks_an_address_whose_scope_is_not_an_interface_name():
+    console = FakeConsole(["fe80::1%;id", "fe80::1%eth0", "", "", ""])
+    answers = ask_target(console, heading="New target", taken=set())
+    assert answers.ips == ["fe80::1%eth0"]
+
+
 def test_ask_target_reasks_bad_ip():
     console = FakeConsole(["10.10.10", "10.10.10.9", "", "", ""])
     a = ask_target(console, heading="New target", taken=set())

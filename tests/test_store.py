@@ -521,12 +521,22 @@ def test_a_target_with_a_value_of_the_wrong_kind_is_a_store_error(box, dc01, cha
         set_to("name", "other"),
         set_to("ips", ["--script=/tmp/x.nse", "10.10.10.161"]),
         set_to("ips", ["10.10.10.161 -iL /etc/passwd"]),
+        # ipaddress takes any character in an IPv6 scope ID
+        set_to("ips", ["fe80::1%;id"]),
+        set_to("ips", ["fe80::1%$(id)"]),
+        set_to("ips", ["fe80::1%a\nb"]),
     ],
 )
 def test_a_target_the_app_would_not_have_made_is_a_store_error(box, dc01, change):
     rewrite(box.path / "targets" / "dc01" / "target.toml", change)
     with pytest.raises(StoreError, match="invalid content"):
         load_targets(box)
+
+
+def test_a_link_local_address_with_an_interface_still_loads(box, dc01):
+    rewrite(box.path / "targets" / "dc01" / "target.toml", set_to("ips", ["fe80::1%eth0", "10.10.10.161"]))
+    [target] = load_targets(box)
+    assert target.ips == ["fe80::1%eth0", "10.10.10.161"]
 
 
 def test_a_target_whose_folder_is_not_a_name_the_app_makes_is_a_store_error(box, dc01):
