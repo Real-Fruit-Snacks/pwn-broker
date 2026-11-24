@@ -259,14 +259,17 @@ def offered(folder: Path, tools: Path) -> list[tuple[str, Path]]:
     return mine + _walk(tools, "/")
 
 
-_PLAIN_NAME = re.compile(r"[A-Za-z0-9._-]+")
+# not starting with -, which PowerShell would read as a parameter
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9._][A-Za-z0-9._-]*")
+# PowerShell takes each of these as a single quote, and a doubled one as that character
+_SINGLE_QUOTES = "'\u2018\u2019\u201a\u201b"
 
 
 def _powershell_word(name: str) -> str:
     # pasted into PowerShell on the target: a name with a space, ; or $ in it is one quoted word
     if _PLAIN_NAME.fullmatch(name):
         return name
-    return "'" + name.replace("'", "''") + "'"
+    return "'" + "".join(c * 2 if c in _SINGLE_QUOTES else c for c in name) + "'"
 
 
 def download_lines(os_name: str, link: str, name: str) -> list[str]:

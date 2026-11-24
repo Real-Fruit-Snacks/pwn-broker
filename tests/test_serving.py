@@ -151,6 +151,11 @@ def test_download_lines_follow_the_box_s_os(os_name, expected):
         ("a;calc.ps1", "'a;calc.ps1'"),
         ("it's.ps1", "'it''s.ps1'"),
         ("$(x).ps1", "'$(x).ps1'"),
+        # PowerShell takes each of these as a single quote too; doubled, each stays in the string
+        ("a\u2019; x.ps1", "'a\u2019\u2019; x.ps1'"),
+        ("\u2018a\u201a\u201b.ps1", "'\u2018\u2018a\u201a\u201a\u201b\u201b.ps1'"),
+        # a name starting with - would be read as a parameter
+        ("-Headers", "'-Headers'"),
     ],
 )
 def test_a_file_name_that_is_not_plain_is_quoted_for_powershell(name, shown):
