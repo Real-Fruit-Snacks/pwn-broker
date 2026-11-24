@@ -403,7 +403,9 @@ def test_refresh_for_one_target_leaves_the_others(box):
 
 # ---- the time a text copy may take: a few bytes can fill and clear a 1000 by 1000 screen
 
-FILL_AND_CLEAR = "\x1b#8\x1b[2J"
+# the screen filled once, then cleared again and again: each clear touches every cell
+FILL = ("x" * 300 + "\r\n") * 299
+CLEAR = "\x1b[2J"
 
 
 def ticking(monkeypatch, step=1.0):
@@ -441,10 +443,11 @@ def test_the_time_allowed_grows_with_the_recording(tmp_path, monkeypatch):
 
 
 def test_a_crafted_recording_is_stopped_in_about_the_time_it_is_allowed(tmp_path, monkeypatch):
-    # the real clock: each pair fills and clears the whole screen in a few bytes
+    # the real clock: each clear touches every cell of a full 300 by 300 screen in four bytes
     monkeypatch.setattr(casttext, "RENDER_SECONDS", 2)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS_PER_MB", 0)
     path = write_cast(
-        tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "o", FILL_AND_CLEAR * 400)], cols=300, rows=300
+        tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "o", FILL), (0, "o", CLEAR * 4000)], cols=300, rows=300
     )
     started = time.monotonic()
     with pytest.raises(CastError, match="took longer than 2 seconds to render"):
@@ -538,6 +541,60 @@ def test_a_cast_that_ran_out_of_time_is_not_tried_again(box, monkeypatch):
     text = slow.with_suffix(".txt").read_text(encoding="utf-8")
     assert text.startswith("box      forest") and "took longer than" in text and "replay" in text
     assert _refresh(box).lines == []
+
+
+def test_the_screen_alignment_test_draws_nothing(tmp_path):
+    # ESC # 8 fills the whole screen with E in one call, which a text copy has no use for and a
+    # crafted cast leans on: on a 1000 by 1000 screen it took seconds
+    path = write_cast(tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "o", "\x1b#8" * 20 + "after\r\n")],
+                      cols=1000, rows=1000)
+    started = time.monotonic()
+    out = casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
+    assert time.monotonic() - started < 10
+    text = out.read_text(encoding="utf-8")
+    assert "EEEE" not in text and "after" in text
+
+
+def test_a_cast_dated_in_the_future_is_not_tried_again(box, monkeypatch):
+    # an archive keeps its members' times: the note must not be older than its cast
+    ticking(monkeypatch)
+    slow = _cast_in(box, "dc01", "2026-11-14_1432", events=[(0, "o", "x\n" * 200)])
+    later = 4_070_908_800 * 1_000_000_000  # 2099
+    os.utime(slow, ns=(later, later))
+    assert [kind for kind, _ in _refresh(box).lines] == ["warn"]
+    assert not casttext.stale(slow)
+    assert _refresh(box).lines == []
+
+
+def test_a_cast_left_no_time_by_the_others_gets_no_note(box, monkeypatch):
+    # the shared minute spent by the casts before it: it is tried again next time, not marked
+    ticking(monkeypatch)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 10)
+    _cast_in(box, "dc01", "2026-11-14_1400", events=[(0, "o", "x\n" * 200)])
+    short = _cast_in(box, "dc01", "2026-11-14_1500", events=[(0, "o", "x\n" * 200)])
+    console = _refresh(box)
+    assert len([kind for kind, _ in console.lines if kind == "warn"]) == 2
+    assert not short.with_suffix(".txt").exists() and casttext.stale(short)
+
+
+def test_a_text_copy_already_there_is_kept_when_the_cast_runs_out_of_time(box, monkeypatch):
+    # a recording that grew after its text copy: the copy it had is better than a note
+    ticking(monkeypatch)
+    cast = _cast_in(box, "dc01", "2026-11-14_1432", events=[(0, "o", "x\n" * 200)])
+    cast.with_suffix(".txt").write_text("box      forest\n\n14:32:07  whoami\n", encoding="utf-8")
+    os.utime(cast.with_suffix(".txt"), ns=(1_000_000_000_000, 1_000_000_000_000))
+    os.utime(cast, ns=(2_000_000_000_000, 2_000_000_000_000))
+    _refresh(box)
+    assert "whoami" in cast.with_suffix(".txt").read_text(encoding="utf-8")
+
+
+def test_a_warning_with_under_a_second_says_so(box, monkeypatch):
+    ticking(monkeypatch)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 10)
+    _cast_in(box, "dc01", "2026-11-14_1400", events=[(0, "o", "x\n" * 200)])
+    _cast_in(box, "dc01", "2026-11-14_1500", events=[(0, "o", "x\n" * 200)])
+    warned = [text for kind, text in _refresh(box).lines if kind == "warn"]
+    assert "took longer than 0 seconds" not in warned[1] and "less than a second" in warned[1]
 
 
 def test_text_the_parser_alone_takes_in_is_timed_too(tmp_path, monkeypatch):

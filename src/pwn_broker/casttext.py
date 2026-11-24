@@ -1,6 +1,7 @@
 """The timed plain-text copy of a recording (design section 7.4)."""
 
 import copy
+import os
 import re
 import time
 import unicodedata
@@ -22,12 +23,13 @@ from pwn_broker.model import Box
 _ALTERNATE = frozenset({1049, 1047, 47})
 
 # The time a text copy may take. pyte's work is counted in the screen's cells, not in the cast's
-# bytes: three bytes fill a 1000 by 1000 screen and four clear it, so a crafted cast of a few
-# hundred bytes took minutes. A cast gets this many seconds and this many more for each megabyte
-# of it, room for a real recording that size on a slow machine; one that takes longer gets no text
-# copy. refresh gives the casts it writes one allowance between them.
+# bytes: four bytes clear a 1000 by 1000 screen, so a crafted cast of a few hundred bytes took
+# minutes. A cast gets this many seconds for each megabyte of it, room for a real recording that
+# size on a busy machine, and a base: record gives its own recording the whole of it, and refresh
+# shares it between the casts it writes, each taking at most RENDER_SECONDS_EACH of it. One that
+# takes longer gets a text copy that says so (section 7.4).
 RENDER_SECONDS = 60
-RENDER_SECONDS_PER_MB = 30
+RENDER_SECONDS_PER_MB = 60
 # what each cast refresh writes may take of the shared allowance at most, besides its own share by
 # size: so a crafted cast early in the order spends seconds, not the minute the others need
 RENDER_SECONDS_EACH = 10
@@ -43,10 +45,14 @@ class Allowance(NamedTuple):
     seconds: int
 
 
-def allowance(size: int, base: float | None = None) -> Allowance:
-    """From now, for casts of `size` bytes in all."""
-    seconds = (RENDER_SECONDS if base is None else base) + RENDER_SECONDS_PER_MB * size / 1_000_000
+def allowance(size: int) -> Allowance:
+    """From now, for a cast of `size` bytes with the whole base."""
+    seconds = RENDER_SECONDS + RENDER_SECONDS_PER_MB * size / 1_000_000
     return Allowance(_clock() + seconds, round(seconds))
+
+
+def _spoken(seconds: int) -> str:
+    return "less than a second" if seconds < 1 else f"{seconds} seconds"
 
 
 class _TooLong(Exception):
@@ -245,6 +251,11 @@ class _TextScreen(pyte.Screen):
             self.wrapped.discard(self.cursor.y)
         super().delete_lines(count)
 
+    def alignment_display(self) -> None:
+        # ESC # 8, the screen alignment test: it fills every cell with E in one call, which a text
+        # copy has no use for and a crafted cast leans on (seconds on a 1000 by 1000 screen)
+        pass
+
     def erase_in_display(self, how: int = 0, *args, **kwargs) -> None:
         if how in (2, 3):
             self._take_rows(self.lines)
@@ -436,7 +447,14 @@ def _head(cast_path: Path, box_name: str, box_id: str, target: str, started: str
 
 
 def write(
-    cast_path: Path, *, box_name: str, box_id: str, target: str, tz: tzinfo, allowed: Allowance | None = None
+    cast_path: Path,
+    *,
+    box_name: str,
+    box_id: str,
+    target: str,
+    tz: tzinfo,
+    allowed: Allowance | None = None,
+    note: bool = True,
 ) -> Path:
     header = read_header(cast_path)
     # first: every time in the text is the start time plus a little
@@ -446,12 +464,17 @@ def write(
     try:
         body = list(render(header, events(cast_path), tz, allowed.deadline))
     except _TooLong:
-        reason = f"it took longer than {allowed.seconds} seconds to render; replay still plays it"
-        # a text copy that says so, newer than its cast, so the next export, finish or replay does
-        # not spend the time on it again; deleting it tries again
-        note = f"[no text copy: it took longer than {allowed.seconds} seconds to make; replay plays the cast]"
-        store.write_text(text_path(cast_path), "\n".join([*_head(cast_path, box_name, box_id, target, started), note]) + "\n")
-        raise CastError(cast_path, reason) from None
+        took = _spoken(allowed.seconds)
+        out = text_path(cast_path)
+        # a text copy that says so, no older than its cast, so the next export, finish or replay
+        # does not spend the time on it again; deleting it tries again. Not when the casts before it
+        # spent the whole base, so it was given no fair time, nor over a text copy it already has
+        if note and not os.path.lexists(out):
+            line = f"[no text copy: it took longer than {took} to make; replay plays the cast]"
+            store.write_text(out, "\n".join([*_head(cast_path, box_name, box_id, target, started), line]) + "\n")
+            when = max(time.time_ns(), cast_path.stat().st_mtime_ns)
+            os.utime(out, ns=(when, when))
+        raise CastError(cast_path, f"it took longer than {took} to render; replay still plays it") from None
     except (CastError, OSError):
         raise
     except Exception as exc:  # pyte's own failures on input it cannot handle
@@ -510,7 +533,10 @@ def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None
                 base = min(RENDER_SECONDS_EACH, max(0.0, base_ends - now))
                 seconds = base + RENDER_SECONDS_PER_MB * cast_path.stat().st_size / 1_000_000
                 allowed = Allowance(now + seconds, round(seconds))
-                write(cast_path, box_name=box.name, box_id=box.id, target=target_name, tz=tz, allowed=allowed)
+                write(
+                    cast_path, box_name=box.name, box_id=box.id, target=target_name, tz=tz,
+                    allowed=allowed, note=base > 0,
+                )  # fmt: skip
         except CastError as exc:
             console.warn(f"no text copy of {shown}: {exc.reason}")
         except OSError as exc:
