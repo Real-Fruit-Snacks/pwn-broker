@@ -52,7 +52,13 @@ def allowance(size: int) -> Allowance:
 
 
 def _spoken(seconds: int) -> str:
-    return "less than a second" if seconds < 1 else f"{seconds} seconds"
+    if seconds < 1:
+        return "less than a second"
+    return "1 second" if seconds == 1 else f"{seconds} seconds"
+
+
+class OutOfTime(CastError):
+    """A text copy that took longer than its allowance."""
 
 
 class _TooLong(Exception):
@@ -267,14 +273,38 @@ class _TextScreen(pyte.Screen):
             self.wrapped.difference_update(erased)
         else:
             return  # pyte has no meaning for it and would fail
-        super().erase_in_display(how, *args, **kwargs)
+        # pyte writes a blank cell into every place it erases, so a few bytes could fill a screen
+        # whose cells a later call touches one by one; a cell that is not there reads as a space
+        if how == 0:
+            rows = range(self.cursor.y + 1, self.lines)
+        elif how == 1:
+            rows = range(self.cursor.y)
+        else:
+            rows = range(self.lines)
+        for y in rows:
+            self.buffer.pop(y, None)
+        if how in (0, 1):
+            self.erase_in_line(how)
 
     def erase_in_line(self, how: int = 0, private: bool = False) -> None:
         if how not in (0, 1, 2):
             return  # pyte has no meaning for it and would fail
         if how == 2 or (how == 0 and self.cursor.x == 0):
             self.wrapped.discard(self.cursor.y)
-        super().erase_in_line(how, private)
+        line = self.buffer.get(self.cursor.y)
+        if not line:
+            return
+        x = self.cursor.x
+        for column in [c for c in line if how == 2 or (c >= x if how == 0 else c <= x)]:
+            del line[column]
+
+    def erase_characters(self, count: int | None = None) -> None:
+        line = self.buffer.get(self.cursor.y)
+        if not line:
+            return
+        end = min(self.cursor.x + (count or 1), self.columns)
+        for column in [c for c in line if self.cursor.x <= c < end]:
+            del line[column]
 
     def select_graphic_rendition(self, *attrs: int) -> None:
         pass  # colours are dropped, and pyte fails on some it does not know
@@ -308,6 +338,7 @@ class _TextScreen(pyte.Screen):
     # the alternate screen
 
     def set_mode(self, *modes: int, **kwargs) -> None:
+        modes = _without_reverse_video(modes, kwargs)
         super().set_mode(*modes, **kwargs)
         if kwargs.get("private") and _ALTERNATE.intersection(modes) and not self.alternate:
             # the screen down to the command that started the program comes out before it
@@ -325,6 +356,7 @@ class _TextScreen(pyte.Screen):
             self._since = self.now
 
     def reset_mode(self, *modes: int, **kwargs) -> None:
+        modes = _without_reverse_video(modes, kwargs)
         super().reset_mode(*modes, **kwargs)
         if kwargs.get("private") and _ALTERNATE.intersection(modes) and self.alternate:
             self._leave_alternate(self.now)
@@ -340,6 +372,11 @@ class _TextScreen(pyte.Screen):
         self.ensure_hbounds()
         self._flush()
         self.taken.append(_Line(self._since, "", until))
+
+
+def _without_reverse_video(modes: tuple[int, ...], kwargs: dict) -> tuple[int, ...]:
+    # private mode 5 (DECSCNM): pyte rewrites every stored cell for it; a text copy has no colours
+    return tuple(m for m in modes if m != 5) if kwargs.get("private") else modes
 
 
 def _drawable(data: str) -> str:
@@ -466,15 +503,16 @@ def write(
     except _TooLong:
         took = _spoken(allowed.seconds)
         out = text_path(cast_path)
-        # a text copy that says so, no older than its cast, so the next export, finish or replay
-        # does not spend the time on it again; deleting it tries again. Not when the casts before it
-        # spent the whole base, so it was given no fair time, nor over a text copy it already has
-        if note and not os.path.lexists(out):
-            line = f"[no text copy: it took longer than {took} to make; replay plays the cast]"
-            store.write_text(out, "\n".join([*_head(cast_path, box_name, box_id, target, started), line]) + "\n")
+        # a text copy that says so, or the one it already has, dated no earlier than its cast, so
+        # the next export, finish or replay does not spend the time on it again; deleting it tries
+        # again. Not when the casts before it spent the base, so it was given no fair time
+        if note:
+            if not os.path.lexists(out):
+                line = f"[no text copy: it took longer than {took} to make; replay plays the cast]"
+                store.write_text(out, "\n".join([*_head(cast_path, box_name, box_id, target, started), line]) + "\n")
             when = max(time.time_ns(), cast_path.stat().st_mtime_ns)
             os.utime(out, ns=(when, when))
-        raise CastError(cast_path, f"it took longer than {took} to render; replay still plays it") from None
+        raise OutOfTime(cast_path, f"it took longer than {took} to render; replay still plays it") from None
     except (CastError, OSError):
         raise
     except Exception as exc:  # pyte's own failures on input it cannot handle
@@ -524,20 +562,35 @@ def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None
     # the base is shared, spent as the time goes by; the time by size is each cast's own, from its
     # own start, so casts that overrun spend the base and never another cast's time
     base_ends = _clock() + RENDER_SECONDS
+    stopped = False
+    left = 0
     for cast_path in casts:
         shown = cast_path.relative_to(box.path).as_posix()
         target_name = cast_path.parent.parent.name
         try:
-            if stale(cast_path):
-                now = _clock()
-                base = min(RENDER_SECONDS_EACH, max(0.0, base_ends - now))
-                seconds = base + RENDER_SECONDS_PER_MB * cast_path.stat().st_size / 1_000_000
-                allowed = Allowance(now + seconds, round(seconds))
-                write(
-                    cast_path, box_name=box.name, box_id=box.id, target=target_name, tz=tz,
-                    allowed=allowed, note=base > 0,
-                )  # fmt: skip
+            if not stale(cast_path):
+                continue
+            if stopped:
+                left += 1
+                continue
+            now = _clock()
+            base = min(RENDER_SECONDS_EACH, max(0.0, base_ends - now))
+            seconds = base + RENDER_SECONDS_PER_MB * cast_path.stat().st_size / 1_000_000
+            allowed = Allowance(now + seconds, round(seconds))
+            fair = base >= 1
+            write(
+                cast_path, box_name=box.name, box_id=box.id, target=target_name, tz=tz,
+                allowed=allowed, note=fair,
+            )  # fmt: skip
+        except OutOfTime as exc:
+            console.warn(f"no text copy of {shown}: {exc.reason}")
+            # one that ran out with the base already spent ends the rendering: the rest wait for
+            # the next export, finish or replay, so crafted casts cost one base, not each a call
+            stopped = not fair
         except CastError as exc:
             console.warn(f"no text copy of {shown}: {exc.reason}")
         except OSError as exc:
             console.warn(f"no text copy of {shown}: {exc.strerror or exc}")
+    if left:
+        them = "1 recording" if left == 1 else f"{left} recordings"
+        console.warn(f"{them} got no text copy this time; the next export, finish or replay tries them again")

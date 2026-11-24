@@ -403,9 +403,8 @@ def test_refresh_for_one_target_leaves_the_others(box):
 
 # ---- the time a text copy may take: a few bytes can fill and clear a 1000 by 1000 screen
 
-# the screen filled once, then cleared again and again: each clear touches every cell
-FILL = ("x" * 300 + "\r\n") * 299
-CLEAR = "\x1b[2J"
+# line feeds at the foot of a tall screen: each moves every row up
+FEEDS = "\n" * 300_000
 
 
 def ticking(monkeypatch, step=1.0):
@@ -443,11 +442,11 @@ def test_the_time_allowed_grows_with_the_recording(tmp_path, monkeypatch):
 
 
 def test_a_crafted_recording_is_stopped_in_about_the_time_it_is_allowed(tmp_path, monkeypatch):
-    # the real clock: each clear touches every cell of a full 300 by 300 screen in four bytes
+    # the real clock: each line feed at the foot of a 1000-row screen moves every row
     monkeypatch.setattr(casttext, "RENDER_SECONDS", 2)
     monkeypatch.setattr(casttext, "RENDER_SECONDS_PER_MB", 0)
     path = write_cast(
-        tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "o", FILL), (0, "o", CLEAR * 4000)], cols=300, rows=300
+        tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "o", "\x1b[999B" + FEEDS)], cols=1000, rows=1000
     )
     started = time.monotonic()
     with pytest.raises(CastError, match="took longer than 2 seconds to render"):
@@ -465,8 +464,10 @@ def test_refresh_gives_all_its_recordings_one_allowance(box, monkeypatch):
         _cast_in(box, "dc01", name, events=[(0, "o", "x\r\n")] * 20)
     console = _refresh(box)
     warned = [text for kind, text in console.lines if kind == "warn"]
-    # each says the time it had, which together is the shared 30 seconds
-    assert len(warned) == 3 and all("took longer than" in text for text in warned)
+    # the first two say the time each had, which together is the shared 30 seconds; the second ran
+    # out with the base spent, so the third waits for the next export, finish or replay
+    assert len(warned) == 3 and all("took longer than" in text for text in warned[:2])
+    assert warned[2].startswith("1 recording got no text copy this time")
     # once between them, not 30 seconds each
     assert now[0] < 30 + 10
 
@@ -525,9 +526,10 @@ def test_slow_casts_first_leave_a_real_one_its_time_by_size(box, monkeypatch):
     for minute in ("00", "01", "02"):
         _cast_in(box, "dc01", f"2026-11-14_14{minute}", events=[(0, "o", "x\n" * 20_000)])
     real = _cast_in(box, "dc01", "2026-11-14_1500", events=[(0, "o", "y" * 2000 + "\r\n")])
-    console = _refresh(box)
-    warned = [text for kind, text in console.lines if kind == "warn"]
-    assert len(warned) == 3 and not any("1500.cast" in text for text in warned)
+    _refresh(box)
+    # the crafted ones are noted or left; the next refresh comes to the real one with the base fresh
+    second = [text for kind, text in _refresh(box).lines if kind == "warn"]
+    assert not any("1500.cast" in text for text in second)
     assert "y" * 2000 in real.with_suffix(".txt").read_text(encoding="utf-8")
 
 
@@ -595,6 +597,76 @@ def test_a_warning_with_under_a_second_says_so(box, monkeypatch):
     _cast_in(box, "dc01", "2026-11-14_1500", events=[(0, "o", "x\n" * 200)])
     warned = [text for kind, text in _refresh(box).lines if kind == "warn"]
     assert "took longer than 0 seconds" not in warned[1] and "less than a second" in warned[1]
+
+
+# a few bytes must not fill the screen: an erase stores nothing, so a call that touches every cell
+# costs what drawing those cells cost
+
+BLANK_ROWS = "\x1b[2K\n" * 999
+
+
+def test_reverse_video_on_a_filled_screen_is_cheap(tmp_path):
+    # ESC [ ? 5 h and l, the visible bell: pyte rewrites every stored cell for each
+    path = write_cast(tmp_path / "recordings" / "2026-11-14_1432.cast",
+                      [(0, "o", BLANK_ROWS), (0, "o", "\x1b[?5h\x1b[?5l" * 3 + "after\r\n")], cols=1000, rows=1000)
+    started = time.monotonic()
+    out = casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
+    assert time.monotonic() - started < 5
+    assert "after" in out.read_text(encoding="utf-8")
+
+
+def test_an_erased_screen_holds_no_cells_to_erase_again(tmp_path):
+    path = write_cast(tmp_path / "recordings" / "2026-11-14_1432.cast",
+                      [(0, "o", BLANK_ROWS), (0, "o", "\x1b[2J" * 200 + "\x1b[5X" * 40 + "after\r\n")],
+                      cols=1000, rows=1000)
+    started = time.monotonic()
+    out = casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
+    assert time.monotonic() - started < 5
+    assert "after" in out.read_text(encoding="utf-8")
+
+
+def test_an_erase_leaves_the_text_as_it_was(tmp_path):
+    # what is left of a line after an erase, and the rows around it
+    events = [(0, "o", "keep this\r\nwipe this line\r\nhalf\x1b[2Dxx\x1b[K\r\nend\r\n")]
+    path = write_cast(tmp_path / "recordings" / "2026-11-14_1432.cast", events)
+    out = casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
+    body = [line.split("  ", 1)[1] for line in out.read_text(encoding="utf-8").splitlines()[5:]]
+    assert body == ["keep this", "wipe this line", "haxx", "end"]
+
+
+def test_a_cast_that_runs_out_with_a_text_copy_keeps_it_and_is_not_tried_again(box, monkeypatch):
+    ticking(monkeypatch)
+    cast = _cast_in(box, "dc01", "2026-11-14_1432", events=[(0, "o", "x\n" * 200)])
+    cast.with_suffix(".txt").write_text("box      forest\n\n14:32:07  whoami\n", encoding="utf-8")
+    os.utime(cast.with_suffix(".txt"), ns=(1_000_000_000_000, 1_000_000_000_000))
+    os.utime(cast, ns=(2_000_000_000_000, 2_000_000_000_000))
+    assert [kind for kind, _ in _refresh(box).lines] == ["warn"]
+    assert "whoami" in cast.with_suffix(".txt").read_text(encoding="utf-8")
+    assert _refresh(box).lines == []
+
+
+def test_once_the_base_is_spent_the_first_cast_out_of_time_ends_the_refresh(box, monkeypatch):
+    # the rest are left for next time with one line, so many crafted casts cost one base and one
+    # cast's time, not each their own
+    ticking(monkeypatch)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 10)
+    casts = [_cast_in(box, "dc01", f"2026-11-14_14{n:02}", events=[(0, "o", "x\n" * 200)]) for n in range(5)]
+    console = _refresh(box)
+    warned = [text for kind, text in console.lines if kind == "warn"]
+    assert len(warned) == 3
+    assert warned[-1] == "3 recordings got no text copy this time; the next export, finish or replay tries them again"
+    assert all(casttext.stale(c) for c in casts[2:])
+
+
+def test_seconds_are_said_as_people_say_them():
+    assert casttext._spoken(0) == "less than a second"
+    assert casttext._spoken(1) == "1 second"
+    assert casttext._spoken(10) == "10 seconds"
+
+
+def test_a_megabyte_gets_a_minute_besides_the_base():
+    # room for a real recording on a busy machine, where short lines took up to 36 s a megabyte
+    assert casttext.allowance(1_000_000).seconds == casttext.RENDER_SECONDS + 60
 
 
 def test_text_the_parser_alone_takes_in_is_timed_too(tmp_path, monkeypatch):
