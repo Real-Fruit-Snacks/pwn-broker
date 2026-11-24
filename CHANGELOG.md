@@ -4,6 +4,10 @@
 
 Fixed: with a relative `home` or `PWN_BROKER_HOME`, `finish` warned that the report was not built, because pwn-report runs in the archive's folder and was given paths from where pwn-broker was started. With `copy_to` set to `wrapped/` itself, every `finish` warned that the report was there already; it now makes no copy, as the report is already there. A `.part` folder left in `copy_to` by a report copy that was cut off, by a power cut for instance, made every later copy of that report fail; it is now replaced, as the archive's `.part` file is.
 
+Fixed: a box read from disk, an imported one included, is now refused when its id is not one plain name, or when a target's name is not the name of its folder or not one the app makes, or a target's address is not an IP address. A crafted archive could otherwise name a target `../../escaped`, so that `scan`, `rename` and other commands wrote outside the box, or give it the address `--script=<file>`, which `scan` handed to nmap as an option. `tool info` fills its examples only with a hostname, domain or address that is a plain name or address, so text from an imported box cannot reach a line you paste.
+
+Fixed: the note's vim kept a `~/.viminfo` with its registers and command history, so a password put into a playbook's run block stayed in your home folder after `finish`. The vimrc now keeps none.
+
 ## v0.1.12
 
 With the `report` tool in the box, `finish` builds a private report from the finished archive and puts it beside it, `<box folder>.finished.report`, after the archive is written and before the tools come off. `tool install report` gets [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report) from pwn-shop. `finish`'s summary says whether a report will be built. A box finished again after it is reopened or imported puts its report beside the first, as `.report-2`; one is never replaced. With `copy_to` the report is copied there too. A report that fails, or takes longer than 600 seconds, is a `warn` line, and `finish` goes on.

@@ -10,6 +10,9 @@ execute 'set runtimepath^=' . fnameescape(s:dir)
 set nomodeline
 " nothing but the note itself is written into the box folder
 set nobackup nowritebackup noswapfile
+" and nothing of it outside: no ~/.viminfo keeping the run block's register and :s history,
+" which hold what a playbook was filled in with
+set viminfo= viminfofile=NONE
 
 set nonumber
 set backspace=indent,eol,start
