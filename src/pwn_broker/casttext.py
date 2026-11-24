@@ -119,7 +119,7 @@ class _TextScreen(pyte.Screen):
         continues keeps its trailing spaces, which the wrap would otherwise lose."""
         line = self.buffer.get(y)
         if not line:
-            return ""
+            return " " * self.columns if full else ""
         end = self.columns if full else min(self.columns, max(line) + 1)
         return "".join(line[x].data for x in range(end))
 
@@ -309,6 +309,24 @@ class _TextScreen(pyte.Screen):
         for column in [c for c in line if self.cursor.x <= c < end]:
             del line[column]
 
+    def insert_characters(self, count: int | None = None) -> None:
+        # pyte writes a blank cell into every column from the cursor to the edge, so three bytes
+        # filled a row: move the cells there are, and store no blank ones (insert mode draws so too)
+        count = count or 1
+        line = self.buffer.get(self.cursor.y)
+        if not line:
+            return
+        moved = {c + count: line.pop(c) for c in sorted(line) if c >= self.cursor.x}
+        line.update((c, char) for c, char in moved.items() if c < self.columns)
+
+    def delete_characters(self, count: int | None = None) -> None:
+        count = count or 1
+        line = self.buffer.get(self.cursor.y)
+        if not line:
+            return
+        moved = {c - count: line.pop(c) for c in sorted(line) if c >= self.cursor.x}
+        line.update((c, char) for c, char in moved.items() if c >= self.cursor.x)
+
     def select_graphic_rendition(self, *attrs: int) -> None:
         pass  # colours are dropped, and pyte fails on some it does not know
 
@@ -378,8 +396,10 @@ class _TextScreen(pyte.Screen):
 
 
 def _without_reverse_video(modes: tuple[int, ...], kwargs: dict) -> tuple[int, ...]:
-    # private mode 5 (DECSCNM): pyte rewrites every stored cell for it; a text copy has no colours
-    return tuple(m for m in modes if m != 5) if kwargs.get("private") else modes
+    # DECSCNM, private mode 5 or the plain mode pyte shifts it to (160): pyte rewrites every stored
+    # cell for it; a text copy has no colours
+    shift = 5 if kwargs.get("private") else 0
+    return tuple(m for m in modes if m << shift != pyte.modes.DECSCNM)
 
 
 def _drawable(data: str) -> str:
@@ -504,33 +524,46 @@ def write(
     started = _started(cast_path, header, tz)
     if allowed is None:
         allowed = allowance(cast_path.stat().st_size)
+    head = _head(cast_path, box_name, box_id, target, started)
+    # A cast past its time, or one that fails part of the way in, gets a note when it had a fair
+    # share of time, so the next export, finish or replay does not spend that time on it again.
+    # Not when the casts before it spent the base: it is tried again then
     try:
         body = list(render(header, events(cast_path), tz, allowed.deadline))
     except _TooLong:
         took = _spoken(allowed.seconds)
-        out = text_path(cast_path)
-        # a text copy that says so, or the one it already has, dated no earlier than its cast, so
-        # the next export, finish or replay does not spend the time on it again; deleting it tries
-        # again. Not when the casts before it spent the base, so it was given no fair time
         if note:
-            if not os.path.lexists(out):
-                line = f"[no text copy: it took longer than {took} to make; replay plays the cast]"
-                store.write_text(out, "\n".join([*_head(cast_path, box_name, box_id, target, started), line]) + "\n")
-            when = max(time.time_ns(), cast_path.stat().st_mtime_ns)
-            os.utime(out, ns=(when, when))
+            _note(cast_path, head, f"it took longer than {took} to make; replay plays the cast")
         why = "it had less than a second to render" if allowed.seconds < 1 else f"it took longer than {took} to render"
         raise OutOfTime(cast_path, f"{why}; replay still plays it") from None
-    except (CastError, OSError):
+    except OSError:
+        raise
+    except CastError as exc:  # a bad line after the ones before it were drawn
+        if note and not isinstance(exc.__cause__, OSError):
+            _note(cast_path, head, exc.reason)
         raise
     except Exception as exc:  # pyte's own failures on input it cannot handle
-        raise CastError(cast_path, f"could not be rendered ({type(exc).__name__})") from exc
-    lines = [*_head(cast_path, box_name, box_id, target, started), *body]
+        failed = CastError(cast_path, f"could not be rendered ({type(exc).__name__})")
+        if note:
+            _note(cast_path, head, failed.reason)
+        raise failed from exc
+    lines = [*head, *body]
     out = text_path(cast_path)
     store.write_text(out, "\n".join(lines) + "\n")
     # no earlier than its cast, whose time an archive may set in the future, or it stays stale
     when = max(time.time_ns(), cast_path.stat().st_mtime_ns)
     os.utime(out, ns=(when, when))
     return out
+
+
+def _note(cast_path: Path, head: list[str], why: str) -> None:
+    """A text copy that says why there is none, or the one the cast already has, dated no earlier
+    than its cast, so it is no longer stale; deleting it tries again."""
+    out = text_path(cast_path)
+    if not os.path.lexists(out):
+        store.write_text(out, "\n".join([*head, f"[no text copy: {why}]"]) + "\n")
+    when = max(time.time_ns(), cast_path.stat().st_mtime_ns)
+    os.utime(out, ns=(when, when))
 
 
 def stale(cast_path: Path) -> bool:
@@ -565,8 +598,9 @@ def cast_files(box: Box, target: str | None = None) -> list[Path]:
 def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None) -> None:
     """Write the text copy of every recording whose text is missing or older than its cast.
 
-    A recording still being written is read as far as its last whole line. A cast that cannot be
-    read gets one warn line and no text; the others are still written.
+    A recording still being written is read as far as its last whole line. A cast whose header
+    cannot be read gets one warn line and no text, and one that fails further in a warn line and a
+    text copy that says why; the others are still written.
     """
     casts = cast_files(box, target)
     # the base is shared, spent as the time goes by; the time by size is each cast's own, from its

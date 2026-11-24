@@ -297,7 +297,7 @@ def test_a_second_write_replaces_the_first(tmp_path):
     "text",
     [
         '{"version": 2, "width": 80, "height": 24}\n[1, "o", "a"]\n',
-        cast_text([(0, "o", "a\r\n")]) + "[broken\n" + '[1, "o", "b"]\n',
+        '{"version": 3}\n[1, "o", "a"]\n',
     ],
 )
 def test_a_bad_cast_leaves_no_text_and_no_temporary_file(tmp_path, text):
@@ -316,7 +316,10 @@ def test_a_cast_pyte_cannot_render_is_a_cast_error(tmp_path):
         casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
     assert str(path) in str(err.value)
     assert isinstance(err.value.__cause__, AssertionError)
-    assert [p.name for p in path.parent.iterdir()] == ["odd.cast"]
+    assert sorted(p.name for p in path.parent.iterdir()) == ["odd.cast", "odd.txt"]
+    assert path.with_suffix(".txt").read_text(encoding="utf-8").endswith(
+        "[no text copy: could not be rendered (AssertionError)]\n"
+    )
 
 
 @pytest.mark.parametrize(
@@ -332,7 +335,7 @@ def test_odd_casts_raise_only_cast_error(tmp_path, text):
     path.write_bytes(text.encode("utf-8"))
     with pytest.raises(CastError):
         casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
-    assert [p.name for p in path.parent.iterdir()] == ["odd.cast"]
+    assert {p.name for p in path.parent.iterdir()} <= {"odd.cast", "odd.txt"}
 
 
 def test_stale(tmp_path):
@@ -697,6 +700,101 @@ def test_a_wrapped_line_keeps_its_spaces_at_the_wrap(tmp_path):
     out = casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
     assert out.read_text(encoding="utf-8").splitlines()[5].split("  ", 1)[1] == "abc       def"
 
+
+
+def _screen(text, cols=10, rows=5):
+    screen = casttext._TextScreen(cols, rows)
+    casttext.pyte.Stream(screen).feed(text)
+    return screen
+
+
+def _cells(screen, y):
+    return sorted(screen.buffer.get(y) or {})
+
+
+@pytest.mark.parametrize("sequence", ["\x1b[?5h", "\x1b[?5l", "\x1b[160h", "\x1b[160l"])
+def test_reverse_video_touches_no_cell(sequence):
+    # private mode 5 (DECSCNM), or 160, the plain mode pyte shifts it to: pyte rewrites every
+    # stored cell for it, so a screen filled once could be rewritten for every few bytes
+    screen = _screen("abc")
+    cell = screen.buffer[0][0]
+    casttext.pyte.Stream(screen).feed(sequence)
+    assert screen.buffer[0][0] is cell
+
+
+def test_inserting_or_deleting_characters_stores_no_blank_cells():
+    # pyte writes a blank cell into every column from the cursor to the edge for each, so three
+    # bytes filled a row of a 1000-column screen
+    screen = _screen("abcdef\x1b[1;3H\x1b[2@", cols=1000)
+    assert screen._row_text(0) == "ab  cdef" and _cells(screen, 0) == [0, 1, 4, 5, 6, 7]
+    screen = _screen("abcdef\x1b[1;2H\x1b[2P", cols=1000)
+    assert screen._row_text(0) == "adef" and _cells(screen, 0) == [0, 1, 2, 3]
+    assert _cells(_screen("\x1b[5@\x1b[5P\x1b[4hx", cols=1000), 0) == [0]
+    assert _screen("abcdefghij\x1b[1;3H\x1b[2@")._row_text(0) == "ab  cdefgh"
+    assert _screen("abc\x1b[1;1H\x1b[4hX")._row_text(0) == "Xabc"
+
+
+def test_each_erase_removes_the_cells_it_erases():
+    # a cell that is not there reads as a space; pyte writes a blank one in its place
+    rows = "abcdef\r\nabcdef\r\nabcdef\x1b[2;3H"
+    screen = _screen(rows + "\x1b[J")
+    assert [_cells(screen, y) for y in range(3)] == [[0, 1, 2, 3, 4, 5], [0, 1], []]
+    screen = _screen(rows + "\x1b[1J")
+    assert [_cells(screen, y) for y in range(3)] == [[], [3, 4, 5], [0, 1, 2, 3, 4, 5]]
+    assert [_cells(_screen(rows + "\x1b[2J"), y) for y in range(3)] == [[], [], []]
+    line = "abcdef\x1b[1;3H"
+    assert _cells(_screen(line + "\x1b[K"), 0) == [0, 1]
+    assert _cells(_screen(line + "\x1b[1K"), 0) == [3, 4, 5]
+    assert _cells(_screen(line + "\x1b[2K"), 0) == []
+    assert _cells(_screen(line + "\x1b[2X"), 0) == [0, 1, 4, 5]
+    assert _screen(line + "\x1b[1K")._row_text(0) == "   def"
+    assert _screen(line + "\x1b[2X")._row_text(0) == "ab  ef"
+
+
+def test_a_wrapped_line_keeps_the_spaces_an_erase_leaves_in_it():
+    # the erased cells are gone, but a row the next one continues is still the screen's width
+    assert render([(0, "o", "abcdefghij1234567890xyz\x1b[2;6H\x1b[K")], cols=10, rows=5) == [
+        "14:32:07  abcdefghij12345     xyz"
+    ]
+    assert render([(0, "o", "abcdefghij1234567890xyz\x1b[2;1H\x1b[10X")], cols=10, rows=5) == [
+        "14:32:07  abcdefghij          xyz"
+    ]
+
+
+def test_a_cast_given_under_a_second_of_the_base_gets_no_note(box, monkeypatch):
+    # too little to be a fair try: it is tried again next time, not marked
+    ticking(monkeypatch, step=0.1)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 0.5)
+    cast = _cast_in(box, "dc01", "2026-11-14_1432", events=[(0, "o", "x\n" * 200)])
+    assert [kind for kind, _ in _refresh(box).lines] == ["warn"]
+    assert not cast.with_suffix(".txt").exists()
+
+
+BAD_LINE = b'[broken\n[1, "o", "b"]\n'
+
+
+def test_a_cast_that_fails_partway_gets_a_note_and_is_not_tried_again(box):
+    # it may have spent its time before it failed: a text copy that says why keeps the next
+    # export, finish or replay from spending it again
+    odd = _cast_in(box, "dc01", "2026-11-14_1432", events=[(0, "o", "a\r\n\x1b[?6h\x1b[5d")])
+    bad = _cast_in(box, "dc01", "2026-11-14_1500")
+    bad.write_bytes(cast_text([]).encode("utf-8") + BAD_LINE)
+    assert [kind for kind, _ in _refresh(box).lines] == ["warn", "warn"]
+    text = odd.with_suffix(".txt").read_text(encoding="utf-8")
+    assert text.startswith("box      forest") and text.endswith("[no text copy: could not be rendered (AssertionError)]\n")
+    assert "\n[no text copy: line 2 is not a valid event (" in bad.with_suffix(".txt").read_text(encoding="utf-8")
+    assert _refresh(box).lines == []
+
+
+def test_a_cast_that_fails_with_no_base_left_gets_no_note(box, monkeypatch):
+    # the cast before it spent the base: it is tried again next time, not marked
+    ticking(monkeypatch)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 10)
+    _cast_in(box, "dc01", "2026-11-14_1400", events=[(0, "o", "x\n" * 200)])
+    bad = _cast_in(box, "dc01", "2026-11-14_1500")
+    bad.write_bytes(cast_text([]).encode("utf-8") + BAD_LINE)
+    assert [kind for kind, _ in _refresh(box).lines] == ["warn", "warn"]
+    assert not bad.with_suffix(".txt").exists()
 
 def test_the_last_flush_is_timed_too(tmp_path, monkeypatch):
     # past the deadline by the end of the events, the screen is not read at all
