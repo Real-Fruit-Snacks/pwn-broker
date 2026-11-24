@@ -19,6 +19,7 @@ import string
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 from collections.abc import Callable
@@ -323,13 +324,35 @@ def receive_into(loot: Path, name: str, size: int, reader) -> Path:
     """Write exactly `size` bytes from `reader` into loot/, under `name` or, when that is taken,
     `name-2` and on: never over a file that is there. Written to a temporary name first, which
     the box's file scan leaves out, so a cut transfer leaves nothing behind."""
-    from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
-
     if loot.is_symlink():
         raise OSError(f"{loot} is a link")
     loot.mkdir(parents=True, exist_ok=True)
-    if size > shutil.disk_usage(loot).free - ROOM_LEFT:
-        raise NoRoom()
+    # each upload has a thread of its own: it counts what the others still have to write
+    with _PROMISED.lock:
+        if size > shutil.disk_usage(loot).free - ROOM_LEFT - _PROMISED.bytes:
+            raise NoRoom()
+        _PROMISED.bytes += size
+    try:
+        return _write_into(loot, name, size, reader)
+    finally:
+        with _PROMISED.lock:
+            _PROMISED.bytes -= size
+
+
+class _Promised:
+    """The bytes the uploads still being written may yet take."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.bytes = 0
+
+
+_PROMISED = _Promised()
+
+
+def _write_into(loot: Path, name: str, size: int, reader) -> Path:
+    from pwn_broker.filescan import TEMP_PREFIX, TEMP_SUFFIX
+
     tmp = loot / f"{TEMP_PREFIX}{secrets.token_hex(8)}{TEMP_SUFFIX}"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     fd = os.open(tmp, flags, 0o600)
