@@ -624,7 +624,7 @@ Unpacking refuses any entry that would land outside the box folder, and an archi
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `home` | `~/pwn-broker` | Where `active/`, `wrapped/` and `tools.log` live |
+| `home` | `~/pwn-broker` | Where `active/`, `wrapped/` and `tools.log` live; a whole path, as `copy_to` is |
 | `copy_to` | not set | A second folder every finished archive, report and export is also copied to |
 | `default_platform` | `htb` | Platform used when a box is created |
 | `terminal` | `x-terminal-emulator` | What opens the note window |

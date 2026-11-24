@@ -22,6 +22,31 @@ def test_default_install_root_without_reading_it(tmp_path, monkeypatch):
     assert read == [Path("/opt/pwn-broker/config.toml")]
 
 
+def test_an_empty_install_root_is_the_default(tmp_path, monkeypatch):
+    # PWN_BROKER_OPT="" is "not set", as an empty PWN_BROKER_HOME is, never the current folder
+    monkeypatch.setattr(config, "_read_toml", lambda path: {})
+    paths, _ = load({"PWN_BROKER_OPT": ""}, home_dir=tmp_path)
+    assert paths.opt == Path("/opt/pwn-broker")
+
+
+@pytest.mark.parametrize("key", ["home", "copy_to"])
+def test_a_relative_folder_in_config_is_refused(tmp_path, key):
+    # the note window, serve, scan and record each run from another folder: a relative one would
+    # name a different place in each
+    opt = tmp_path / "opt"
+    opt.mkdir()
+    (opt / "config.toml").write_text(f'{key} = "pwn-work"\n', encoding="utf-8")
+    with pytest.raises(ConfigError, match=f"{key} must be a whole path"):
+        load({"PWN_BROKER_OPT": str(opt)}, home_dir=tmp_path)
+
+
+@pytest.mark.parametrize("variable", ["PWN_BROKER_HOME", "PWN_BROKER_OPT"])
+def test_a_relative_folder_in_the_environment_is_refused(tmp_path, variable):
+    env = {"PWN_BROKER_OPT": str(tmp_path / "opt"), variable: "pwn-work"}
+    with pytest.raises(ConfigError, match=f"{variable} must be a whole path"):
+        load(env, home_dir=tmp_path)
+
+
 def test_defaults(tmp_path):
     paths, settings = load({"PWN_BROKER_OPT": str(tmp_path / "opt")}, home_dir=tmp_path)
     assert paths.home == tmp_path / "pwn-broker"
