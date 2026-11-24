@@ -22,6 +22,8 @@ Fixed: text from a target or an archive could hold a format character, such as a
 
 Fixed: `serve` checked the free space for each upload on its own, so several uploads at once, each in its own thread, could together fill the disk past the 1 GiB it keeps free. Each upload now counts what the others still have to write.
 
+Fixed: a tool package could name a command `nmap`, and `scan`, which runs the first `nmap` on the PATH, would then run the package's, as `/opt/pwn-broker/bin` comes first. `nmap` is now a reserved command name, as the other programs the app runs by name are.
+
 ## v0.1.12
 
 With the `report` tool in the box, `finish` builds a private report from the finished archive and puts it beside it, `<box folder>.finished.report`, after the archive is written and before the tools come off. `tool install report` gets [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report) from pwn-shop. `finish`'s summary says whether a report will be built. A box finished again after it is reopened or imported puts its report beside the first, as `.report-2`; one is never replaced. With `copy_to` the report is copied there too. A report that fails, or takes longer than 600 seconds, is a `warn` line, and `finish` goes on.

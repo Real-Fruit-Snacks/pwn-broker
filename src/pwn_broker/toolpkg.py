@@ -56,7 +56,7 @@ RESERVED_COMMANDS = frozenset(
     # Python and pip; python3.13, python3.13t, pip3.13 and the like are refused by _VERSIONED_PYTHON
     "python python3 pip pip3 "
     # what the app runs by name, which a test checks against the app's own code
-    "chown cp rm kill ip ping tar vim openvpn x-terminal-emulator pwn-broker record asciinema "
+    "chown cp rm kill ip ping tar vim openvpn x-terminal-emulator pwn-broker record asciinema nmap "
     # what a shell's start-up files, its prompt and everyday lines run
     "sed cut mkdir cat ls mv ln vi grep awk find head tail chmod id uname test "
     "whoami hostname sleep touch tee which ps tput dircolors xargs timeout nohup "
