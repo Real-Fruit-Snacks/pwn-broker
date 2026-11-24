@@ -1,4 +1,5 @@
 import io
+import unicodedata
 import re
 
 import pytest
@@ -466,11 +467,19 @@ def test_fake_records_clear_in_events_only():
 
 # --- control characters -------------------------------------------------------------------------
 
-CONTROLS = ["\r", "\n", "\x08", "\x07", "\x1b[2J", "\x7f", "\x9b", "\x00", "\x85"]
+# with the format characters that reorder or hide text (a right-to-left override, an isolate, a
+# zero-width space) and the line and paragraph separators
+CONTROLS = [
+    "\r", "\n", "\x08", "\x07", "\x1b[2J", "\x7f", "\x9b", "\x00", "\x85",
+    "\u202e", "\u2066", "\u200b", "\u2028", "\u2029",
+]  # fmt: skip
 
 
 def _shown(control):
-    return "".join("?" if ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F else ch for ch in control)
+    return "".join(
+        "?" if ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F or unicodedata.category(ch) in ("Cf", "Zl", "Zp") else ch
+        for ch in control
+    )
 
 
 @pytest.mark.parametrize("control", CONTROLS)
