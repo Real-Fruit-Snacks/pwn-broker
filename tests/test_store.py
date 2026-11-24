@@ -533,10 +533,12 @@ def test_a_target_the_app_would_not_have_made_is_a_store_error(box, dc01, change
         load_targets(box)
 
 
-def test_a_link_local_address_with_an_interface_still_loads(box, dc01):
-    rewrite(box.path / "targets" / "dc01" / "target.toml", set_to("ips", ["fe80::1%eth0", "10.10.10.161"]))
+@pytest.mark.parametrize("ip", ["fe80::1%eth0", "fe80::1%wg+0", "fe80::1%br-1a2b", "fe80::1%2"])
+def test_a_link_local_address_with_an_interface_still_loads(box, dc01, ip):
+    # an interface may be named with + or @, as Linux allows; a box an earlier version made opens
+    rewrite(box.path / "targets" / "dc01" / "target.toml", set_to("ips", [ip, "10.10.10.161"]))
     [target] = load_targets(box)
-    assert target.ips == ["fe80::1%eth0", "10.10.10.161"]
+    assert target.ips == [ip, "10.10.10.161"]
 
 
 def test_a_target_whose_folder_is_not_a_name_the_app_makes_is_a_store_error(box, dc01):

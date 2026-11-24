@@ -474,7 +474,8 @@ def test_refresh_gives_all_its_recordings_one_allowance(box, monkeypatch):
         _cast_in(box, "dc01", name, events=[(0, "o", "x\r\n")] * 20)
     console = _refresh(box)
     warned = [text for kind, text in console.lines if kind == "warn"]
-    assert warned and all("took longer than 30 seconds to render" in text for text in warned)
+    # each says the time it had, which together is the shared 30 seconds
+    assert len(warned) == 3 and all("took longer than" in text for text in warned)
     # once between them, not 30 seconds each
     assert now[0] < 30 + 10
 
@@ -505,6 +506,22 @@ def test_a_slow_cast_first_leaves_a_small_real_one_its_time(box, monkeypatch):
     warned = [text for kind, text in console.lines if kind == "warn"]
     assert len(warned) == 1 and "2026-11-14_1432.cast" in warned[0]
     assert real.with_suffix(".txt").exists() and not slow.with_suffix(".txt").exists()
+
+
+def test_a_cast_stopped_by_the_shared_time_says_the_time_it_had(box, monkeypatch):
+    ticking(monkeypatch)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 30)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS_EACH", 25)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS_PER_MB", 0)
+    for name in ("2026-11-14_1432", "2026-11-14_1500"):
+        _cast_in(box, "dc01", name, events=[(0, "o", "x\n" * 100)])
+    warned = [text for kind, text in _refresh(box).lines if kind == "warn"]
+    # the first had its own 25 seconds; the second what was left of the shared 30
+    import re
+
+    assert "took longer than 25 seconds" in warned[0]
+    left = int(re.search(r"took longer than (\d+) seconds", warned[1])[1])
+    assert left < 6
 
 
 def test_text_the_parser_alone_takes_in_is_timed_too(tmp_path, monkeypatch):
