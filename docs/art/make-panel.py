@@ -52,7 +52,7 @@ OUT_AT = 15.2       # everything fades out, then the loop starts again
 MONO = ("azeret-mono-latin.woff2", 400)
 MONO_B = ("azeret-mono-latin.woff2", 600)
 
-COLS = 44
+COLS = 54
 HOME = "/home/kali/pwn-broker"
 BOX = "2026-11-14_htb_forest"
 ARCHIVE = f"{BOX}.finished.tar.gz"
@@ -101,10 +101,10 @@ WRAPPED = [
 ]
 
 # Layout
-LX, RX, TOP, BOTTOM = 40, 544, 76, 404       # left window from LX, right window from RX to W - 40
-L_SIZE, R_SIZE = 14.8, 13.5
-L_PAD, L_FIRST, L_PITCH = 18, 108, 28
-R_PAD, R_FIRST, R_PITCH, R_INDENT = 14, 106, 23.5, 13
+LX, RX, TOP, BOTTOM = 28, 558, 72, 404       # left window from LX, right window from RX to W - 28
+L_SIZE, R_SIZE = 13.0, 13.0
+L_PAD, L_FIRST, L_PITCH = 16, 106, 28
+R_PAD, R_FIRST, R_PITCH, R_INDENT = 14, 104, 23.5, 13
 
 _fonts = {}
 _glyphs = {}   # (font, glyph name) -> (id, path in font units); drawn once in <defs>, reused by <use>
@@ -161,8 +161,28 @@ def status_line(kind, s):
 
 
 def wrap(s):
-    """A line as a COLS-wide terminal shows it."""
-    return [s[i:i + COLS] for i in range(0, len(s), COLS)] or [""]
+    """Word/path-wrap a status line into a COLS-wide terminal with 6-space continuation indent."""
+    if len(s) <= COLS:
+        return [s]
+    rows, rem = [], s
+    while rem:
+        indent = "" if not rows else "      "
+        limit = COLS - len(indent)
+        if len(rem) <= limit:
+            rows.append(indent + rem)
+            break
+        slash = rem.rfind("/", 0, limit + 1)
+        space = rem.rfind(" ", 0, limit + 1)
+        if slash > 6 and slash >= space:
+            rows.append(indent + rem[:slash + 1])
+            rem = rem[slash + 1:]
+        elif space > 6:
+            rows.append(indent + rem[:space])
+            rem = rem[space:].lstrip(" ")
+        else:
+            rows.append(indent + rem[:limit])
+            rem = rem[limit:]
+    return rows or [""]
 
 
 class Anim:
@@ -306,14 +326,15 @@ def build(theme):
     o = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" role="img">']
     o.append(a.style())
     # --- the plate, the terminal and the folder's pane ---
-    o.append(f'<rect x="0.5" y="0.5" width="{W - 1}" height="{H - 1}" rx="12" fill="{c["plate"]}" stroke="{c["line"]}"/>')
-    o.append(f'<rect x="1" y="1" width="{W - 2}" height="3" rx="1.5" fill="url(#rfs-bar)"/>')
-    o.append(text("pwn-broker", LX, 52, 15, MONO_B, c["mute"]))
-    o.append(text(f"{HOME}/", RX, 52, 15, MONO, c["mute"]))
-    o.append(f'<rect x="{LX}" y="{TOP}" width="{RX - 20 - LX}" height="{BOTTOM - TOP}" rx="8" fill="{c["glass"]}" stroke="{c["line"]}"/>')
-    o.append(f'<rect x="{RX}" y="{TOP}" width="{W - 40 - RX}" height="{BOTTOM - TOP}" rx="8" fill="none" stroke="{c["line"]}"/>')
+    o.append(f'<rect x="0.5" y="0.5" width="{W - 1}" height="{H - 1}" rx="10" fill="{c["plate"]}" stroke="{c["line"]}"/>')
+    o.append(f'<rect x="0" y="0" width="{W}" height="3" fill="url(#rfs-bar)" clip-path="url(#card-clip)"/>')
+    o.append(text("pwn-broker", LX, 50, 14.5, MONO_B, c["mute"]))
+    o.append(text(f"{HOME}/", RX, 50, 14.5, MONO, c["mute"]))
+    o.append(f'<rect x="{LX}" y="{TOP}" width="{RX - 18 - LX}" height="{BOTTOM - TOP}" rx="8" fill="{c["glass"]}" stroke="{c["line"]}"/>')
+    o.append(f'<rect x="{RX}" y="{TOP}" width="{W - 28 - RX}" height="{BOTTOM - TOP}" rx="8" fill="none" stroke="{c["line"]}"/>')
     o.append(f'<g class="run">{"".join(run)}</g>')
 
+    card_clip = f'<clipPath id="card-clip"><rect x="0.5" y="0.5" width="{W - 1}" height="{H - 1}" rx="10"/></clipPath>'
     bar_grad = (
         f'<linearGradient id="rfs-bar" x1="0" y1="0" x2="1" y2="0">'
         f'<stop offset="0%" stop-color="{c["steel"]}"/>'
@@ -321,7 +342,7 @@ def build(theme):
         f'<stop offset="100%" stop-color="{c["beacon"]}"/>'
         f'</linearGradient>'
     )
-    defs = bar_grad + "".join(f'<path id="{gid}" d="{d}"/>' for gid, d in _glyphs.values() if d)
+    defs = card_clip + bar_grad + "".join(f'<path id="{gid}" d="{d}"/>' for gid, d in _glyphs.values() if d)
     o.insert(1, f"<defs>{defs}</defs>")
     o.append("</svg>")
     return "".join(o)
