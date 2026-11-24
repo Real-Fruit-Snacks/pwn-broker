@@ -1,14 +1,10 @@
-## What changes
+## Summary
 
-## Why
+- Plain summary of what changed and why.
 
-## Tested on
+## Verification
 
-- Kali:
-- Python:
-- Run as: root / normal user
-
-- [ ] `python -m pytest -q -W error` passes, with a test that fails without the change
-- [ ] A change to `install.sh` still passes `sh -n`, `dash -n` and `shellcheck`
-- [ ] A change to what the prompt prints or writes is reflected in the README or `docs/`
-- [ ] `CHANGELOG.md` updated
+- [ ] Tested locally on target OS/runtime (note OS & version below)
+- [ ] CLI honors `NO_COLOR`, non-TTY stdout, and exit codes `0` / `1` / `2` (if applicable)
+- [ ] Web UI uses `rfs.css` + `rfs-components.css`, below-header scrollbars, and zero native `alert()`/`confirm()`/`prompt()` (if applicable)
+- [ ] Updated README / `cover.toml` if commands or screenshots changed

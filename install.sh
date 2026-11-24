@@ -37,15 +37,15 @@ paint() {
     case "${COLORTERM-}" in truecolor | 24bit) depth=full ;; esac
     case "$depth:$2" in
         full:ok) word="38;2;61;220;151" ;;
-        full:fail) word="38;2;240;98;146" ;;
+        full:fail) word="38;2;255;92;108" ;;
         256:ok) word="38;5;78" ;;
-        256:fail) word="38;5;204" ;;
+        256:fail) word="38;5;203" ;;
         16:ok) word="92" ;;
         *) word="91" ;;
     esac
     case "$depth" in
-        full) text="38;2;232;230;225" ;;
-        256) text="38;5;253" ;;
+        full) text="38;2;242;244;248" ;;
+        256) text="38;5;231" ;;
         *) text="97" ;;
     esac
     esc="$(printf '\033')"

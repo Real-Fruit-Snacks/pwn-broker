@@ -374,8 +374,8 @@ def broken_release(rig):
 
 # the escape codes the app writes for the same colours at each depth (theme.py through rich)
 DEPTHS = {
-    "full": ("38;2;61;220;151", "38;2;240;98;146", "38;2;232;230;225"),
-    "256": ("38;5;78", "38;5;204", "38;5;253"),
+    "full": ("38;2;61;220;151", "38;2;255;92;108", "38;2;242;244;248"),
+    "256": ("38;5;78", "38;5;203", "38;5;231"),
     "16": ("92", "91", "97"),
 }
 TERMINALS = [

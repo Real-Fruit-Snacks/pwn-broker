@@ -2,12 +2,13 @@ from collections.abc import Mapping
 
 from prompt_toolkit.styles import Style
 
-EMBER = "#FF6A3D"
-TEXT = "#E8E6E1"
+EMBER = "#FF9254"
+TEXT = "#F2F4F8"
 MINT = "#3DDC97"
 AMBER = "#FFC247"
-RASPBERRY = "#F06292"
-MUTE = "#8A8F99"
+FAULT = "#FF5C6C"
+RASPBERRY = FAULT
+MUTE = "#8F95A6"
 
 
 def color_enabled(env: Mapping[str, str]) -> bool:
@@ -18,7 +19,7 @@ def prompt_style() -> Style:
     return Style.from_dict(
         {
             "prompt": f"{EMBER} bold",
-            # questions asked by commands: only the shell prompt is Ember
+            # questions asked by commands: only the shell prompt is Beacon Orange
             "question": MUTE,
             "answer": TEXT,
             "toolbar": MUTE,

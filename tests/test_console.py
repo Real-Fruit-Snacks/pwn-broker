@@ -838,8 +838,8 @@ def test_colours_of_the_new_lines(monkeypatch):
     c.heading("New box")
     c.detail("d")
     text = out.getvalue()
-    assert "\x1b[1;38;2;232;230;225mNew box" in text  # bold, text colour
-    assert "\x1b[38;2;138;143;153md" in text  # mute
+    assert "\x1b[1;38;2;242;244;248mNew box" in text  # bold, text colour
+    assert "\x1b[38;2;143;149;166md" in text  # mute
 
 
 def test_fake_records_lines_and_events_in_order():

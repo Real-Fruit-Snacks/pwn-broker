@@ -198,9 +198,9 @@ def test_nightshift_palette():
     assert "3DDC97" not in text.upper()
     assert "let g:colors_name = 'nightshift'" in text
     assert text.startswith("set background=dark\nhighlight clear\n")
-    assert "#FF6A3D" in text.upper()
+    assert "#FF9254" in text.upper()
     assert "markdown" not in text.lower()
-    for colour in ("#FFC247", "#8A8F99", "#E8E6E1", "#1A1D24", "#13151A", "#0C0D10"):
+    for colour in ("#FFC247", "#8F95A6", "#F2F4F8", "#161820", "#0D0E12", "#050507", "#FF5C6C"):
         assert colour in text.upper()
 
 

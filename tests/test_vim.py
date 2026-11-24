@@ -133,9 +133,9 @@ call Put('normal_bg', synIDattr(hlID('Normal'), 'bg#', 'gui'))
     assert (got["expandtab"], got["shiftwidth"], got["softtabstop"]) == (1, 4, 4)
     assert (got["scrolloff"], got["laststatus"], got["belloff"]) == (3, 2, "all")
     assert "NewFold(0)" in got["F8n"] and "NewFold(1)" in got["F8i"]
-    assert got["statusline_bg"].upper() == "#13151A"
-    assert (got["folded_fg"].upper(), got["folded_bg"].upper()) == ("#E8E6E1", "#1A1D24")
-    assert got["normal_bg"].upper() == "#0C0D10"
+    assert got["statusline_bg"].upper() == "#0D0E12"
+    assert (got["folded_fg"].upper(), got["folded_bg"].upper()) == ("#F2F4F8", "#161820")
+    assert got["normal_bg"].upper() == "#050507"
 
 
 def test_no_history_or_register_is_kept_outside_the_box(box, note, work):
@@ -393,7 +393,7 @@ for lnum in range(1, line('$'))
 endfor
 call Put('all_groups', sort(keys(names)))
 """)
-    amber, ember, mute, text = "#FFC247", "#FF6A3D", "#8A8F99", "#E8E6E1"
+    amber, ember, mute, text = "#FFC247", "#FF9254", "#8F95A6", "#F2F4F8"
     for key in ("ip_box", "ip_title", "ip_free", "ip_free_end"):
         assert got[key][:2] == ["pwnnoteIP", amber.lower()] or [got[key][0], got[key][1].upper()] == ["pwnnoteIP", amber], key
     assert [got["placeholder"][0], got["placeholder"][1].upper()] == ["pwnnotePlaceholder", ember]
