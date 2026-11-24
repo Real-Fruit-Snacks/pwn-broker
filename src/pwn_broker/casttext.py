@@ -114,11 +114,14 @@ class _TextScreen(pyte.Screen):
 
     # what was taken
 
-    def _row_text(self, y: int) -> str:
+    def _row_text(self, y: int, full: bool = False) -> str:
+        """The row's text to its last cell, or to the screen's width when `full`: a row the next one
+        continues keeps its trailing spaces, which the wrap would otherwise lose."""
         line = self.buffer.get(y)
         if not line:
             return ""
-        return "".join(line[x].data for x in range(self.columns))
+        end = self.columns if full else min(self.columns, max(line) + 1)
+        return "".join(line[x].data for x in range(end))
 
     def _last_text_row(self) -> int:
         for y in range(self.lines - 1, -1, -1):
@@ -149,7 +152,7 @@ class _TextScreen(pyte.Screen):
             return
         if y not in self.wrapped:
             self._flush()
-        self._pending.append(self._row_text(y))
+        self._pending.append(self._row_text(y, full=y + 1 in self.wrapped))
         if y in self.times:
             self._pending_times.append(self.times[y])
 
@@ -456,6 +459,9 @@ def render(
         if screen.taken:
             yield from clock.lines(screen.taken)
             screen.taken.clear()
+    # the last flush reads every row there is, so it waits for the deadline too
+    if deadline is not None and _clock() > deadline:
+        raise _TooLong
     yield from clock.lines(screen.finish(last))
 
 
@@ -512,7 +518,8 @@ def write(
                 store.write_text(out, "\n".join([*_head(cast_path, box_name, box_id, target, started), line]) + "\n")
             when = max(time.time_ns(), cast_path.stat().st_mtime_ns)
             os.utime(out, ns=(when, when))
-        raise OutOfTime(cast_path, f"it took longer than {took} to render; replay still plays it") from None
+        why = "it had less than a second to render" if allowed.seconds < 1 else f"it took longer than {took} to render"
+        raise OutOfTime(cast_path, f"{why}; replay still plays it") from None
     except (CastError, OSError):
         raise
     except Exception as exc:  # pyte's own failures on input it cannot handle
@@ -520,6 +527,9 @@ def write(
     lines = [*_head(cast_path, box_name, box_id, target, started), *body]
     out = text_path(cast_path)
     store.write_text(out, "\n".join(lines) + "\n")
+    # no earlier than its cast, whose time an archive may set in the future, or it stays stale
+    when = max(time.time_ns(), cast_path.stat().st_mtime_ns)
+    os.utime(out, ns=(when, when))
     return out
 
 

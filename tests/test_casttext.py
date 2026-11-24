@@ -466,7 +466,7 @@ def test_refresh_gives_all_its_recordings_one_allowance(box, monkeypatch):
     warned = [text for kind, text in console.lines if kind == "warn"]
     # the first two say the time each had, which together is the shared 30 seconds; the second ran
     # out with the base spent, so the third waits for the next export, finish or replay
-    assert len(warned) == 3 and all("took longer than" in text for text in warned[:2])
+    assert len(warned) == 3 and all("took longer than" in text or "less than a second" in text for text in warned[:2])
     assert warned[2].startswith("1 recording got no text copy this time")
     # once between them, not 30 seconds each
     assert now[0] < 30 + 10
@@ -667,6 +667,61 @@ def test_seconds_are_said_as_people_say_them():
 def test_a_megabyte_gets_a_minute_besides_the_base():
     # room for a real recording on a busy machine, where short lines took up to 36 s a megabyte
     assert casttext.allowance(1_000_000).seconds == casttext.RENDER_SECONDS + 60
+
+
+def test_a_cast_dated_in_the_future_that_renders_is_not_rendered_again(box, monkeypatch):
+    # an archive keeps its members' times: the text copy is dated no earlier than its cast
+    cast = _cast_in(box, "dc01", "2026-11-14_1432")
+    later = 4_070_908_800 * 1_000_000_000  # 2099
+    os.utime(cast, ns=(later, later))
+    assert _refresh(box).lines == []
+    assert not casttext.stale(cast)
+    written = []
+    monkeypatch.setattr(casttext, "write", lambda *a, **k: written.append(a))
+    _refresh(box)
+    assert written == []
+
+
+def test_rows_of_one_character_are_cheap_to_take(box):
+    # the last flush reads each row: a row holding one character is not a thousand cells
+    for minute in range(20):
+        _cast_in(box, "dc01", f"2026-11-14_14{minute:02}", events=[(0, "o", "a\n" * 999 + "a")])
+    for path in (box.path / "targets" / "dc01" / "recordings").glob("*.cast"):
+        text = path.read_text(encoding="utf-8").replace('"cols": 80, "rows": 24', '"cols": 1000, "rows": 1000')
+        path.write_text(text, encoding="utf-8")
+    started = time.monotonic()
+    assert _refresh(box).lines == []
+    assert time.monotonic() - started < 2.5
+
+
+def test_a_wrapped_line_keeps_its_spaces_at_the_wrap(tmp_path):
+    path = write_cast(tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "o", "abc       def\r\n")], cols=10, rows=5)
+    out = casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
+    assert out.read_text(encoding="utf-8").splitlines()[5].split("  ", 1)[1] == "abc       def"
+
+
+def test_the_last_flush_is_timed_too(tmp_path, monkeypatch):
+    # past the deadline by the end of the events, the screen is not read at all
+    # an event of a kind the text copy does not draw: no screen call reads the clock before the end
+    now = ticking(monkeypatch, step=5)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 3)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS_PER_MB", 0)
+    path = write_cast(tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "m", "a marker")])
+    finished = []
+    real = casttext._TextScreen.finish
+    monkeypatch.setattr(casttext._TextScreen, "finish", lambda self, last: finished.append(1) or real(self, last))
+    with pytest.raises(CastError):
+        casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
+    assert finished == []
+
+
+def test_a_warning_with_no_whole_second_reads_plainly(box, monkeypatch):
+    ticking(monkeypatch)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 10)
+    _cast_in(box, "dc01", "2026-11-14_1400", events=[(0, "o", "x\n" * 200)])
+    _cast_in(box, "dc01", "2026-11-14_1500", events=[(0, "o", "x\n" * 200)])
+    warned = [text for kind, text in _refresh(box).lines if kind == "warn"]
+    assert "longer than less than" not in warned[1] and "it had less than a second to render" in warned[1]
 
 
 def test_text_the_parser_alone_takes_in_is_timed_too(tmp_path, monkeypatch):
