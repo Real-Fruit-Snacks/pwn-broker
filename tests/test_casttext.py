@@ -764,6 +764,7 @@ def test_inserting_or_deleting_characters_stores_no_blank_cells():
     assert screen._row_text(0) == "adef" and _cells(screen, 0) == [0, 1, 2, 3]
     assert _cells(_screen("\x1b[5@\x1b[5P\x1b[4hx", cols=1000), 0) == [0]
     assert _screen("abcdefghij\x1b[1;3H\x1b[2@")._row_text(0) == "ab  cdefgh"
+    assert _cells(_screen("abcdefghij\x1b[1;3H\x1b[2@"), 0) == [0, 1, 4, 5, 6, 7, 8, 9]  # i and j are gone
     assert _screen("abc\x1b[1;1H\x1b[4hX")._row_text(0) == "Xabc"
 
 
@@ -828,6 +829,135 @@ def test_a_cast_that_fails_with_no_base_left_gets_no_note(box, monkeypatch):
     bad.write_bytes(cast_text([]).encode("utf-8") + BAD_LINE)
     assert [kind for kind, _ in _refresh(box).lines] == ["warn", "warn"]
     assert not bad.with_suffix(".txt").exists()
+
+
+def test_a_time_past_what_a_date_can_hold_gets_a_note(tmp_path):
+    # an interval that takes the clock past what the system's dates hold: OSError on Linux and
+    # Windows alike, raised when the line is given its time
+    path = write_cast(tmp_path / "recordings" / "odd.cast", [(0, "o", "a\r\n"), (1e18, "o", "b\r\n")])
+    with pytest.raises(CastError, match="could not be rendered"):
+        casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
+    assert path.with_suffix(".txt").read_text(encoding="utf-8").endswith("]\n")
+
+
+def test_a_failure_with_no_fair_share_or_from_reading_gets_no_note(tmp_path, monkeypatch):
+    # given no fair share it is tried again; a read error may be gone next time
+    path = write_cast(tmp_path / "recordings" / "odd.cast", [(0, "o", "a\r\n\x1b[?6h\x1b[5d")])
+    with pytest.raises(CastError, match="could not be rendered"):
+        casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ, note=False)
+    assert not path.with_suffix(".txt").exists()
+
+    def unreadable(cast_path):
+        yield 0.0, "o", "a\r\n"
+        raise CastError(cast_path, "cannot be read (Input/output error)") from OSError(5, "Input/output error")
+
+    monkeypatch.setattr(casttext, "events", unreadable)
+    with pytest.raises(CastError, match="cannot be read"):
+        casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
+    assert not path.with_suffix(".txt").exists()
+
+
+def _older(text, cast, n=1):
+    os.utime(text, ns=(n * 1_000_000_000_000, n * 1_000_000_000_000))
+    os.utime(cast, ns=(n * 1_500_000_000_000, n * 1_500_000_000_000))
+
+
+def test_only_the_end_of_a_kept_text_copy_is_read(box, monkeypatch):
+    # one from an archive may be as large as the disk allows: it is kept byte for byte
+    import tracemalloc
+
+    ticking(monkeypatch)
+    cast = _cast_in(box, "dc01", "2026-11-14_1432", events=[(0, "o", "x\n" * 200)])
+    text = cast.with_suffix(".txt")
+    kept = b"box      forest\r\n\n14:32:07  \xff\xfe" + (b"y" * 999 + b"\n") * 3000 + b"no final break"
+    text.write_bytes(kept)
+    _older(text, cast)
+    tracemalloc.start()
+    try:
+        _refresh(box)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 1_000_000
+    assert text.read_bytes() == kept + b"\n[the text copy stops here: it took longer than 10 seconds to make; replay plays the cast]\n"
+
+
+def test_a_note_whose_cast_grew_and_failed_again_is_a_note_still(box, monkeypatch):
+    # its cast went on and ran out again: the note is replaced, and the warn line says there is none
+    ticking(monkeypatch)
+    cast = _cast_in(box, "dc01", "2026-11-14_1432", events=[(0, "o", "x\n" * 200)])
+    _refresh(box)
+    _older(cast.with_suffix(".txt"), cast, 2)
+    [(_, warned)] = _refresh(box).lines
+    assert warned.startswith("no text copy of targets/dc01/recordings/2026-11-14_1432.cast: ")
+    lines = cast.with_suffix(".txt").read_text(encoding="utf-8").splitlines()
+    assert lines[-1].startswith("[no text copy: ") and len(lines) == 6
+
+
+def test_a_folder_where_a_text_copy_goes_is_warned_of_whatever_its_time(box, monkeypatch):
+    cast = _cast_in(box, "dc01", "2026-11-14_1432")
+    cast.with_suffix(".txt").mkdir()
+    later = 4_070_908_800 * 1_000_000_000  # 2099
+    os.utime(cast.with_suffix(".txt"), ns=(later, later))
+    assert _refresh(box).lines == [
+        ("warn", "no text copy of targets/dc01/recordings/2026-11-14_1432.cast: 2026-11-14_1432.txt is not a file")
+    ]
+
+
+def _link_or_skip(link, to):
+    try:
+        os.symlink(to, link)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"no symbolic links here: {exc}")
+
+
+def test_a_link_where_a_text_copy_goes_is_not_read_or_written_through(box, tmp_path, monkeypatch):
+    mine = tmp_path / "mine.txt"
+    mine.write_bytes(b"not for the box\n")
+    cast = _cast_in(box, "dc01", "2026-11-14_1432")
+    text = cast.with_suffix(".txt")
+    _link_or_skip(text, mine)
+    _older(mine, cast)
+    monkeypatch.setattr(casttext, "render", lambda *args, **kwargs: pytest.fail("rendered"))
+    assert _refresh(box).lines == [
+        ("warn", "no text copy of targets/dc01/recordings/2026-11-14_1432.cast: 2026-11-14_1432.txt is not a file")
+    ]
+    assert text.is_symlink() and mine.read_bytes() == b"not for the box\n"
+
+
+@pytest.mark.parametrize("nofollow", [True, False], ids=["O_NOFOLLOW", "as on Windows"])
+def test_a_link_put_in_place_while_rendering_is_not_read_or_written_through(box, tmp_path, monkeypatch, nofollow):
+    # the check before rendering is made again when the text copy is opened; Windows has no
+    # O_NOFOLLOW, so what was opened is compared with what is there
+    if not nofollow:
+        monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    mine = tmp_path / "mine.txt"
+    mine.write_bytes(b"not for the box\n")
+    cast = _cast_in(box, "dc01", "2026-11-14_1432")
+    text = cast.with_suffix(".txt")
+    text.write_bytes(b"box      forest\n")
+    _older(text, cast)
+
+    def swapped(*args, **kwargs):
+        text.unlink()
+        _link_or_skip(text, mine)
+        raise AssertionError("pyte")
+
+    monkeypatch.setattr(casttext, "render", swapped)
+    [(kind, _)] = _refresh(box).lines
+    assert kind == "warn"
+    assert text.is_symlink() and mine.read_bytes() == b"not for the box\n"
+
+
+@pytest.mark.parametrize(
+    "scroll",
+    ["\x1b[4;1H\n", "\x1b[4;1H\x1b[1M", "\x1b[1;1H\x1bM", "\x1b[1;1H\x1b[1L"],
+    ids=["index", "delete lines", "reverse index", "insert lines"],
+)
+def test_a_scroll_inside_a_region_ends_the_wrap_into_the_row_below_it(scroll):
+    # the region's bottom row changes, so the row below it no longer continues it
+    lines = render([(0, "o", "\x1b[4;1Habcdefghijxyz\x1b[1;4r" + scroll)], cols=10, rows=5)
+    assert lines[-1] == "14:32:07  xyz"
 
 def test_the_last_flush_is_timed_too(tmp_path, monkeypatch):
     # past the deadline by the end of the events, the screen is not read at all

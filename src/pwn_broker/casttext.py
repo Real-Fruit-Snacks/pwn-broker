@@ -228,6 +228,7 @@ class _TextScreen(pyte.Screen):
             self._move_rows(top, bottom, -1)
             if top != 0:
                 self.wrapped.discard(top)
+            self.wrapped.discard(bottom + 1)  # below a region that ends higher up
         super().index()
 
     def reverse_index(self) -> None:
@@ -235,6 +236,7 @@ class _TextScreen(pyte.Screen):
         if self.cursor.y == top:
             self._move_rows(top, bottom, 1)
             self.wrapped.discard(top + 1)
+            self.wrapped.discard(bottom + 1)
         super().reverse_index()
 
     def _materialise(self, top: int, bottom: int) -> None:
@@ -250,6 +252,7 @@ class _TextScreen(pyte.Screen):
             self._materialise(top, bottom)
             self._move_rows(self.cursor.y, bottom, count)
             self.wrapped.discard(self.cursor.y + count)
+            self.wrapped.discard(bottom + 1)
         super().insert_lines(count)
 
     def delete_lines(self, count: int | None = None) -> None:
@@ -259,6 +262,7 @@ class _TextScreen(pyte.Screen):
             self._materialise(top, bottom)
             self._move_rows(self.cursor.y, bottom, -count)
             self.wrapped.discard(self.cursor.y)
+            self.wrapped.discard(bottom + 1)
         super().delete_lines(count)
 
     def alignment_display(self) -> None:
@@ -542,13 +546,11 @@ def write(
             _note(cast_path, head, f"it took longer than {took} to make; replay plays the cast")
         why = "it had less than a second to render" if allowed.seconds < 1 else f"it took longer than {took} to render"
         raise OutOfTime(cast_path, f"{why}; replay still plays it") from None
-    except OSError:
-        raise
     except CastError as exc:  # a bad line after the ones before it were drawn
         if note and not isinstance(exc.__cause__, OSError):
             _note(cast_path, head, exc.reason)
         raise
-    except Exception as exc:  # pyte's own failures on input it cannot handle
+    except Exception as exc:  # pyte's own failures on input it cannot handle, and a time past a date's
         failed = CastError(cast_path, f"could not be rendered ({type(exc).__name__})")
         if note:
             _note(cast_path, head, failed.reason)
@@ -561,41 +563,92 @@ def write(
     return out
 
 
-# the last line of a text copy kept from before its recording went on
+# the last line of a note, and of a text copy kept from before its recording went on
+_NOTE = "[no text copy: "
 _STOPS = "[the text copy stops here: "
+# what is read of a text copy kept or looked at: the end, where those lines are
+_TAIL = 4096
+
+
+def _open_file(path: Path, writing: bool = False):
+    """The file opened without following a link, or None when it is anything but a regular file;
+    OSError when it cannot be opened (a link, where the system can refuse one)."""
+    flags = os.O_RDWR if writing else os.O_RDONLY
+    for name in ("O_NOFOLLOW", "O_NONBLOCK", "O_BINARY"):
+        flags |= getattr(os, name, 0)
+    fh = os.fdopen(os.open(path, flags), "r+b" if writing else "rb")
+    try:
+        opened, there = os.fstat(fh.fileno()), os.lstat(path)
+    except OSError:
+        fh.close()
+        raise
+    if stat.S_ISREG(opened.st_mode) and stat.S_ISREG(there.st_mode) and os.path.samestat(opened, there):
+        return fh
+    fh.close()
+    return None
+
+
+def _last_line(fh) -> tuple[int, bytes]:
+    """Where the file's last line starts, and the line, from no more than its last _TAIL bytes;
+    -1 and those bytes for a last line longer than that."""
+    size = fh.seek(0, os.SEEK_END)
+    start = max(0, size - _TAIL)
+    fh.seek(start)
+    tail = fh.read()
+    at = tail.rfind(b"\n", 0, max(0, len(tail) - 1))
+    if at < 0 and start > 0:
+        return -1, tail
+    return start + at + 1, tail[at + 1 :]
 
 
 def has_copy(cast_path: Path) -> bool:
-    return text_path(cast_path).is_file()
+    """True when the recording has a text copy of it, not a note saying why it has none."""
+    try:
+        fh = _open_file(text_path(cast_path))
+    except OSError:
+        return False
+    if fh is None:
+        return False
+    with fh:
+        return not _last_line(fh)[1].startswith(_NOTE.encode())
 
 
 def _note(cast_path: Path, head: list[str], why: str) -> None:
     """A text copy that says why there is none, or the one the cast already has with a last line
     saying where it stops, dated no earlier than its cast, so it is no longer stale; deleting it
-    tries again."""
+    tries again. A kept one is changed in place, and only its end is read, however large it is."""
     out = text_path(cast_path)
-    if os.path.lexists(out):
-        text = out.read_bytes().decode("utf-8", "surrogateescape")
-        if text and not text.endswith("\n"):
-            text += "\n"
-        last = text.rfind("\n", 0, len(text) - 1) + 1
-        if text[last:].startswith(_STOPS):
-            text = text[:last]  # from a time before: say it once
-        store.write_text(out, f"{text}{_STOPS}{why}]\n", errors="surrogateescape")
+    if not os.path.lexists(out):
+        store.write_text(out, "\n".join([*head, f"{_NOTE}{why}]"]) + "\n")
     else:
-        store.write_text(out, "\n".join([*head, f"[no text copy: {why}]"]) + "\n")
+        fh = _open_file(out, writing=True)
+        if fh is None:
+            raise CastError(cast_path, f"{out.name} is not a file")
+        with fh:
+            at, last = _last_line(fh)
+            # a note or a stop line from an earlier time is replaced, so it is said once
+            again = at >= 0 and last.startswith((_NOTE.encode(), _STOPS.encode()))
+            line = _NOTE if again and last.startswith(_NOTE.encode()) else _STOPS
+            if again:
+                fh.seek(at)
+                fh.truncate()
+            else:
+                fh.seek(0, os.SEEK_END)
+                if last and not last.endswith(b"\n"):
+                    fh.write(b"\n")
+            fh.write(f"{line}{why}]\n".encode())
     when = max(time.time_ns(), cast_path.stat().st_mtime_ns)
     os.utime(out, ns=(when, when))
 
 
 def stale(cast_path: Path) -> bool:
-    """True when the text copy is missing or older than its recording."""
-    out = text_path(cast_path)
+    """True when the text copy is missing or older than its recording, or is not a file, which
+    write refuses with a warn line."""
     try:
-        written = out.stat().st_mtime_ns
+        there = os.lstat(text_path(cast_path))
     except FileNotFoundError:
         return True
-    return written < cast_path.stat().st_mtime_ns
+    return not stat.S_ISREG(there.st_mode) or there.st_mtime_ns < cast_path.stat().st_mtime_ns
 
 
 # record's names: the start time to the minute, then -2, -3 and so on for later ones that minute
