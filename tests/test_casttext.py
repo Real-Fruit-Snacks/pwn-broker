@@ -682,17 +682,15 @@ def test_a_cast_dated_in_the_future_that_renders_is_not_rendered_again(box, monk
     assert written == []
 
 
-def test_rows_of_one_character_are_cheap_to_take(box):
-    # the last flush reads each row: a row holding one character is not a thousand cells
-    for minute in range(20):
-        _cast_in(box, "dc01", f"2026-11-14_14{minute:02}", events=[(0, "o", "a\n" * 999 + "a")])
-    for path in (box.path / "targets" / "dc01" / "recordings").glob("*.cast"):
-        text = path.read_text(encoding="utf-8").replace('"cols": 80, "rows": 24', '"cols": 1000, "rows": 1000')
-        path.write_text(text, encoding="utf-8")
-    started = time.monotonic()
-    assert _refresh(box).lines == []
-    assert time.monotonic() - started < 2.5
-
+def test_a_row_is_read_only_to_its_last_cell():
+    # the last flush reads each row: a row holding one character on a 1000-column screen is that
+    # character, not a thousand cells, and a row the next one continues keeps its full width
+    screen = casttext._TextScreen(1000, 5)
+    stream = casttext.pyte.Stream(screen)
+    stream.feed("a\r\n")
+    assert screen._row_text(0) == "a"
+    assert screen._row_text(0, full=True) == "a" + " " * 999
+    assert screen._row_text(3) == ""
 
 def test_a_wrapped_line_keeps_its_spaces_at_the_wrap(tmp_path):
     path = write_cast(tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "o", "abc       def\r\n")], cols=10, rows=5)
