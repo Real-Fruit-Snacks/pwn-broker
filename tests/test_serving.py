@@ -144,6 +144,20 @@ def test_download_lines_follow_the_box_s_os(os_name, expected):
     assert serving.download_lines(os_name, "http://a/f.exe", "f.exe") == expected
 
 
+@pytest.mark.parametrize(
+    "name, shown",
+    [
+        ("my tool.ps1", "'my tool.ps1'"),
+        ("a;calc.ps1", "'a;calc.ps1'"),
+        ("it's.ps1", "'it''s.ps1'"),
+        ("$(x).ps1", "'$(x).ps1'"),
+    ],
+)
+def test_a_file_name_that_is_not_plain_is_quoted_for_powershell(name, shown):
+    # the line is pasted into PowerShell on the target: a space or ; in a name must not end it
+    assert serving.download_lines("windows", "http://a/f", name) == [f"iwr http://a/f -OutFile {shown}"]
+
+
 def test_find_serves_the_target_s_files_and_the_tools(served):
     folder, tools = served
     assert serving.find(folder, tools, f"/{SECRET}/shell.ps1", SECRET) == folder / "shell.ps1"

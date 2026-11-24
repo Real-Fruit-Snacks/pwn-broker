@@ -11,6 +11,7 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -257,9 +258,19 @@ def offered(folder: Path, tools: Path) -> list[tuple[str, Path]]:
     return mine + _walk(tools, "/")
 
 
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def _powershell_word(name: str) -> str:
+    # pasted into PowerShell on the target: a name with a space, ; or $ in it is one quoted word
+    if _PLAIN_NAME.fullmatch(name):
+        return name
+    return "'" + name.replace("'", "''") + "'"
+
+
 def download_lines(os_name: str, link: str, name: str) -> list[str]:
     """The line to paste on the target for one file, by the box's OS; both kinds when it is neither."""
-    windows = f"iwr {link} -OutFile {name}"
+    windows = f"iwr {link} -OutFile {_powershell_word(name)}"
     linux = f"wget {link}"
     kind = os_name.strip().lower()
     if kind.startswith("win"):
