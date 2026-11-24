@@ -590,7 +590,37 @@ def test_a_text_copy_already_there_is_kept_when_the_cast_runs_out_of_time(box, m
     os.utime(cast.with_suffix(".txt"), ns=(1_000_000_000_000, 1_000_000_000_000))
     os.utime(cast, ns=(2_000_000_000_000, 2_000_000_000_000))
     _refresh(box)
-    assert "whoami" in cast.with_suffix(".txt").read_text(encoding="utf-8")
+    text = cast.with_suffix(".txt").read_text(encoding="utf-8")
+    assert text.startswith("box      forest\n\n14:32:07  whoami\n")
+    # the recording went on past it, so it says where it stops
+    assert text.endswith("\n[the text copy stops here: it took longer than 10 seconds to make; replay plays the cast]\n")
+
+
+def test_a_kept_text_copy_says_once_where_it_stops(box, monkeypatch):
+    # the recording grows again and runs out again: the line is replaced, not added to
+    ticking(monkeypatch)
+    cast = _cast_in(box, "dc01", "2026-11-14_1432", events=[(0, "o", "x\n" * 200)])
+    cast.with_suffix(".txt").write_text("box      forest\n\n14:32:07  whoami", encoding="utf-8")
+    for n in (1, 2):
+        os.utime(cast.with_suffix(".txt"), ns=(n * 1_000_000_000_000, n * 1_000_000_000_000))
+        os.utime(cast, ns=(n * 1_500_000_000_000, n * 1_500_000_000_000))
+        _refresh(box)
+    lines = cast.with_suffix(".txt").read_text(encoding="utf-8").splitlines()
+    assert lines[:3] == ["box      forest", "", "14:32:07  whoami"]
+    assert len(lines) == 4 and lines[3].startswith("[the text copy stops here: ")
+
+
+def test_a_text_copy_that_is_not_a_file_is_left_and_nothing_is_rendered(box, monkeypatch):
+    # a folder or a link in its place, from an archive: rendering would be spent on every command
+    # to fail at the write, and a link would be read through
+    cast = _cast_in(box, "dc01", "2026-11-14_1432")
+    cast.with_suffix(".txt").mkdir()
+    os.utime(cast.with_suffix(".txt"), ns=(1_000_000_000_000, 1_000_000_000_000))
+    monkeypatch.setattr(casttext, "render", lambda *args, **kwargs: pytest.fail("rendered"))
+    assert _refresh(box).lines == [
+        ("warn", "no text copy of targets/dc01/recordings/2026-11-14_1432.cast: 2026-11-14_1432.txt is not a file")
+    ]
+    assert cast.with_suffix(".txt").is_dir()
 
 
 def test_a_warning_with_under_a_second_says_so(box, monkeypatch):
@@ -643,7 +673,10 @@ def test_a_cast_that_runs_out_with_a_text_copy_keeps_it_and_is_not_tried_again(b
     cast.with_suffix(".txt").write_text("box      forest\n\n14:32:07  whoami\n", encoding="utf-8")
     os.utime(cast.with_suffix(".txt"), ns=(1_000_000_000_000, 1_000_000_000_000))
     os.utime(cast, ns=(2_000_000_000_000, 2_000_000_000_000))
-    assert [kind for kind, _ in _refresh(box).lines] == ["warn"]
+    [(kind, text)] = _refresh(box).lines
+    assert kind == "warn" and text.startswith(
+        "the text copy of targets/dc01/recordings/2026-11-14_1432.cast is not up to date: it took longer than"
+    )
     assert "whoami" in cast.with_suffix(".txt").read_text(encoding="utf-8")
     assert _refresh(box).lines == []
 

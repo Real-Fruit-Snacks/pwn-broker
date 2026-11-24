@@ -258,14 +258,17 @@ def _record(env: Env, box: Box, target: Target) -> int:
             console.fail("no recording was saved")
         return 1
     text: Path | None = None
+    what = f"no text copy of {shown(cast)}"
+    if casttext.has_copy(cast):  # one an export wrote while the window recorded
+        what = f"the text copy of {shown(cast)} is not up to date"
     try:
         text = casttext.write(
             cast, box_name=box.name, box_id=box.id, target=target.name, tz=env.clock().tzinfo
         )
     except CastError as exc:
-        console.warn(f"no text copy of {shown(cast)}: {exc.reason}")
+        console.warn(f"{what}: {exc.reason}")
     except OSError as exc:
-        console.warn(f"no text copy of {shown(cast)}: {exc.strerror or exc}")
+        console.warn(f"{what}: {exc.strerror or exc}")
     console.ok(f"recording saved, {recstate.length((env.clock() - started).total_seconds())}")
     console.detail(shown(cast))
     if text is not None:

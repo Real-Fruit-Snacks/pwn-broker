@@ -3,6 +3,7 @@
 import copy
 import os
 import re
+import stat
 import time
 import unicodedata
 from collections import defaultdict
@@ -519,6 +520,11 @@ def write(
     allowed: Allowance | None = None,
     note: bool = True,
 ) -> Path:
+    out = text_path(cast_path)
+    # a folder or a link in its place, from an archive: the write would fail after the rendering,
+    # on every command, and a link would be read through
+    if os.path.lexists(out) and not stat.S_ISREG(os.lstat(out).st_mode):
+        raise CastError(cast_path, f"{out.name} is not a file")
     header = read_header(cast_path)
     # first: every time in the text is the start time plus a little
     started = _started(cast_path, header, tz)
@@ -548,7 +554,6 @@ def write(
             _note(cast_path, head, failed.reason)
         raise failed from exc
     lines = [*head, *body]
-    out = text_path(cast_path)
     store.write_text(out, "\n".join(lines) + "\n")
     # no earlier than its cast, whose time an archive may set in the future, or it stays stale
     when = max(time.time_ns(), cast_path.stat().st_mtime_ns)
@@ -556,11 +561,28 @@ def write(
     return out
 
 
+# the last line of a text copy kept from before its recording went on
+_STOPS = "[the text copy stops here: "
+
+
+def has_copy(cast_path: Path) -> bool:
+    return text_path(cast_path).is_file()
+
+
 def _note(cast_path: Path, head: list[str], why: str) -> None:
-    """A text copy that says why there is none, or the one the cast already has, dated no earlier
-    than its cast, so it is no longer stale; deleting it tries again."""
+    """A text copy that says why there is none, or the one the cast already has with a last line
+    saying where it stops, dated no earlier than its cast, so it is no longer stale; deleting it
+    tries again."""
     out = text_path(cast_path)
-    if not os.path.lexists(out):
+    if os.path.lexists(out):
+        text = out.read_bytes().decode("utf-8", "surrogateescape")
+        if text and not text.endswith("\n"):
+            text += "\n"
+        last = text.rfind("\n", 0, len(text) - 1) + 1
+        if text[last:].startswith(_STOPS):
+            text = text[:last]  # from a time before: say it once
+        store.write_text(out, f"{text}{_STOPS}{why}]\n", errors="surrogateescape")
+    else:
         store.write_text(out, "\n".join([*head, f"[no text copy: {why}]"]) + "\n")
     when = max(time.time_ns(), cast_path.stat().st_mtime_ns)
     os.utime(out, ns=(when, when))
@@ -611,12 +633,15 @@ def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None
     for cast_path in casts:
         shown = cast_path.relative_to(box.path).as_posix()
         target_name = cast_path.parent.parent.name
+        what = f"no text copy of {shown}"
         try:
             if not stale(cast_path):
                 continue
             if stopped:
                 left += 1
                 continue
+            if has_copy(cast_path):
+                what = f"the text copy of {shown} is not up to date"
             now = _clock()
             base = min(RENDER_SECONDS_EACH, max(0.0, base_ends - now))
             seconds = base + RENDER_SECONDS_PER_MB * cast_path.stat().st_size / 1_000_000
@@ -627,14 +652,14 @@ def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None
                 allowed=allowed, note=fair,
             )  # fmt: skip
         except OutOfTime as exc:
-            console.warn(f"no text copy of {shown}: {exc.reason}")
+            console.warn(f"{what}: {exc.reason}")
             # one that ran out with the base already spent ends the rendering: the rest wait for
             # the next export, finish or replay, so crafted casts cost one base, not each a call
             stopped = not fair
         except CastError as exc:
-            console.warn(f"no text copy of {shown}: {exc.reason}")
+            console.warn(f"{what}: {exc.reason}")
         except OSError as exc:
-            console.warn(f"no text copy of {shown}: {exc.strerror or exc}")
+            console.warn(f"{what}: {exc.strerror or exc}")
     if left:
         them = "1 recording" if left == 1 else f"{left} recordings"
         console.warn(f"{them} got no text copy this time; the next export, finish or replay tries them again")
