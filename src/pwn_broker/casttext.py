@@ -28,6 +28,9 @@ _ALTERNATE = frozenset({1049, 1047, 47})
 # copy. refresh gives the casts it writes one allowance between them.
 RENDER_SECONDS = 60
 RENDER_SECONDS_PER_MB = 30
+# what each cast refresh writes may take of the shared allowance at most, besides its own share by
+# size: so a crafted cast early in the order spends seconds, not the minute the others need
+RENDER_SECONDS_EACH = 10
 _clock = time.monotonic
 # pyte draws a run of plain text in one call, whose cost can grow with the square of its length
 # (combining marks) or with the screen's width for each character (insert mode): an event's data
@@ -40,9 +43,9 @@ class Allowance(NamedTuple):
     seconds: int
 
 
-def allowance(size: int) -> Allowance:
+def allowance(size: int, base: float | None = None) -> Allowance:
     """From now, for casts of `size` bytes in all."""
-    seconds = RENDER_SECONDS + RENDER_SECONDS_PER_MB * size / 1_000_000
+    seconds = (RENDER_SECONDS if base is None else base) + RENDER_SECONDS_PER_MB * size / 1_000_000
     return Allowance(_clock() + seconds, round(seconds))
 
 
@@ -396,6 +399,9 @@ def render(
         last = screen.now = elapsed
         if code == "o":
             for start in range(0, len(data), _FEED):
+                # here too: an escape sequence that never ends calls no screen method
+                if deadline is not None and _clock() > deadline:
+                    raise _TooLong
                 stream.feed(data[start : start + _FEED])
         elif code == "r" and (size := _size(data)):
             drawn.resize(lines=size[1], columns=size[0])
@@ -500,7 +506,7 @@ def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None
             if stale(cast_path):
                 # its own allowance or what is left of the shared one, whichever ends first, so a
                 # crafted cast early in the order cannot spend the time the others are given
-                own = allowance(cast_path.stat().st_size)
+                own = allowance(cast_path.stat().st_size, base=RENDER_SECONDS_EACH)
                 allowed = own if own.deadline <= shared.deadline else shared
                 write(cast_path, box_name=box.name, box_id=box.id, target=target_name, tz=tz, allowed=allowed)
         except CastError as exc:

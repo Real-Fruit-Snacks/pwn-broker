@@ -446,7 +446,7 @@ def test_refresh_counts_the_size_of_the_casts_it_writes(box, monkeypatch):
     os.utime(fresh, ns=(1_000_000_000_000, 1_000_000_000_000))
     sizes = []
     real = casttext.allowance
-    monkeypatch.setattr(casttext, "allowance", lambda size: sizes.append(size) or real(size))
+    monkeypatch.setattr(casttext, "allowance", lambda size, base=None: sizes.append(size) or real(size, base))
     _refresh(box)
     # the shared allowance first, from the stale casts alone
     assert sizes[0] == stale.stat().st_size and fresh.stat().st_size not in sizes
@@ -468,6 +468,8 @@ def test_refresh_gives_all_its_recordings_one_allowance(box, monkeypatch):
     # an archive of many small crafted casts cannot take the allowance once for each
     now = ticking(monkeypatch)
     monkeypatch.setattr(casttext, "RENDER_SECONDS", 30)
+    # each may take all of it, so the shared allowance is the one that ends them
+    monkeypatch.setattr(casttext, "RENDER_SECONDS_EACH", 30)
     for name in ("2026-11-14_1432", "2026-11-14_1500", "2026-11-14_1600"):
         _cast_in(box, "dc01", name, events=[(0, "o", "x\r\n")] * 20)
     console = _refresh(box)
@@ -490,6 +492,29 @@ def test_a_slow_cast_first_leaves_the_others_their_time(box, monkeypatch):
     warned = [text for kind, text in console.lines if kind == "warn"]
     assert len(warned) == 1 and "2026-11-14_1432.cast" in warned[0]
     assert real.with_suffix(".txt").exists() and not slow.with_suffix(".txt").exists()
+
+
+def test_a_slow_cast_first_leaves_a_small_real_one_its_time(box, monkeypatch):
+    # the allowances as they ship: a crafted cast first spends a few seconds of its own, not the
+    # minute the casts share, so a short real recording after it still gets its text copy. A
+    # tenth of a second a screen call: the slow cast needs 40 s, the real one about 1.
+    ticking(monkeypatch, step=0.1)
+    slow = _cast_in(box, "dc01", "2026-11-14_1432", events=[(0, "o", "x\n" * 200)])
+    real = _cast_in(box, "dc01", "2026-11-14_1500", events=[(0, "o", "y" * 40 + "\r\n")] * 3)
+    console = _refresh(box)
+    warned = [text for kind, text in console.lines if kind == "warn"]
+    assert len(warned) == 1 and "2026-11-14_1432.cast" in warned[0]
+    assert real.with_suffix(".txt").exists() and not slow.with_suffix(".txt").exists()
+
+
+def test_text_the_parser_alone_takes_in_is_timed_too(tmp_path, monkeypatch):
+    # an escape sequence that never ends calls no screen method at all
+    ticking(monkeypatch)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 20)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS_PER_MB", 0)
+    path = write_cast(tmp_path / "recordings" / "2026-11-14_1432.cast", [(0, "o", "\x1b]0;" + "A" * 20_000)])
+    with pytest.raises(CastError, match="took longer than 20 seconds to render"):
+        casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
 
 
 def test_one_long_run_of_text_is_timed_as_it_is_drawn(tmp_path, monkeypatch):

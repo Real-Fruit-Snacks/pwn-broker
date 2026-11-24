@@ -872,7 +872,7 @@ cast     2026-11-14_1432.cast
 - It is written by `record` when its window closes. `export`, `finish` and `replay` write it for any recording whose text is missing or older than its `.cast`, so a killed window still gets one. For a window still recording, `export` writes the text as far as the recording has got.
 - It is written to a temporary file and renamed, so a half-written text never stands in for a whole one.
 - Making it needs no `asciinema`: the app reads the `.cast` itself. It reads the format the pinned `asciinema` writes (asciicast v3). An incomplete last line, as a power cut leaves, is ignored. A file it cannot read gets a `warn` line naming it, and no text.
-- It has a time limit, counted from the recording's size: 60 seconds and 30 more for each megabyte, shared by all the recordings one `export`, `finish` or `replay` writes. The terminal model's work is counted in the screen's cells, not in the recording's bytes: a few bytes fill or clear a 1000 by 1000 screen, and a crafted recording of a few hundred bytes took minutes. A recording past the limit gets a `warn` line and no text.
+- It has a time limit, counted from the recording's size: 60 seconds and 30 more for each megabyte, shared by all the recordings one `export`, `finish` or `replay` writes, of which each may take at most 10 seconds and 30 more for each megabyte of its own. The terminal model's work is counted in the screen's cells, not in the recording's bytes: a few bytes fill or clear a 1000 by 1000 screen, and a crafted recording of a few hundred bytes took minutes. A recording past the limit gets a `warn` line and no text.
 
 ### 7.5 replay
 
