@@ -614,3 +614,50 @@ def test_target_remove_that_cannot_write_says_which_line_to_remove(session):
         ("info", "remove this line yourself:"),
         ("raw", _hosts_line(session, "10.10.10.161 forest.htb.local")),
     ]
+
+
+# a scan writes its results into the target's folder and serve hands out its upload folder: moving
+# or removing the folder under them breaks both
+
+
+def _serving(session, system, target="dc01"):
+    from dataclasses import asdict
+
+    from pwn_broker import serving
+    from pwn_broker.store import write_toml
+
+    marker = serving.Marker(4321, "55", session.box.id, session.box.name, target, str(session.box.path),
+                            "s3cret", "127.0.0.1", 8000, NOW)  # fmt: skip
+    path = session.paths.run / "serve" / "marker.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_toml(path, asdict(marker))
+    system.processes[4321] = ("55", "python3")
+    system.cmdlines[4321] = ["python3", "-I", "-c", "...", serving.MODULE]
+
+
+@pytest.mark.parametrize("line, doing", [("target rename dc01", "rename"), ("target remove dc01", "remove")])
+def test_a_target_being_scanned_is_not_renamed_or_removed(session, system, line, doing):
+    system.programs["nmap"] = "/usr/bin/nmap"
+    dispatch(session, "scan quick")
+    session.console = FakeConsole(["dc", "y"])
+    dispatch(session, line)
+    assert session.console.lines == [("fail", f"a scan of dc01 is running. wait for it or scan stop, then {doing} it")]
+    assert [t.name for t in session.targets] == ["dc01"]
+    assert (session.box.path / "targets" / "dc01").is_dir()
+
+
+@pytest.mark.parametrize("line, doing", [("target rename dc01", "rename"), ("target remove dc01", "remove")])
+def test_a_target_being_served_is_not_renamed_or_removed(session, system, line, doing):
+    _serving(session, system)
+    session.console = FakeConsole(["dc", "y"])
+    dispatch(session, line)
+    assert session.console.lines == [("fail", f"serve is serving dc01's files. serve stop, then {doing} it")]
+    assert [t.name for t in session.targets] == ["dc01"]
+
+
+def test_serving_another_target_does_not_stop_a_rename(session, system):
+    _add(session, "web", "10.10.10.2")
+    _serving(session, system, target="web")
+    session.console = FakeConsole(["dc"])
+    dispatch(session, "target rename dc01")
+    assert ("ok", "target dc01 is now dc") in session.console.lines

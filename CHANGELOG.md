@@ -12,6 +12,8 @@ Fixed: a recording's text copy could take hours to make from a crafted `.cast` o
 
 Fixed: `serve files` printed a PowerShell line with the file name bare after `-OutFile`, so a name with a space, `;` or `$` in it broke the line you paste on the target, or ran the rest of it there. Such a name is now quoted.
 
+Fixed: `target rename` and `target remove` went ahead while a scan of the target was running or `serve` was serving its files, so `scan stop` no longer found the scan, `finish` stayed blocked by it, and `serve` answered from a folder that had moved. They now refuse until the scan ends or `serve stop`, as they do for a window still recording.
+
 ## v0.1.12
 
 With the `report` tool in the box, `finish` builds a private report from the finished archive and puts it beside it, `<box folder>.finished.report`, after the archive is written and before the tools come off. `tool install report` gets [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report) from pwn-shop. `finish`'s summary says whether a report will be built. A box finished again after it is reopened or imported puts its report beside the first, as `.report-2`; one is never replaced. With `copy_to` the report is copied there too. A report that fails, or takes longer than 600 seconds, is a `warn` line, and `finish` goes on.
