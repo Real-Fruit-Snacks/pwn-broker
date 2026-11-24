@@ -492,12 +492,16 @@ def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None
                 size += cast_path.stat().st_size
         except OSError:
             pass  # said below, when its text copy is written
-    allowed = allowance(size)
+    shared = allowance(size)
     for cast_path in casts:
         shown = cast_path.relative_to(box.path).as_posix()
         target_name = cast_path.parent.parent.name
         try:
             if stale(cast_path):
+                # its own allowance or what is left of the shared one, whichever ends first, so a
+                # crafted cast early in the order cannot spend the time the others are given
+                own = allowance(cast_path.stat().st_size)
+                allowed = own if own.deadline <= shared.deadline else shared
                 write(cast_path, box_name=box.name, box_id=box.id, target=target_name, tz=tz, allowed=allowed)
         except CastError as exc:
             console.warn(f"no text copy of {shown}: {exc.reason}")

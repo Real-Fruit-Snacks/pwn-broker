@@ -448,7 +448,8 @@ def test_refresh_counts_the_size_of_the_casts_it_writes(box, monkeypatch):
     real = casttext.allowance
     monkeypatch.setattr(casttext, "allowance", lambda size: sizes.append(size) or real(size))
     _refresh(box)
-    assert sizes == [stale.stat().st_size]
+    # the shared allowance first, from the stale casts alone
+    assert sizes[0] == stale.stat().st_size and fresh.stat().st_size not in sizes
 
 
 def test_a_crafted_recording_is_stopped_in_about_the_time_it_is_allowed(tmp_path, monkeypatch):
@@ -474,6 +475,21 @@ def test_refresh_gives_all_its_recordings_one_allowance(box, monkeypatch):
     assert warned and all("took longer than 30 seconds to render" in text for text in warned)
     # once between them, not 30 seconds each
     assert now[0] < 30 + 10
+
+
+def test_a_slow_cast_first_leaves_the_others_their_time(box, monkeypatch):
+    # a crafted cast early in the order spends its own allowance, not the whole shared one
+    # one tick a screen call; 0.05 s a byte: the slow cast is small and costly, the real one
+    # larger and cheap, as a crafted and a real recording are
+    ticking(monkeypatch)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS", 10)
+    monkeypatch.setattr(casttext, "RENDER_SECONDS_PER_MB", 50_000)
+    slow = _cast_in(box, "dc01", "2026-11-14_1432", events=[(0, "o", "x\n" * 200)])
+    real = _cast_in(box, "dc01", "2026-11-14_1500", events=[(0, "o", "y" * 2000 + "\r\n")])
+    console = _refresh(box)
+    warned = [text for kind, text in console.lines if kind == "warn"]
+    assert len(warned) == 1 and "2026-11-14_1432.cast" in warned[0]
+    assert real.with_suffix(".txt").exists() and not slow.with_suffix(".txt").exists()
 
 
 def test_one_long_run_of_text_is_timed_as_it_is_drawn(tmp_path, monkeypatch):
