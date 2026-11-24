@@ -514,6 +514,40 @@ def test_a_target_with_a_value_of_the_wrong_kind_is_a_store_error(box, dc01, cha
 
 
 @pytest.mark.parametrize(
+    "change",
+    [
+        # an imported archive's target.toml: its name builds paths, its addresses reach nmap
+        set_to("name", "../../../escaped"),
+        set_to("name", "other"),
+        set_to("ips", ["--script=/tmp/x.nse", "10.10.10.161"]),
+        set_to("ips", ["10.10.10.161 -iL /etc/passwd"]),
+    ],
+)
+def test_a_target_the_app_would_not_have_made_is_a_store_error(box, dc01, change):
+    rewrite(box.path / "targets" / "dc01" / "target.toml", change)
+    with pytest.raises(StoreError, match="invalid content"):
+        load_targets(box)
+
+
+def test_a_target_whose_folder_is_not_a_name_the_app_makes_is_a_store_error(box, dc01):
+    folder = box.path / "targets" / "-Evil"
+    folder.mkdir()
+    data = read_toml(box.path / "targets" / "dc01" / "target.toml")
+    data["name"] = "-Evil"
+    write_toml(folder / "target.toml", data)
+    with pytest.raises(StoreError, match="invalid content"):
+        load_targets(box)
+
+
+@pytest.mark.parametrize("box_id", ["..", ".", "../outside", "a b", ""])
+def test_a_box_id_that_is_not_one_plain_name_is_a_store_error(box, box_id):
+    # the id names folders under /opt/pwn-broker/run and marks the box's /etc/hosts lines
+    rewrite(box.path / "box.toml", set_to("id", box_id))
+    with pytest.raises(StoreError, match="invalid content"):
+        load_box(box.path)
+
+
+@pytest.mark.parametrize(
     "cred",
     [
         "none",

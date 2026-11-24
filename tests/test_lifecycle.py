@@ -984,6 +984,25 @@ def test_import_of_a_new_box_that_cannot_be_opened_leaves_nothing(paths, tmp_pat
     assert not paths.active.exists() or list(paths.active.iterdir()) == []
 
 
+def test_import_refuses_a_target_whose_name_leaves_the_box(session, tmp_path):
+    # a crafted archive: its target's name would build paths outside the box folder
+    box_toml = (session.box.path / "box.toml").read_text(encoding="utf-8").replace(session.box.id, "id-crafted")
+    target = (session.box.path / "targets" / "dc01" / "target.toml").read_text(encoding="utf-8")
+    assert 'name = "dc01"' in target
+    target = target.replace('name = "dc01"', 'name = "../../../escaped"')
+    archive = boxless_archive(
+        tmp_path / "x.tar.gz",
+        "2026-11-14_htb_crafted",
+        {"box.toml": box_toml.encode(), "targets/dc01/target.toml": target.encode()},
+    )
+    console = FakeConsole()
+    assert import_box(session.paths, Settings(), console, archive, lambda: NOW) is None
+    [line] = [t for k, t in console.lines if k == "fail"]
+    assert line.startswith("import failed: the box in the archive cannot be opened: ")
+    assert not (session.paths.active / "2026-11-14_htb_crafted").exists()
+    assert not (session.paths.home / "escaped").exists()
+
+
 def test_export_and_finish_go_through_with_a_file_whose_name_is_not_utf8(session):
     if odd_name(session.box.path) is None:
         pytest.skip("no file here can have a name that is not UTF-8")

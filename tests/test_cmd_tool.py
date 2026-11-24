@@ -258,6 +258,16 @@ def test_info_shows_missing_values_as_placeholders(session, shop):
     assert "kerbrute userenum -d <domain> --dc <ip> <hostname> <lhost> {nope} {0}" in joined
 
 
+def test_info_keeps_the_placeholder_for_a_value_that_is_not_a_plain_name(session, shop):
+    # the examples are pasted into a shell: a hostname or domain from an imported box that holds
+    # shell syntax stays a placeholder
+    session.creds.append(make_cred(n=3, domain="HTB.LOCAL; id"))
+    session.current.hostnames[:] = ["forest.htb.local$(id)"]
+    run(session, "tool install kerbrute")
+    joined = "\n".join(lines(run(session, "tool info kerbrute"), "field"))
+    assert "kerbrute userenum -d <domain> --dc 10.10.10.161 <hostname> <lhost> {nope} {0}" in joined
+
+
 def test_info_shows_sudo_and_upload_details_for_a_root_tool(session, shop):
     run(session, "tool install ligolo-ng")
     joined = "\n".join(lines(run(session, "tool info ligolo-ng"), "field"))
@@ -289,10 +299,11 @@ def test_info_is_one_list_with_the_sudo_form_in_the_value_column(session, shop):
 
 
 def test_a_value_that_looks_like_a_placeholder_is_not_filled_again(session, shop):
+    # not a plain name, so it is not filled in at all, and never read as a placeholder
     session.creds.append(make_cred(domain="{ip}"))
     run(session, "tool install kerbrute")
     joined = "\n".join(lines(run(session, "tool info kerbrute"), "field"))
-    assert "-d {ip} --dc 10.10.10.161" in joined
+    assert "-d <domain> --dc 10.10.10.161" in joined
 
 
 def test_info_shows_no_install_details_for_a_tool_another_box_installed(session, shop, other):
