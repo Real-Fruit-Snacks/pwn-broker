@@ -1,6 +1,6 @@
 # What has been tested
 
-Everything pwn-broker has been run on, up to 0.1.13, with the counts, versions and dates, and everything it has not. The [README](../README.md#tested-on) has the short list. The checks still to run by hand on a real Kali desktop are in [kali-checks.md](kali-checks.md).
+Everything pwn-broker has been run on, up to 0.1.13, with the counts, versions and dates, and everything it has not. [USAGE.md](USAGE.md#tested-on) has the short list. The checks still to run by hand on a real Kali desktop are in [kali-checks.md](kali-checks.md).
 
 ## Unit tests
 

@@ -25,4 +25,5 @@ python -m pytest -q -W error
 
 - Keep `install.sh` strictly LF and POSIX `sh` / `shellcheck` clean.
 - `docs/assets/panel-{dark,light}.svg` must match `docs/art/make-panel.py` byte-for-byte.
+- **README & Docs (`BRAND.md` §14):** Keep `README.md` ultra-minimal (40–60 lines); put walkthroughs, config tables, and known issues in `docs/USAGE.md`, `docs/guide.md`, and `docs/tested.md` (never GitHub Wiki).
 - Never mention private repositories or unrelated internal tools in any public file.
