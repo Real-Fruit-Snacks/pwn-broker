@@ -1039,3 +1039,117 @@ def test_sha256sums_must_name_one_safe_release_file(rig, sums, line):
     assert result.returncode == 1
     assert result.stderr.splitlines() == [line]
     assert rig.work_folders() == []
+
+
+# ---- the install folder's own bin
+
+# What a tool package's launcher would be, were it named after a program the installer runs:
+# it notes that it ran, and fails.
+STAND_IN = """#!/bin/sh
+printf '%s\\n' "${0##*/}" >>"$STAND_IN_LOG"
+exit 1
+"""
+
+
+def stand_in_for_every_program(rig):
+    """Fills the install folder's bin with a stand-in for every program on PATH, the test's own
+    curl and python3 included, so whatever the installer runs by name has one. Returns the log
+    they write. The app's own launchers are left out: the installer never runs them."""
+    names = set()
+    for folder in [str(rig.fakebin), *os.environ["PATH"].split(os.pathsep)]:
+        try:
+            names.update(os.listdir(folder))
+        except OSError:
+            pass
+    names -= {"pwn-broker", "record"}
+    # the ones the installer is known to run, whatever this machine's PATH holds
+    assert {"sha256sum", "gzip", "tar", "stat", "mktemp", "rmdir", "mkdir", "mv", "rm", "id"} <= names
+    own_bin = rig.opt / "bin"
+    own_bin.mkdir(parents=True)
+    first = own_bin / "sha256sum"
+    first.write_text(STAND_IN)
+    first.chmod(0o755)
+    for name in names - {"sha256sum"}:
+        if "/" not in name and name not in (".", ".."):
+            os.link(first, own_bin / name)
+    return rig.tmp / "stand-ins.log"
+
+
+def path_with_own_bin_first(rig, spelled):
+    # the test starts the shell by its whole path: only what the installer runs is looked for
+    rig.shell = shutil.which(rig.shell)
+    return os.pathsep.join([spelled, str(rig.fakebin), os.environ["PATH"]])
+
+
+@not_on_windows
+@pytest.mark.parametrize("spelling", ["plain", "slash", "dot", "link"])
+def test_the_installer_runs_nothing_from_the_install_folders_own_bin(rig, spelling):
+    # An upgrade runs from a shell whose PATH starts with /opt/pwn-broker/bin, where tool
+    # packages put their commands. One named sha256sum would stand in for the check of the
+    # release file, and the list of reserved names cannot hold every program the installer runs.
+    log = stand_in_for_every_program(rig)
+    link = rig.tmp / "link-to-opt"
+    link.symlink_to(rig.opt)
+    spelled = {
+        "plain": f"{rig.opt}/bin",
+        "slash": f"{rig.opt}/bin/",
+        "dot": f"{rig.opt}/./bin",
+        "link": f"{link}/bin",
+    }[spelling]
+    digest = hashlib.sha256(rig.release.read_bytes()).hexdigest()
+    publish(rig, f"{digest}  {RELEASE_NAME}\n")
+    result = rig.run("--no-path", PATH=path_with_own_bin_first(rig, spelled), STAND_IN_LOG=str(log))
+    assert not log.exists(), sorted(set(log.read_text().split()))
+    assert result.returncode == 0, result.stderr
+    assert ok_lines(result)[1] == f"ok    checksum verified for {RELEASE_NAME}"
+    assert f"ok    pwn-broker {VERSION} installed" in result.stdout
+    # the app's own Python is started with the same PATH, without the folder
+    assert rig.calls()
+
+
+@not_on_windows
+def test_the_installer_runs_nothing_from_its_own_bin_when_installing_from_a_file(rig):
+    log = stand_in_for_every_program(rig)
+    result = rig.install("--no-path", PATH=path_with_own_bin_first(rig, f"{rig.opt}/bin"), STAND_IN_LOG=str(log))
+    assert not log.exists(), sorted(set(log.read_text().split()))
+    assert result.returncode == 0, result.stderr
+
+
+@not_on_windows
+def test_a_swapped_release_is_still_refused_with_a_sha256sum_in_the_install_folders_bin(rig):
+    # the stand-in says every file is good
+    own_bin = rig.opt / "bin"
+    own_bin.mkdir(parents=True)
+    (own_bin / "sha256sum").write_text("#!/bin/sh\nexit 0\n")
+    (own_bin / "sha256sum").chmod(0o755)
+    publish(rig, f"{'0' * 64}  {RELEASE_NAME}\n")
+    result = rig.run("--no-path", PATH=path_with_own_bin_first(rig, f"{rig.opt}/bin"))
+    assert result.returncode == 1
+    assert result.stderr.splitlines() == [
+        f"fail  checksum of {RELEASE_NAME} does not match SHA256SUMS.txt. nothing was installed"
+    ]
+
+
+@not_on_windows
+@shells
+def test_the_rest_of_path_is_kept_as_it_was(shell, tmp_path):
+    # only the install folder's bin goes: every other entry stays, in order, an empty one too
+    opt = tmp_path / "opt"
+    (opt / "bin").mkdir(parents=True)
+    other = tmp_path / "other"
+    other.mkdir()
+    script = SCRIPT.read_text(encoding="utf-8").replace('\nmain "$@"\n', "\n")
+    probe = tmp_path / "probe.sh"
+    probe.write_text(script + 'OPT="$1"\nPATH="$2"\ndrop_own_bin\nprintf "%s\\n" "$PATH"\n', newline="\n")
+    own = sh_path(opt / "bin")
+    for before, after in (
+        (f"{own}:/usr/bin:/bin", "/usr/bin:/bin"),
+        (f"/usr/bin:{own}:/bin:{own}/", "/usr/bin:/bin"),
+        (f"/usr/bin::{own}:{sh_path(other)}:/no/such/folder:", f"/usr/bin::{sh_path(other)}:/no/such/folder:"),
+        (f":{own}", ""),
+        ("/usr/bin:/bin", "/usr/bin:/bin"),
+    ):
+        result = subprocess.run(
+            [shell, str(probe), sh_path(opt), before], capture_output=True, text=True, cwd=other
+        )
+        assert result.stdout == after + "\n", (before, result.stderr)

@@ -114,12 +114,14 @@ def save_box(box: Box) -> None:
     }
     if box.tools:
         # ordinary and runtime-only records stay byte-compatible; only automatic dependencies
-        # carry the extra flag
+        # carry the extra flag, and only a tool installed with --full its backends
         rows = []
         for tool in box.tools:
             row = _without_none(asdict(tool))
             if not tool.dependency:
                 row.pop("dependency", None)
+            if not tool.optional:
+                row.pop("optional", None)
             rows.append(row)
         data["tools"] = rows
     if box.hosts:
@@ -253,6 +255,9 @@ def _tool(row: dict) -> ToolRecord:
         if not isinstance(row["dependency"], bool):
             raise TypeError("tools.dependency must be true or false")
         record.dependency = row["dependency"]
+    if "optional" in row:
+        # absent in boxes written before --full's backends were kept with the box
+        record.optional = list(_checked(row, {"optional": list}, "tools")["optional"])
     return record
 
 

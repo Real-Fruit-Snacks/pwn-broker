@@ -4,7 +4,6 @@ import re
 import shutil
 import stat
 import threading
-import time
 import tomllib
 import urllib.error
 import urllib.parse
@@ -20,6 +19,7 @@ from pwn_broker.paths import AppPaths
 from pwn_broker.store import write_text
 from pwn_broker.toolpkg import (
     KINDS,
+    MAX_ZIP_BYTES,
     SCHEMAS,
     VERSION_RULE,
     BackendSpec,
@@ -41,6 +41,8 @@ FORCED_TIMEOUT = 30
 ZIP_TIMEOUT = 300.0
 MAX_INDEX_BYTES = 5 * 1024 * 1024
 _CHUNK = 64 * 1024
+# the name of the thread a package download runs in
+DOWNLOAD_THREAD = "pwn-broker download"
 
 _SHA256 = re.compile(r"[0-9a-fA-F]{64}")
 
@@ -173,6 +175,9 @@ def _build(tool: str, row: object, label: str, schema: int) -> BuildEntry:
     size = row.get("size")
     if not isinstance(size, int) or isinstance(size, bool) or size < 1:
         raise ToolError(f"{label}.size: must be a positive whole number")
+    if size > MAX_ZIP_BYTES:
+        # a download is cut off at the size the index gives, so that size needs a limit of its own
+        raise ToolError(f"{label}.size: more than {MAX_ZIP_BYTES} bytes, the most a package can be")
     sha256 = row.get("sha256")
     if not isinstance(sha256, str) or not _SHA256.fullmatch(sha256):
         raise ToolError(f"{label}.sha256: must be 64 hexadecimal characters")
@@ -311,18 +316,65 @@ def _fetch_index(url: str, timeout: float) -> bytes:
     return body
 
 
-def download(url: str, dest: Path, limit: int, timeout: float) -> None:
-    # streamed to disk and cut off as soon as it passes the size the index promised
-    deadline = time.monotonic() + timeout
+def _stream(url: str, dest: Path, limit: int, timeout: float, given_up: threading.Event) -> None:
+    # streamed to disk and cut off as soon as it passes the size the index promised. read1
+    # returns what one wait on the socket brought, where read would wait to fill its buffer, so
+    # a transfer that has been given up on sees it at its next byte and writes nothing more
     total = 0
-    with _open(url, timeout) as response, open(dest, "wb") as out:
-        while chunk := response.read(_CHUNK):
-            total += len(chunk)
-            if total > limit:
-                raise ToolError(f"the download is more than the {limit} bytes the index gives")
-            if time.monotonic() > deadline:
-                raise ToolError("the download took too long")
-            out.write(chunk)
+    with _open(url, timeout) as response:
+        if given_up.is_set():
+            return  # the answer came too late for its file to be made at all
+        with open(dest, "wb") as out:
+            while chunk := response.read1(_CHUNK):
+                if given_up.is_set():
+                    return
+                total += len(chunk)
+                if total > limit:
+                    raise ToolError(f"the download is more than the {limit} bytes the index gives")
+                out.write(chunk)
+
+
+def download(url: str, dest: Path, limit: int, timeout: float) -> None:
+    """Downloads a package to `dest`, in `timeout` seconds for the whole of it.
+
+    urlopen's timeout is for one wait on the socket. A server that sends a byte now and then
+    never reaches it, in the body or in the header lines before it, and would hold tool install
+    for as long as it liked. So the transfer runs in a thread of its own, and this one waits
+    for it no longer than the time allowed, as the index fetch does. A transfer given up on
+    stops at its next byte of the body; one still waiting for header lines ends when the
+    server ends them, holding a socket and nothing else until then.
+    """
+    given_up = threading.Event()
+    lock = threading.Lock()
+    ended: list[BaseException | None] = []
+
+    def run() -> None:
+        try:
+            _stream(url, dest, limit, timeout, given_up)
+            result = None
+        except BaseException as exc:
+            result = exc
+        with lock:
+            if not given_up.is_set():
+                ended.append(result)
+                return
+        # nobody is waiting for this answer any more; an error's response is closed here
+        if result is not None:
+            close_response(result)
+
+    thread = threading.Thread(target=run, name=DOWNLOAD_THREAD, daemon=True)
+    thread.start()
+    try:
+        thread.join(timeout)
+    finally:
+        # also when the wait is interrupted: the transfer must not go on writing
+        with lock:
+            if not ended:
+                given_up.set()
+    if not ended:
+        raise ToolError(f"the download took more than {timeout:g} seconds")
+    if ended[0] is not None:
+        raise ended[0]
 
 
 def _with_deadline(fetch: Callable[[str, float], bytes], url: str, timeout: float) -> bytes:
@@ -511,12 +563,15 @@ def pick_build(tool: ToolEntry, wanted: str | None) -> BuildEntry:
             if build_id(b.version, b.build) == tool.latest:
                 return b
         raise ToolError(f"{tool.name}: latest {tool.latest!r} is not one of its builds")
-    same = [b for b in tool.builds if b.version == wanted]
-    if same:
-        return max(same, key=lambda b: b.build)
+    # one build's own name comes first. A version may hold a hyphen, so 1.0-1 can be build 1 of
+    # 1.0 and also a version; a box's row asks for its build by that name when it is reopened,
+    # and must not be handed the newest build of a version that happens to read the same
     for b in tool.builds:
         if build_id(b.version, b.build) == wanted:
             return b
+    same = [b for b in tool.builds if b.version == wanted]
+    if same:
+        return max(same, key=lambda b: b.build)
     versions = ", ".join(dict.fromkeys(b.version for b in tool.builds))
     raise ToolError(f"{tool.name} has no version {wanted!r}; versions: {versions}")
 
@@ -564,8 +619,14 @@ def fetch_zip(
     *,
     download: Callable[[str, Path, int, float], None] = download,
 ) -> Path:
-    # entries can be built directly, so the name is judged again before any path exists
+    # entries can be built directly, so the name and the size are judged again before any path
+    # exists or a byte is fetched
     _plain_zip_name(entry.file, "file")
+    if entry.size > MAX_ZIP_BYTES:
+        raise ToolError(
+            f"{entry.name} {entry.version}: the index gives it {entry.size} bytes, more than "
+            f"the {MAX_ZIP_BYTES} a package can be"
+        )
     target = paths.cache / entry.file
     if target.is_file():
         try:

@@ -755,7 +755,9 @@ def test_every_program_the_app_runs_by_name_is_reserved():
     # /opt/pwn-broker/bin is first on PATH, so a launcher by one of these names would be run by
     # the app itself, as root when the app is. The scan sees only an argument list written out
     # where a program is started; one built in a variable or returned from a function has to be
-    # named in `named` below by hand, as vim, sudo, nmap, the VPN and the terminal are
+    # named in `named` below by hand, as vim, sudo, nmap, the VPN and the terminal are.
+    # install.sh needs no names here: it takes that folder off its own PATH before it runs
+    # anything, which test_install_sh.py checks with a stand-in for every program on PATH
     scanned = _programs_named_at_call_sites()
     assert {"chown", "cp", "ping", "ip", "kill"} <= scanned  # the scan still finds them
     named = scanned | {"sudo", "vim", "nmap", vpnctl.COMMAND, config.Settings().terminal}

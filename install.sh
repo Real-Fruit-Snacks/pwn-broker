@@ -74,6 +74,38 @@ need() {
     command -v "$1" >/dev/null 2>&1 || fail "$1 is not installed. run: apt install $2"
 }
 
+# Takes the install folder's own bin off PATH for this run. Tool packages put their commands
+# there, and it comes first on PATH in the shell an upgrade is run from, so a package's command
+# named sha256sum, tar or mktemp would be run in place of the one meant here: the check of the
+# release file would be that command's to pass. Each entry is judged by where it really is, so
+# another spelling of the folder, or a link to it, goes too. Every other entry stays as it is,
+# in its place, an empty one and one that cannot be opened included.
+drop_own_bin() {
+    # / under another spelling is refused as an install folder further on, and its bin is Kali's
+    top="$(CDPATH='' cd -- "$OPT" 2>/dev/null && pwd -P)" || return 0
+    if [ "$top" = "/" ]; then
+        return 0
+    fi
+    own="$(CDPATH='' cd -- "$OPT/bin" 2>/dev/null && pwd -P)" || return 0
+    # with no PATH at all the shell looks in its own default folders, and the bin is not one
+    if [ -z "${PATH+set}" ]; then
+        return 0
+    fi
+    rest="$PATH:"
+    kept=""
+    sep=""
+    while [ -n "$rest" ]; do
+        entry="${rest%%:*}"
+        rest="${rest#*:}"
+        real="$(CDPATH='' cd -- "${entry:-.}" 2>/dev/null && pwd -P)" || real=""
+        if [ "$real" != "$own" ]; then
+            kept="$kept$sep$entry"
+            sep=":"
+        fi
+    done
+    PATH="$kept"
+}
+
 # By now the install is complete, so a file that cannot be written is one fail line that says
 # so; the previous install is not put back.
 cannot_write() {
@@ -195,6 +227,8 @@ main() {
     if [ "$OPT" = "/" ]; then
         fail "the install folder must not be empty or /"
     fi
+    # before the first program is run by name
+    drop_own_bin
 
     trap finish EXIT
     trap 'exit 130' INT

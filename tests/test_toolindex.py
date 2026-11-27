@@ -561,6 +561,18 @@ def test_pick_build_forms():
     assert (exact.version, exact.build) == ("1.0.3", 2)
 
 
+def test_pick_build_takes_the_exact_build_before_a_version_that_reads_the_same():
+    # a version may hold a hyphen, so 1.0-1 is build 1 of version 1.0 and also the version
+    # 1.0-1. A box's row asks for its build by that name, and has to get that build back
+    builds = [build_row("1.0", 1), build_row("1.0-1", 2)]
+    tool = toolindex.parse_index(index_data(tool_row(builds=builds, latest="1.0-1-2"))).tools[0]
+    exact = toolindex.pick_build(tool, "1.0-1")
+    assert (exact.version, exact.build) == ("1.0", 1)
+    newer = toolindex.pick_build(tool, "1.0-1-2")
+    assert (newer.version, newer.build) == ("1.0-1", 2)
+    assert toolindex.pick_build(tool, "1.0").build == 1
+
+
 @pytest.mark.parametrize("wanted", ["9.9", "1.0.3-3", "", "1.0"])
 def test_pick_build_unknown_lists_versions(wanted):
     tool = sample_index().tools[0]
@@ -853,6 +865,129 @@ def test_default_download_writes_a_body_within_the_limit(tmp_path):
     with _Serve(b"hello") as url:
         toolindex.download(url, target, 1000, 5.0)
     assert target.read_bytes() == b"hello"
+
+
+class _Trickle:
+    """A server that never quite stops: it sends a byte, waits, and sends another, for `lasts`
+    seconds. Each byte arrives well inside the time allowed for one wait on the socket.
+
+    `where` is the part it trickles: the body of the answer, or its header lines.
+    """
+
+    def __init__(self, where, lasts=4.0, pause=0.05):
+        ends = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                end = time.monotonic() + lasts
+                try:
+                    if where == "body":
+                        self.send_response(200)
+                        self.send_header("Content-Length", "10000000")
+                        self.end_headers()
+                    else:
+                        self.wfile.write(b"HTTP/1.1 200 OK\r\nX-Slow: ")
+                    while time.monotonic() < end:
+                        self.wfile.write(b"x")
+                        self.wfile.flush()
+                        time.sleep(pause)
+                except OSError:
+                    pass
+                ends.append(time.monotonic())
+
+            def log_message(self, *args):
+                pass
+
+        try:
+            self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        except OSError:
+            pytest.skip("cannot start a local server")
+        self.server.daemon_threads = True
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        return f"http://127.0.0.1:{self.server.server_address[1]}/f"
+
+    def __exit__(self, *exc):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def _downloads_running():
+    return [t for t in threading.enumerate() if t.name == toolindex.DOWNLOAD_THREAD]
+
+
+def _wait_for_downloads_to_end(seconds):
+    deadline = time.monotonic() + seconds
+    while _downloads_running() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return _downloads_running() == []
+
+
+def test_a_download_whose_body_trickles_is_given_up_on_after_the_whole_time_allowed(tmp_path):
+    # each wait on the socket ends in time, so only a limit on the whole download ends it
+    target = tmp_path / "x.part"
+    started = time.monotonic()
+    with _Trickle("body", lasts=4.0) as url:
+        with pytest.raises(ToolError, match="took more than 0.5 seconds"):
+            toolindex.download(url, target, 10_000_000, 0.5)
+        assert time.monotonic() - started < 2.0
+        # the transfer that was given up on ends at its next byte, long before the server
+        # does, and writes nothing more
+        assert _wait_for_downloads_to_end(1.5)
+        size = target.stat().st_size
+        time.sleep(0.3)
+        assert target.stat().st_size == size
+
+
+def test_a_download_whose_header_lines_trickle_is_given_up_on_too(tmp_path):
+    target = tmp_path / "x.part"
+    started = time.monotonic()
+    with _Trickle("headers", lasts=1.5) as url:
+        with pytest.raises(ToolError, match="took more than 0.5 seconds"):
+            toolindex.download(url, target, 10_000_000, 0.5)
+        assert time.monotonic() - started < 1.2
+        # nothing was written, and the thread ends when the server ends its header lines
+        assert not target.exists()
+        assert _wait_for_downloads_to_end(4.0)
+    assert not target.exists()
+
+
+def test_a_download_within_its_time_is_not_cut_short(tmp_path):
+    target = tmp_path / "x.part"
+    with _Trickle("body", lasts=0.3) as url:
+        toolindex.download(url, target, 10_000_000, 5.0)
+    # all the server sent before it stopped; fetch_zip then finds it short of the index's size
+    assert 0 < target.stat().st_size < 100
+    assert set(target.read_bytes()) == {ord("x")}
+    assert _downloads_running() == []
+
+
+def test_a_download_error_reaches_the_caller_as_it_was(monkeypatch, tmp_path):
+    def refuse(url, timeout):
+        raise OSError("offline")
+
+    monkeypatch.setattr(toolindex, "_open", refuse)
+    with pytest.raises(OSError, match="offline"):
+        toolindex.download(URL, tmp_path / "x.part", 100, 5.0)
+
+
+def test_a_size_no_package_can_have_is_refused_in_the_index():
+    limit = toolindex.MAX_ZIP_BYTES
+    # what a package may unpack to, and room for its two lists of entries
+    assert limit == 1024**3 + 2 * 4 * 1024 * 1024
+    assert toolindex.parse_index(index_data(tool_row(builds=[build_row(size=limit)])))
+    with pytest.raises(ToolError, match=rf"build\[0\]\.size: more than {limit} bytes"):
+        toolindex.parse_index(index_data(tool_row(builds=[build_row(size=limit + 1)])))
+
+
+def test_fetch_zip_refuses_a_size_no_package_can_have_before_it_downloads(paths, tmp_path):
+    entry = replace(make_zip_entry(tmp_path), size=toolindex.MAX_ZIP_BYTES + 1)
+    download = Downloader(b"zip bytes")
+    with pytest.raises(ToolError, match="more than"):
+        toolindex.fetch_zip(paths, url_settings(), entry, download=download)
+    assert download.calls == []
 
 
 def test_default_index_fetch_is_bounded(monkeypatch):

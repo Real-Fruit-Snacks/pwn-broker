@@ -11,6 +11,8 @@ Keeps a box's targets, notes, creds and tools in order
 curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/download/install.sh | sh
 ```
 
+Then open a new terminal and run `pwn-broker new`. It asks for the box and its first target and leaves you at the box's prompt, where `tool install <name>` adds a tool, `help` lists every command and `finish` wraps the box up.
+
 - **Structured box workspaces:** Creates `~/pwn-broker/active/<box>/` with per-target folders (`scans/`, `loot/`, `exploits/`), opens `notes.md` in vim with target folds, and manages box-scoped `/etc/hosts` entries.
 - **Built-in session tools:** Tracks credentials and rebuilds `lists/`, records terminals with pinned `asciinema`, runs background `nmap` scans, manages OpenVPN, serves upload files over HTTP, and searches the box.
 - **Isolated tools, playbooks & reports:** Installs pinned packages from [pwn-shop](https://github.com/Real-Fruit-Snacks/pwn-shop) (with their own Python runtime), [pwn-playbooks](https://github.com/Real-Fruit-Snacks/pwn-playbooks) (`:Pb <name>`), and [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report), then removes tools cleanly at `finish`.

@@ -249,6 +249,8 @@ def _record(box: Box, record: ToolRecord) -> None:
                 runtime=record.runtime,
                 # an explicit request takes ownership; another automatic parent does not remove it
                 dependency=t.dependency and record.dependency,
+                # --full adds to what the box selected; an install without it takes nothing away
+                optional=t.optional + [b for b in record.optional if b not in t.optional],
             )
             if t.removed is None and (t.name, t.version, t.build) == same
             else t
@@ -361,7 +363,8 @@ def install(
     optional: list[str] | None = None,
     dependency: bool = False,
 ) -> Installed:
-    """Install a tool, optionally recording package backends selected by --full."""
+    """Install a tool. `optional` names the package backends --full selected for it, which go
+    on the box's row for the tool."""
     check_install(box, entry, installed=installed, unfinished=unfinished)
     name = entry.name
     available = {b.package for b in entry.backends if b.package}
@@ -369,6 +372,8 @@ def install(
         raise ToolError(f"{name}: selected optional backends are not declared by the package")
     current = installed.get(name)
     wanted = build_id(entry.version, entry.build)
+    # the build this install replaces, when one is there that nobody uses
+    unused: Installed | None = None
 
     if current is not None:
         users = [u for u in current.users if u in unfinished]
@@ -383,10 +388,9 @@ def install(
             _sudo_lines(paths, console, joined, on_path)
             return joined
         if not others:
-            # nobody is using it and it is not wanted as it is: take it off first
-            remove_files(paths, current)
-            del installed[name]
-            save_installed(paths, installed)
+            # nobody is using it and it is not wanted as it is: it is taken off below, once
+            # the new zip has passed every check
+            unused = current
 
     folder = paths.tools / name / wanted
     _check_inside(folder, paths.tools, "the tool folder")
@@ -396,6 +400,9 @@ def install(
     made_launchers: list[Path] = []
     made_uploads = False
     saved_installed = False
+    # whether the row under this name is this install's own to drop if it fails: not while it
+    # is still the unused build's
+    mine = unused is None
     old_tools = list(box.tools)
     try:
         verify_zip(zip_path, size=entry.size, sha256=entry.sha256)
@@ -416,6 +423,19 @@ def install(
         if package.depends != list(entry.depends) or package.backends != list(entry.backends):
             raise ToolError(f"{name}: the package's ordinary dependencies differ from the index")
         note = _runtime_note(name, package.requires, runtime)
+        if (package.name, package.version, package.build) != (entry.name, entry.version, entry.build):
+            raise ToolError(
+                f"the package is {package.name} {package.version}-{package.build}, "
+                f"not {name} {wanted}"
+            )
+        if not arch_fits(package.arch):
+            raise ToolError(f"{name} is built for {package.arch}, this machine is {machine_arch()}")
+        if unused is not None:
+            # only now: a zip that is refused must not cost the build that was there
+            remove_files(paths, unused)
+            del installed[name]
+            save_installed(paths, installed)
+            mine = True
         if os.path.lexists(folder):
             _delete_tree(folder)
         manifest = unpack(zip_path, folder)
@@ -453,13 +473,12 @@ def install(
             runtime_build=note.build if note else 0,
             notes=(folder / manifest.notes.root).resolve().as_posix() if manifest.notes else "",
             depends=list(manifest.depends),
-            optional=list(optional or []),
         )
         _record(
             box,
             ToolRecord(
                 name, entry.version, entry.build, entry.sha256, now, note,
-                dependency=dependency,
+                dependency=dependency, optional=list(optional or []),
             ),
         )
         installed[name] = item
@@ -468,7 +487,8 @@ def install(
         save_box(box)
     except BaseException as exc:
         box.tools = old_tools
-        installed.pop(name, None)
+        if mine:
+            installed.pop(name, None)
         for launcher in made_launchers:
             try:
                 launcher.unlink()
@@ -511,17 +531,14 @@ def _join(
     dependency: bool = False,
 ) -> Installed:
     old_users, old_tools = current.users, list(box.tools)
-    old_optional = list(current.optional)
     old_runtime = (current.runtime_version, current.runtime_build)
     current.users = users if box.id in users else users + [box.id]
-    if optional:
-        current.optional += [name for name in optional if name not in current.optional]
     if note is not None and not current.runtime_version:
         # a row from before the runtime's build was kept: the runtime it runs on now is the one
         current.runtime_version, current.runtime_build = note.version, note.build
     record = ToolRecord(
         current.name, current.version, current.build, current.sha256, now, note,
-        dependency=dependency,
+        dependency=dependency, optional=list(optional or []),
     )
     _record(box, record)
     saved = False
@@ -530,7 +547,7 @@ def _join(
         save_installed(paths, installed)
         save_box(box)
     except BaseException as exc:
-        current.users, current.optional, box.tools = old_users, old_optional, old_tools
+        current.users, box.tools = old_users, old_tools
         current.runtime_version, current.runtime_build = old_runtime
         if saved:
             _restore_list(paths, installed, exc)

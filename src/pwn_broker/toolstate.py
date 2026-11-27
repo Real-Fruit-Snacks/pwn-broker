@@ -38,8 +38,12 @@ class Installed:
     runtime_build: int = 0
     # for a notes package: its folder of notes, as an absolute path
     notes: str = ""
-    # ordinary pwn-shop tools this tool needs, and optional package backends selected by --full
+    # ordinary pwn-shop tools this tool needs
     depends: list[str] = field(default_factory=list)
+    # only in a list 0.1.14 wrote: it kept --full's package backends here, one selection for
+    # the whole machine. A box now keeps its own on its tool row (ToolRecord.optional). What an
+    # older list holds is still read and counted, so a box from then keeps its backends; it is
+    # never added to.
     optional: list[str] = field(default_factory=list)
 
 
