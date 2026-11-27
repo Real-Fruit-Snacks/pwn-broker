@@ -67,7 +67,7 @@ The packages are published in `pwn-shop`. With no `tools_index` setting the tool
 ## Serving files
 
 - [ ] With the VPN up, put a file in the target's `upload/` and run `serve`. It prints the tunnel's address, port 80 as root or 8000 otherwise, a random part, and how many files; `serve files` prints the download lines. A line, pasted on the target, fetches the file, and `serve log` shows the request with the target's address. The same path without the random part, `/`, and a tool file's path without it all get `404`. **By hand:** the target end; run once on Kali under WSL as a normal user with `serve eth0`.
-- [ ] On the target, run the send-back line from `serve files` for a file: it lands in the target's `loot/`, and sending it again makes `<name>-2`. **By hand:** a Windows target with `iwr -Method PUT`; `curl -T` was run on Kali.
+- [ ] On the target, run the send-back line from `serve files` for a file: it lands in the target's `loot/`, and sending it again makes `<name>-2`. **By hand:** a Windows target; the `iwr` lines, for fetching and for sending back, were run in Windows PowerShell 5.1 on Windows 11 against `serve` in Kali under WSL, and `curl -T` on Kali.
 - [ ] `quit`, then open the box again: `serve` shows it still running, for that box. `finish` lists `serving  ...   (will be stopped)` and stops it; afterwards nothing answers on the port and no `pwn_broker.serving` process is left. **By hand.**
 
 ## Recording, /etc/hosts, the VPN and the ping

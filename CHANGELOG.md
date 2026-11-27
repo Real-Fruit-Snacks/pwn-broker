@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.15 (unreleased)
+
+Fixed: the line `serve files` prints for sending a file back from a Windows target, `iwr -Method PUT ...`, failed in Windows PowerShell 5.1 wherever the shell cannot ask a question, with `Windows PowerShell is in NonInteractive mode`, after the server had saved the file, so a second try saved it again as `<name>-2`. The line now has `-UseBasicParsing`. And the download line saved nothing for a file with `[` or `]` in its name, which that PowerShell reads after `-OutFile` as a pattern: such a file now gets a `(New-Object Net.WebClient).DownloadFile(...)` line. A character a Windows file name cannot hold, and each byte of a name that is not UTF-8, is `_` in the name the file is saved under. Every line was run in Windows PowerShell 5.1 against the server.
+
+Fixed: `serve` kept a connection open for as long as the client liked, and held the room for an upload from the moment its `Content-Length` arrived. Two uploads that each announced 4 GiB and sent nothing made every later upload fail with `507` on a disk with 9 GiB free, left their temporary files in `loot/`, and each idle connection held a thread for good. A connection that sends or takes nothing for 30 seconds is now closed; an upload that goes quiet is answered `408`, its room is free again and its temporary file is gone.
+
+Fixed: `serve.log` was not one line per request. A client that hung up part of the way through a download wrote a Python traceback of some sixty lines, so `serve log` showed only that; a request line was logged whole, 60,000 characters of it; the log grew without limit, and `serve log` read all of it to show twenty lines. A dropped connection is now one line, a request line is cut after 200 characters, the log keeps its last half once it passes 1 MiB, and `serve log` reads only its end.
+
+Fixed: `serve files` listed a file put straight into `/opt/pwn-broker/upload/`, in no tool's folder, and the server answered `404` for it. It is no longer listed. A file whose name holds a backslash was listed and answered `404` too, and one whose name is not UTF-8 stopped `serve files` with `unexpected error: UnicodeEncodeError`, so it printed no line for any file: both now get a line, and are served at it.
+
 ## v0.1.14
 
 Added: package and index schema 4 separates ordinary tool dependencies (`depends`) from Python runtimes (`requires`) and declares optional external backends. `tool install <name>` resolves ordinary dependencies first, reuses installed builds across boxes, detects missing targets and cycles, and rolls back a failed package graph. `tool install <name> --full` also selects the requested tool's package-backed and apt-backed optional backends. Missing apt providers are shown with their exact `apt-get install --no-install-recommends` command and installed only after confirmation; they remain system-owned and are never removed by rollback, `tool remove` or `finish`. No recipe-supplied installer is run.
