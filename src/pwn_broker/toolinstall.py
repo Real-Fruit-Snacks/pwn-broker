@@ -249,6 +249,8 @@ def _record(box: Box, record: ToolRecord) -> None:
                 runtime=record.runtime,
                 # an explicit request takes ownership; another automatic parent does not remove it
                 dependency=t.dependency and record.dependency,
+                # --full adds to what the box selected; an install without it takes nothing away
+                optional=t.optional + [b for b in record.optional if b not in t.optional],
             )
             if t.removed is None and (t.name, t.version, t.build) == same
             else t
@@ -361,7 +363,8 @@ def install(
     optional: list[str] | None = None,
     dependency: bool = False,
 ) -> Installed:
-    """Install a tool, optionally recording package backends selected by --full."""
+    """Install a tool. `optional` names the package backends --full selected for it, which go
+    on the box's row for the tool."""
     check_install(box, entry, installed=installed, unfinished=unfinished)
     name = entry.name
     available = {b.package for b in entry.backends if b.package}
@@ -470,13 +473,12 @@ def install(
             runtime_build=note.build if note else 0,
             notes=(folder / manifest.notes.root).resolve().as_posix() if manifest.notes else "",
             depends=list(manifest.depends),
-            optional=list(optional or []),
         )
         _record(
             box,
             ToolRecord(
                 name, entry.version, entry.build, entry.sha256, now, note,
-                dependency=dependency,
+                dependency=dependency, optional=list(optional or []),
             ),
         )
         installed[name] = item
@@ -529,17 +531,14 @@ def _join(
     dependency: bool = False,
 ) -> Installed:
     old_users, old_tools = current.users, list(box.tools)
-    old_optional = list(current.optional)
     old_runtime = (current.runtime_version, current.runtime_build)
     current.users = users if box.id in users else users + [box.id]
-    if optional:
-        current.optional += [name for name in optional if name not in current.optional]
     if note is not None and not current.runtime_version:
         # a row from before the runtime's build was kept: the runtime it runs on now is the one
         current.runtime_version, current.runtime_build = note.version, note.build
     record = ToolRecord(
         current.name, current.version, current.build, current.sha256, now, note,
-        dependency=dependency,
+        dependency=dependency, optional=list(optional or []),
     )
     _record(box, record)
     saved = False
@@ -548,7 +547,7 @@ def _join(
         save_installed(paths, installed)
         save_box(box)
     except BaseException as exc:
-        current.users, current.optional, box.tools = old_users, old_optional, old_tools
+        current.users, box.tools = old_users, old_tools
         current.runtime_version, current.runtime_build = old_runtime
         if saved:
             _restore_list(paths, installed, exc)

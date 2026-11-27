@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -119,6 +119,7 @@ def install_tool(
     installed: dict[str, Installed],
     unfinished: dict[str, str],
     full: bool = False,
+    optional: Iterable[str] = (),
     dependency: bool = False,
     before_download: Callable[[], None] | None = None,
     **options,
@@ -128,13 +129,16 @@ def install_tool(
     Existing exact builds are joined rather than downloaded again. Every package and missing
     runtime is checked before the first download; `before_download` is the confirmed system-
     package hook used by --full. Nothing is logged until the whole graph has succeeded.
+
+    `full` selects every package backend the tool declares; `optional` names the ones the box's
+    row already records, for a box opened again. Either way the selection goes on that row.
     """
     paths, console, box = session.paths, session.console, session.box
-    plan = tooldeps.resolve(index, entry, installed=installed, full=full)
-    current = installed.get(entry.name)
+    plan = tooldeps.resolve(index, entry, installed=installed, full=full, optional=optional)
     selected = plan.optional.get(entry.name, [])
-    optional_missing = full and not set(selected) <= set(current.optional if current else [])
-    make_explicit = any(r.name == entry.name and r.dependency for r in current_tools(box))
+    mine = [r for r in current_tools(box) if r.name == entry.name]
+    optional_missing = not set(selected) <= {name for r in mine for name in r.optional}
+    make_explicit = any(r.dependency for r in mine)
 
     # A box with another build, a launcher collision, or a missing runtime pays no download.
     work = []
@@ -195,7 +199,7 @@ def install_tool(
                 console=console,
                 now=session.clock(),
                 runtime=runtime,
-                optional=selected if full and planned.name == entry.name else None,
+                optional=selected if selected and planned.name == entry.name else None,
                 dependency=dependency or planned.name != entry.name,
                 **options,
             )
@@ -630,9 +634,11 @@ def _restore(session: Session) -> None:
                 console.warn(f"{label}   the index lists a different SHA-256 than the box; skipped")
                 continue
             ran_on = record.runtime
+            # the row says what this box had: whether the tool was asked for, and the backends
+            # --full selected with it, which are installed with it again as its own
             install_tool(
                 session, index, entry, installed=installed, unfinished=unfinished,
-                dependency=record.dependency,
+                dependency=record.dependency, optional=record.optional,
             )  # fmt: skip
             _runtime_changed(console, record.name, ran_on, installed)
         except Exception as exc:  # one tool failing must not stop the rest
