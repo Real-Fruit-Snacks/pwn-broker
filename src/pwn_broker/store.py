@@ -137,8 +137,7 @@ def _is_a(value, kind) -> bool:
     if isinstance(value, bool):
         return False
     if kind is datetime:
-        # a year the app can still convert between time zones
-        return isinstance(value, datetime) and 1970 <= value.year < 9000
+        return isinstance(value, datetime) and year_is_kept(value.year)
     if kind is float:
         return isinstance(value, (int, float))
     if kind is list:
@@ -164,6 +163,17 @@ def _aware(value):
         except (OverflowError, OSError, ValueError) as exc:
             raise TypeError("a time without an offset is too early to take as local time") from exc
     return value
+
+
+# the years a time in a box's files may have: ones the app can still convert between time zones
+FIRST_YEAR = 1970
+LAST_YEAR = 8999
+
+
+def year_is_kept(year: int) -> bool:
+    """Whether a time in this year is read back from a box's files. What is asked for and written
+    is held to the same years, so nothing is written that cannot be read again."""
+    return FIRST_YEAR <= year <= LAST_YEAR
 
 
 def _optional(row: dict, key: str, kind, label: str):

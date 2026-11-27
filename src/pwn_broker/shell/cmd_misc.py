@@ -80,7 +80,9 @@ def path(session: Session, args: list[str]) -> None:
     else:
         valid = ", ".join(sorted({*boxes.TARGET_FOLDERS, *BOX_FOLDERS}))
         raise ValueError(f"unknown folder {name}. use one of: {valid}")
-    session.console.raw(str(folder))
+    # flush left and unwrapped, to be copied, with anything that is not text shown as "?": the
+    # folder's name may have come from an archive
+    session.console.log(str(folder))
 
 
 @command("note", "open the note in vim")

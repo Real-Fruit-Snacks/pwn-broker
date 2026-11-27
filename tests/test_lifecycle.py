@@ -156,24 +156,31 @@ def test_finish_stops_on_unsaved_note(session):
     assert len(kinds(session, "fail")) == 1 and ":w" in kinds(session, "fail")[0]
 
 
+def earlier_finish(session):
+    """An archive of this same box where finish writes its own, as after a finish, a reopen and
+    more work: the only archive finish ever asks about."""
+    existing = export_box(session, **NOFIX).rename(archive_path(session.paths, session.box, "finished"))
+    assert existing.name == f"{session.box.path.name}.finished.tar.gz"
+    return existing
+
+
 def test_finish_asks_before_replacing_an_archive(session):
-    existing = archive_path(session.paths, session.box, "finished")
-    existing.parent.mkdir(parents=True)
-    existing.write_bytes(b"old")
+    existing = earlier_finish(session)
+    old = existing.read_bytes()
     answers(session, "y", "n")
     assert finish_box(session, **SAVED) is None
     assert session.console.asked[-1] == "replace the existing archive?"
-    assert existing.read_bytes() == b"old"
+    assert existing.read_bytes() == old
     assert load_box(session.box.path).status == "active"
 
 
 def test_finish_replaces_an_archive_when_told_to(session):
-    existing = archive_path(session.paths, session.box, "finished")
-    existing.parent.mkdir(parents=True)
-    existing.write_bytes(b"old")
+    existing = earlier_finish(session)
+    old = existing.read_bytes()
     answers(session, "y", "y", "n")
     assert finish_box(session, **SAVED) == existing
     verify(existing)
+    assert existing.read_bytes() != old
 
 
 def test_finish_failure_rolls_back(session, monkeypatch, tmp_path):
@@ -337,6 +344,130 @@ def test_import_replaces_when_told_to(session):
     marker.write_text("gone")
     box = import_box(session.paths, Settings(), FakeConsole(["y"]), archive, lambda: NOW)
     assert box is not None and not marker.exists()
+
+
+def someone_elses(tmp_path, folder_of):
+    """An export of another box that has the same name, platform and day, and so the same folder
+    name, as the session's: a teammate's copy of the same machine."""
+    from pwn_broker import boxes
+    from pwn_broker.session import load_session
+
+    theirs = AppPaths(opt=tmp_path / "their-opt", home=tmp_path / "their-home")
+    other = boxes.create_box(
+        theirs, name="forest", platform="htb", day=NOW.date(), os_name="windows", difficulty="easy", now=NOW,
+        new_id=lambda: "someone-elses-box",
+    )  # fmt: skip
+    assert other.path.name == folder_of.path.name
+    return export_box(load_session(theirs, Settings(), FakeConsole(), other, lambda: NOW), **NOFIX)
+
+
+def finished_and_removed(session):
+    """The session's box exported, finished and its folder removed: only its two archives are left."""
+    exported = export_box(session, **NOFIX)
+    answers(session, "y", "y")
+    finished = finish_box(session, **SAVED, close=lambda paths, box: False)
+    assert finished is not None and not session.box.path.exists()
+    return exported, finished
+
+
+def test_an_imported_box_gets_another_name_when_the_archives_under_its_own_are_another_box_s(session, tmp_path):
+    # my finished box is gone from active/, its archives are in wrapped/; a teammate's box of the
+    # same name came in under that name, and its export then replaced mine without a word
+    from pwn_broker.session import load_session
+
+    name = session.box.path.name
+    mine = {path: path.read_bytes() for path in finished_and_removed(session)}
+    sent = someone_elses(tmp_path, session.box)
+    console = FakeConsole()
+    box = import_box(session.paths, Settings(), console, sent, lambda: NOW)
+    assert box.id == "someone-elses-box" and box.path == session.paths.active / f"{name}-2"
+    assert console.asked == []
+    assert [t for k, t in console.lines if k == "warn"] == [
+        f"{session.paths.wrapped} holds archives of another box named {name}; this one is {name}-2"
+    ]
+    assert [t for k, t in console.lines if k == "ok"] == [f"unpacked to {box.path}", "0 targets"]
+    assert load_box(box.path).id == "someone-elses-box"
+    imported = load_session(session.paths, Settings(), FakeConsole(), box, lambda: NOW)
+    assert export_box(imported, **NOFIX) == session.paths.wrapped / f"{name}-2.exported.tar.gz"
+    answers(imported, "y", "n")
+    assert finish_box(imported, **SAVED) == session.paths.wrapped / f"{name}-2.finished.tar.gz"
+    assert imported.console.asked == ["finish this box?", "remove working folder?"]
+    assert {path: path.read_bytes() for path in mine} == mine
+    assert len(list(session.paths.wrapped.iterdir())) == 4
+
+
+def test_a_box_imported_again_from_its_own_archive_keeps_its_name(session):
+    # the archives in wrapped/ under its name are its own: nothing is in the way
+    name = session.box.path.name
+    _, finished = finished_and_removed(session)
+    console = FakeConsole()
+    box = import_box(session.paths, Settings(), console, finished, lambda: NOW)
+    assert box.path == session.paths.active / name and box.id == session.box.id
+    assert [k for k, _ in console.lines] == ["ok", "ok"] and console.asked == []
+
+
+def test_a_box_imported_a_second_time_takes_the_name_its_own_archives_have(session, tmp_path):
+    from pwn_broker.session import load_session
+
+    name = session.box.path.name
+    finished_and_removed(session)
+    sent = someone_elses(tmp_path, session.box)
+    first = import_box(session.paths, Settings(), FakeConsole(), sent, lambda: NOW)
+    imported = load_session(session.paths, Settings(), FakeConsole(), first, lambda: NOW)
+    answers(imported, "y", "y")
+    again = finish_box(imported, **SAVED, close=lambda paths, box: False)
+    assert again.name == f"{name}-2.finished.tar.gz" and not first.path.exists()
+    # from the file it was sent as, whose folder inside is the plain name: its archives are -2's
+    second = import_box(session.paths, Settings(), FakeConsole(), sent, lambda: NOW)
+    assert second.path == session.paths.active / f"{name}-2"
+
+
+@pytest.mark.parametrize("kind", ["exported", "finished"])
+def test_export_never_replaces_an_archive_that_holds_another_box(session, kind):
+    # a box that has the folder name of another box's archive, as one imported by an earlier
+    # version can: its archives go beside the other's, under the next free name
+    name = session.box.path.name
+    other = export_box(session, **NOFIX)
+    if kind == "finished":
+        other = other.rename(other.with_name(f"{name}.finished.tar.gz"))
+    held = other.read_bytes()
+    session.box.id = "another-box"
+    save_box(session.box)
+    for _ in range(2):
+        assert export_box(session, **NOFIX) == session.paths.wrapped / f"{name}-2.exported.tar.gz"
+    answers(session, "y", "n")
+    assert finish_box(session, **SAVED) == session.paths.wrapped / f"{name}-2.finished.tar.gz"
+    assert session.console.asked == ["finish this box?", "remove working folder?"]
+    assert other.read_bytes() == held
+    assert sorted(p.name for p in session.paths.wrapped.iterdir()) == sorted(
+        [other.name, f"{name}-2.exported.tar.gz", f"{name}-2.finished.tar.gz"]
+    )
+
+
+def test_export_never_replaces_a_file_that_is_no_archive_of_this_box(session):
+    # whose it is cannot be told, so it is left as it is
+    name = session.box.path.name
+    session.paths.wrapped.mkdir(parents=True)
+    unknown = session.paths.wrapped / f"{name}.exported.tar.gz"
+    unknown.write_bytes(b"not an archive")
+    assert export_box(session, **NOFIX) == session.paths.wrapped / f"{name}-2.exported.tar.gz"
+    assert unknown.read_bytes() == b"not an archive"
+
+
+def test_an_archive_name_that_is_another_box_s_folder_is_passed_over(session):
+    # -2 is the folder of a box that has no archive yet: its archives will go there
+    from pwn_broker import boxes
+
+    name = session.box.path.name
+    second = boxes.create_box(
+        session.paths, name="forest", platform="htb", day=NOW.date(), os_name="w", difficulty="e", now=NOW,
+        new_id=lambda: "second",
+    )  # fmt: skip
+    session.paths.wrapped.mkdir(parents=True)
+    (session.paths.wrapped / f"{name}.exported.tar.gz").write_bytes(b"not an archive")
+    assert second.path.name == f"{name}-2"
+    assert archive_path(session.paths, session.box, "exported").name == f"{name}-3.exported.tar.gz"
+    assert archive_path(session.paths, second, "exported").name == f"{name}-2.exported.tar.gz"
 
 
 def test_import_bad_archive_reports_and_returns_none(paths, tmp_path):
@@ -1024,6 +1155,35 @@ def test_export_and_finish_go_through_with_a_file_whose_name_is_not_utf8(session
     with tarfile.open(archive) as tar:
         names = [os.fsencode(name) for name in tar.getnames()]
     assert os.fsencode(session.box.path.name) + b"/caf\xe9 \xff.txt" in names
+
+
+def test_export_and_finish_go_through_with_names_that_are_not_utf8_in_recordings_and_upload(session, monkeypatch):
+    # with the step that writes the recordings' text copies, as the app runs it: the cast's name
+    # goes into its text copy, and that stopped the export with a codec error and no archive
+    from casts import cast_text
+
+    from pwn_broker import kalihooks
+
+    monkeypatch.setattr(lifecycle, "PRE_PACK_HOOKS", [kalihooks.recordings_pre_pack])
+    target = session.box.path / "targets" / "dc01"
+    cast = odd_name(target / "recordings", b"2026-11-14_1432\xff.cast", cast_text([(0, "o", "hello\r\n")]).encode())
+    if cast is None or odd_name(target / "upload") is None:
+        pytest.skip("no file here can have a name that is not UTF-8")
+    exported = export_box(session, **NOFIX)
+    assert exported is not None and kinds(session, "fail") == []
+    warned = kinds(session, "warn")
+    assert len(warned) == 3 and all("its name is not UTF-8, so it is not listed" in line for line in warned)
+    answers(session, "y", "n")
+    finished = finish_box(session, **SAVED)
+    assert finished is not None and kinds(session, "fail") == []
+    top = os.fsencode(session.box.path.name)
+    for archive in (exported, finished):
+        with tarfile.open(archive) as tar:
+            names = [os.fsencode(name) for name in tar.getnames()]
+        for name in (b"recordings/2026-11-14_1432\xff.cast", b"recordings/2026-11-14_1432\xff.txt", b"upload/caf\xe9 \xff.txt"):
+            assert top + b"/targets/dc01/" + name in names
+    with open(cast[: -len(b".cast")] + b".txt", encoding="utf-8") as fh:
+        assert "cast     2026-11-14_1432?.cast" in fh.read().splitlines()
 
 
 def renamed_copy(archive, dest, top):

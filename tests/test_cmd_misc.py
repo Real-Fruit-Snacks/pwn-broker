@@ -87,11 +87,25 @@ def test_flag_edge_space_asks_keep_or_trim(session, answer, stored):
     assert load_box(session.box.path).flags["user"].value == stored
 
 
+def _copied(console):
+    # a path is printed flush left, to be copied, through the console's cleaning
+    return [text for kind, text in console.lines if kind == "log"]
+
+
+def test_path_shows_what_is_not_text_in_a_folder_name_as_a_question_mark(session):
+    # the box folder's name can come from an archive: it must not reach the terminal as it is
+    real = session.box.path
+    session.box.path = real.with_name("2026-11-14_htb_x\x1b]0;owned\x07‮y")
+    out = _term(session)
+    dispatch(session, "path lists")
+    assert out.getvalue() == str(real.with_name("2026-11-14_htb_x?]0;owned??y") / "lists") + "\n"
+
+
 def test_path_prints_target_folder_and_subfolder(session):
     box = session.box.path
     for line in ("path", "path scans", "path lists", "path screenshots"):
         dispatch(session, line)
-    assert _raw(session.console) == [
+    assert _copied(session.console) == [
         str(box / "targets" / "dc01"),
         str(box / "targets" / "dc01" / "scans"),
         str(box / "lists"),
@@ -103,7 +117,7 @@ def test_path_without_current_target(session):
     session.current = None
     for line in ("path", "path lists", "path loot"):
         dispatch(session, line)
-    assert _raw(session.console) == [str(session.box.path), str(session.box.path / "lists")]
+    assert _copied(session.console) == [str(session.box.path), str(session.box.path / "lists")]
     assert len(_fails(session.console)) == 1
 
 

@@ -17,6 +17,7 @@ from pwn_broker.archive import (
     archive_path,
     copy_out,
     pack,
+    packed_id,
     peek_folder,
     unpack,
     verify,
@@ -373,6 +374,29 @@ def test_peek_folder_rejects_odd_names(tmp_path, name):
 
     with pytest.raises(ArchiveError):
         peek_folder(raw_archive(tmp_path / "a.tar.gz", build))
+
+
+@pytest.mark.parametrize("top", ["2026-11-14_htb_forest", "2026-11-14_htb_forest-2", "b", "0.a_b-c", "a" * 255])
+def test_a_top_folder_named_as_a_box_s_folder_is_taken(tmp_path, top):
+    arc = hand_archive(tmp_path / "a.tar.gz", {"a": b"1"}, top=top)
+    verify(arc)
+    assert peek_folder(arc) == top
+
+
+@pytest.mark.parametrize(
+    "top",
+    ["Forest", "a b", "x\x1b[2Jy", "x\ny", "x\ty", "-rf", "_x", "a;b", "$(id)", "a'b", "café", "x‮y", "x\udcff",
+     "a" * 256],
+)
+def test_a_top_folder_not_named_as_a_box_s_folder_is_refused(tmp_path, top):
+    # the name becomes a folder in active/ and is printed in paths: only what the app itself makes
+    arc = hand_archive(tmp_path / "a.tar.gz", {"a": b"1"}, top=top)
+    for check in (verify, peek_folder, lambda path: unpack(path, tmp_path / "active")):
+        with pytest.raises(ArchiveError, match="is not named as a box's folder is") as caught:
+            check(arc)
+        # and the refusal shows the name escaped, never as it is
+        assert str(caught.value).isascii() and str(caught.value).isprintable()
+    assert not (tmp_path / "active").exists()
 
 
 def test_peek_folder_rejects_an_empty_archive(tmp_path):
@@ -976,6 +1000,82 @@ def test_unpack_checks_the_folder_before_it_replaces_anything(filled, tmp_path):
     assert seen == [(True, "hello", True)]
     assert (old / "work.txt").read_text() == "mine"
     assert sorted(p.name for p in active.iterdir()) == [filled.path.name]
+
+
+def test_unpack_puts_the_box_under_the_name_the_check_gives(filled, tmp_path):
+    # the caller knows which names here are taken once it has read the box that was unpacked
+    dest = tmp_path / "out.tar.gz"
+    pack(filled, dest)
+    active = tmp_path / "active"
+    folder = unpack(dest, active, check=lambda unpacked: f"{unpacked.name}-2")
+    assert folder == active / f"{filled.path.name}-2" and (folder / "notes.md").read_text() == "hello"
+    assert os.listdir(active) == [f"{filled.path.name}-2"]
+    # the archive's own name, or nothing, leaves it where the archive has it
+    for same in (lambda unpacked: unpacked.name, lambda unpacked: None):
+        assert unpack(dest, tmp_path / "again", replace=True, check=same) == tmp_path / "again" / filled.path.name
+
+
+def test_unpack_never_puts_a_box_over_another_under_a_name_the_check_gives(filled, tmp_path):
+    dest = tmp_path / "out.tar.gz"
+    pack(filled, dest)
+    active = tmp_path / "active"
+    other = active / "2026-11-14_htb_other"
+    other.mkdir(parents=True)
+    (other / "work.txt").write_text("mine")
+    with pytest.raises(ArchiveError, match="already exists"):
+        unpack(dest, active, replace=True, check=lambda unpacked: other.name)
+    with pytest.raises(ArchiveError, match="is not a name for a box's folder"):
+        unpack(dest, active, check=lambda unpacked: "../escaped")
+    assert (other / "work.txt").read_text() == "mine"
+    assert os.listdir(active) == [other.name] and not (tmp_path / "escaped").exists()
+
+
+def box_archive(tmp_path, box, name="held.tar.gz"):
+    dest = tmp_path / name
+    pack(box, dest)
+    return dest
+
+
+def test_packed_id_is_the_id_of_the_box_an_archive_holds(filled, tmp_path):
+    assert packed_id(box_archive(tmp_path, filled)) == filled.id
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda t: None,
+        lambda t: add_bytes(t, "b/notes.md", b"no box.toml"),
+        lambda t: add_bytes(t, "b/box.toml", b"id = 7\n"),
+        lambda t: add_bytes(t, "b/box.toml", b"not toml ["),
+        lambda t: add_bytes(t, "b/box.toml", b"\xff\xfe"),
+        lambda t: add_bytes(t, "b/deeper/box.toml", b'id = "elsewhere"\n'),
+        lambda t: add_bytes(t, "b/box.toml", b'id = "x"\n' + b"#" * (1024 * 1024)),
+        lambda t: add_dir(t, "b/box.toml"),
+    ],
+)
+def test_packed_id_of_a_file_that_holds_no_box_is_none(tmp_path, build):
+    assert packed_id(raw_archive(tmp_path / "a.tar.gz", build)) is None
+
+
+def test_packed_id_of_what_is_no_archive_is_none(tmp_path):
+    (tmp_path / "junk.tar.gz").write_bytes(b"old")
+    assert packed_id(tmp_path / "junk.tar.gz") is None
+    assert packed_id(tmp_path / "missing.tar.gz") is None
+    assert packed_id(tmp_path) is None
+
+
+def test_archive_path_passes_over_a_name_whose_archive_holds_another_box(paths, box, filled, tmp_path):
+    from pwn_broker.store import save_box
+
+    paths.wrapped.mkdir(parents=True)
+    held = box_archive(paths.wrapped, filled, f"{box.path.name}.finished.tar.gz")
+    # its own archive: the name is its own, for either kind
+    assert archive_path(paths, box, "finished") == held
+    assert archive_path(paths, box, "exported").name == f"{box.path.name}.exported.tar.gz"
+    box.id = "another-box"
+    save_box(box)
+    assert archive_path(paths, box, "finished").name == f"{box.path.name}-2.finished.tar.gz"
+    assert archive_path(paths, box, "exported").name == f"{box.path.name}-2.exported.tar.gz"
 
 
 def test_a_file_whose_name_is_not_utf8_is_packed_and_unpacked_under_that_name(filled, tmp_path):

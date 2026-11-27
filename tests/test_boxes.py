@@ -251,6 +251,43 @@ def test_rename_target_updates_the_given_creds_list(box, dc01):
     assert load_creds(box) == creds
 
 
+@pytest.mark.parametrize("failure", [OSError(28, "No space left on device"), KeyboardInterrupt()])
+def test_a_rename_that_cannot_write_target_toml_puts_the_folder_back(box, dc01, monkeypatch, failure):
+    # the folder is moved, then target.toml is written: stopped between the two, the target's name
+    # was no longer its folder's, and such a box cannot be read at all
+    from pwn_broker import boxes
+
+    def full(*args, **kwargs):
+        raise failure
+
+    targets = [dc01]
+    monkeypatch.setattr(boxes, "save_target", full)
+    with pytest.raises(type(failure)):
+        rename_target(box, targets, "dc01", "dc02")
+    monkeypatch.undo()
+    assert dc01.name == "dc01"
+    assert sorted(p.name for p in (box.path / "targets").iterdir()) == ["dc01"]
+    assert [t.name for t in load_targets(load_box(box.path))] == ["dc01"]
+    # and nothing is in the way of doing it again
+    rename_target(box, targets, "dc01", "dc02")
+    assert [t.name for t in load_targets(load_box(box.path))] == ["dc02"]
+
+
+@pytest.mark.parametrize("day", [date(1970, 1, 1), date(2026, 11, 14), date(8999, 12, 31)])
+def test_a_box_of_any_date_it_is_made_with_is_read_back(paths, day):
+    box = make(paths, day=day)
+    assert load_box(box.path).started.date() == day
+    assert [b.id for b in list_boxes(paths)[0]] == ["id-1"]
+
+
+@pytest.mark.parametrize("day", [date(1, 1, 1), date(1026, 11, 14), date(1969, 12, 31), date(9000, 1, 1), date(9999, 12, 31)])
+def test_a_box_is_not_made_with_a_date_it_could_not_be_read_with(paths, day):
+    # loading takes the years 1970 to 8999: a box started in any other was written and never read again
+    with pytest.raises(BoxError, match=f"^a box starts in a year from 1970 to 8999, not in {day.year}$"):
+        make(paths, day=day)
+    assert not paths.active.exists()
+
+
 def test_rename_target_refuses_a_folder_already_on_disk(box, dc01):
     (box.path / "targets/dc").mkdir()
     with pytest.raises(BoxError, match="dc"):

@@ -10,6 +10,8 @@ from pwn_broker import hosts
 from pwn_broker.model import Box, Cred, Target
 from pwn_broker.paths import AppPaths, box_folder_name, safe_name
 from pwn_broker.store import (
+    FIRST_YEAR,
+    LAST_YEAR,
     SCHEMA,
     StoreError,
     load_box,
@@ -21,6 +23,7 @@ from pwn_broker.store import (
     save_files,
     save_target,
     write_toml,
+    year_is_kept,
 )
 
 TARGET_FOLDERS = ("creds", "files", "loot", "scans", "exploits", "screenshots", "recordings", "upload")
@@ -64,6 +67,9 @@ def create_box(
         base = box_folder_name(day, platform, name)
     except ValueError as exc:
         raise BoxError(str(exc)) from exc
+    if not year_is_kept(day.year):
+        # said before the folder is made: a box.toml with such a start is never read back
+        raise BoxError(f"a box starts in a year from {FIRST_YEAR} to {LAST_YEAR}, not in {day.year}")
     folder = paths.active / base
     suffix = 2
     taken = _archived_names(paths)
@@ -211,7 +217,17 @@ def rename_target(
     records = load_files(box)
     (base / old).rename(base / new)
     target.name = new
-    save_target(box, target)
+    try:
+        save_target(box, target)
+    except BaseException:
+        # the folder has its new name and target.toml still the old one: a target whose name is
+        # not its folder's stops the whole box from opening, so the folder goes back
+        target.name = old
+        try:
+            (base / new).rename(base / old)
+        except OSError:
+            pass
+        raise
 
     if box.last_target == old or old in box.hosts:
         if box.last_target == old:

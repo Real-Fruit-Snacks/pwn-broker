@@ -4,15 +4,16 @@ from datetime import datetime, timedelta, timezone
 from pwn_broker.model import Cred
 
 
-def odd_name(folder) -> bytes | None:
+def odd_name(folder, name: bytes = b"caf\xe9 \xff.txt", data: bytes = b"loot") -> bytes | None:
     """Makes a file whose name is not UTF-8 in the folder and returns its path as bytes.
 
     None where no file can have such a name: the test has nothing to run on.
     """
     try:
-        path = os.path.join(os.fsencode(folder), b"caf\xe9 \xff.txt")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(os.fsencode(folder), name)
         with open(path, "wb") as fh:
-            fh.write(b"loot")
+            fh.write(data)
     except (OSError, UnicodeError):
         return None
     return path

@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.1.15 (unreleased)
+
+Fixed: `import` took a folder name whose archives in `wrapped/` were another box's. With my finished `2026-11-14_htb_forest` gone from `active/`, a teammate's box of the same name came in under it and nothing was asked; its `export`, which `quit` offers, then replaced my `.exported.tar.gz` without a word, and its `finish` offered to replace my `.finished.tar.gz`. An imported box now gets `-2` on the end when the archives under its name hold another box, as a new box does, with a `warn` line, and keeps its name when they are its own. And `export` and `finish` never write over an archive that holds another box, or a file they cannot read as an archive: the box's archives go under the next free name.
+
+Fixed: a recording from an imported box could cost what it liked. One line of 96 MiB, 95 KiB in the archive, was read whole at 288 MiB of memory, and by its size the recording got 6,100 seconds to render before the `export`, `finish`, `replay` or `quit` that met it went on. A line longer than 4 MiB, which no line of a recording is, is no longer read: the recording gets a `warn` line and a text copy that says so. And no recording gets more than 600 seconds.
+
+Fixed: a `.cast` whose file name is not UTF-8 stopped `export`, `finish` and `replay` with `'utf-8' codec can't encode character`, and no archive was made. The name is written into the text copy, which cannot hold such a byte: it is now written as `?`, and the archive holds the recording and its text copy under the names they have.
+
+Fixed: a new box took any date, `1026-11-14` for one, but a box is read back only with a start from 1970 to 8999, so the box was made and then could never be opened again (`box.started has the wrong type`). The date question now asks again for a date outside those years, and no box is made with one.
+
+Fixed: `target rename` moved the target's folder, then wrote its `target.toml`. When that write failed, on a full disk for instance, the target's name was no longer its folder's, and such a box cannot be read at all. The folder is now moved back.
+
+Fixed: an imported archive's top folder could have any name without a `/` or a leading dot, escape sequences included, and `path` printed the box's folder as it was. The top folder must now be named as a box's folder is, in lowercase letters, digits, dots, hyphens and underscores with a letter or digit first, and `path` shows a control or format character as `?`, as every other line does. An archive of a box whose folder was renamed by hand to anything else is refused: rename the folder back, or to such a name, and export again.
+
 ## v0.1.14
 
 Added: package and index schema 4 separates ordinary tool dependencies (`depends`) from Python runtimes (`requires`) and declares optional external backends. `tool install <name>` resolves ordinary dependencies first, reuses installed builds across boxes, detects missing targets and cycles, and rolls back a failed package graph. `tool install <name> --full` also selects the requested tool's package-backed and apt-backed optional backends. Missing apt providers are shown with their exact `apt-get install --no-install-recommends` command and installed only after confirmation; they remain system-owned and are never removed by rollback, `tool remove` or `finish`. No recipe-supplied installer is run.
