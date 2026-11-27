@@ -11,7 +11,7 @@ from pwn_broker.model import current_tools
 from pwn_broker.session import Session, current_tunnel
 from pwn_broker.shell.commands import ArgumentError, command, take_args
 from pwn_broker.toolindex import BuildEntry, Index, ToolEntry
-from pwn_broker.toolpkg import MANIFEST, ToolError, build_id, read_manifest
+from pwn_broker.toolpkg import MANIFEST, ToolError, build_id, read_manifest, valid_apt_name
 from pwn_broker.toolstate import Installed
 
 # tests replace these; neither the lookup nor diagnostics runs a backend command
@@ -280,30 +280,131 @@ def _apt_backends(session: Session, entry: BuildEntry) -> list[tuple[str, list[s
     ]
 
 
+# What the simulation and the install are both given: no recommended packages, and each name
+# taken as one package's own name. Without Pattern-Only, apt-get takes a name with a dot that
+# no package has as a regular expression and installs whatever matches it.
+_APT_INSTALL = ("apt-get", "install", "--no-install-recommends", "-o", "APT::Cmd::Pattern-Only=true")
+# a package's own set-up questions take their defaults too
+_APT_QUIET = {"DEBIAN_FRONTEND": "noninteractive"}
+# a step of the plan apt-get --simulate prints: "Inst nmap (7.95 ...)" for a new package,
+# "Inst nmap [7.94] (7.95 ...)" for one it upgrades, "Remv" or "Purg" for one it takes off
+_APT_STEP = re.compile(r"(Inst|Remv|Purg) (\S+)( \[)?")
+_APT_ROW = 64
+
+
+def _apt_tail(result) -> str:
+    output = f"{result.stdout or ''}{result.stderr or ''}".strip()
+    return "\n".join(output.splitlines()[-10:])
+
+
+def _run_apt(argv: list[str], env: dict[str, str]):
+    # apt-get is never left to ask: with its output captured, its question would be a hang.
+    # sudo still asks for a password, on the terminal itself.
+    try:
+        return _run(
+            argv, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+            env={**os.environ, **env},
+        )  # fmt: skip
+    except OSError as exc:
+        raise ToolError(f"apt-get could not run: {exc}") from exc
+
+
+def _apt_plan(packages: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """What apt-get would install, upgrade and remove for these packages, by its own account:
+    a simulation, which needs no root and changes nothing."""
+    result = _run_apt([*_APT_INSTALL, "--simulate", "--", *packages], {"LC_ALL": "C"})
+    if result.returncode:
+        raise ToolError(
+            f"apt-get could not plan the install (exit {result.returncode}):\n{_apt_tail(result)}"
+        )
+    installs, upgrades, removes = [], [], []
+    for line in (result.stdout or "").splitlines():
+        step = _APT_STEP.match(line)
+        if step is None:
+            continue
+        if step[1] != "Inst":
+            removes.append(step[2])
+        elif step[3]:
+            upgrades.append(step[2])
+        else:
+            installs.append(step[2])
+    return sorted(installs), sorted(upgrades), sorted(removes)
+
+
+def _apt_rows(label: str, names: list[str]) -> list[tuple[str, str]]:
+    # the label once; a long list goes over several rows and never breaks inside a name. A
+    # row that is not the last ends with its comma, so the list reads on
+    rows: list[str] = []
+    for name in names:
+        if rows and len(rows[-1]) + len(name) + 3 <= _APT_ROW:
+            rows[-1] += f", {name}"
+        else:
+            rows.append(name)
+    last = len(rows) - 1
+    return [
+        (label if n == 0 else "", row if n == last else f"{row},") for n, row in enumerate(rows)
+    ]
+
+
 def _install_apt(session: Session, entry: BuildEntry) -> None:
     missing = _apt_backends(session, entry)
     if not missing:
         return
-    packages = list(dict.fromkeys(package for _name, rows in missing for package in rows))
-    argv = ["apt-get", "install", "--no-install-recommends", *packages]
-    if getattr(os, "geteuid", lambda: 1)() != 0:
-        argv.insert(0, "sudo")
     console = session.console
+    packages = list(dict.fromkeys(package for _name, rows in missing for package in rows))
+    for package in packages:
+        # judged again where it is used: an entry can be built without the index's own check
+        if not valid_apt_name(package):
+            raise ToolError(f"{package!r} is not a Debian package name")
+    backends = [("backend", f"{name}: apt {', '.join(rows)}") for name, rows in missing]
+    installs, upgrades, removes = _apt_plan(packages)
+    if removes:
+        # an install that takes packages off the system is not what was asked for
+        console.fields(backends + _apt_rows("removes", removes))
+        console.warn(
+            f"apt would remove {_count(len(removes), 'package')} to install these; "
+            "apt-backed backends were not installed"
+        )
+        return
+    if not installs and not upgrades:
+        console.fields(backends)
+        console.warn(
+            f"apt has nothing to install for these; tool doctor {entry.name} shows what is missing"
+        )
+        return
+    # --no-remove: should the system change between the plan and the run, apt-get stops
+    # rather than remove what the plan did not show. --force-confold: a settings file edited
+    # on this machine is kept as it is, which dpkg would otherwise stop to ask about
+    argv = [
+        *_APT_INSTALL, "-y", "--no-remove", "-o", "Dpkg::Options::=--force-confold",
+        "--", *packages,
+    ]  # fmt: skip
+    quiet = " ".join(f"{name}={value}" for name, value in _APT_QUIET.items())
+    if getattr(os, "geteuid", lambda: 1)() != 0:
+        # given to sudo as well, which hands a clean environment to what it runs
+        argv = ["sudo", quiet, *argv]
+        shown = shlex.join(argv)
+    else:
+        shown = f"{quiet} {shlex.join(argv)}"
     console.fields(
-        [("backend", f"{name}: apt {', '.join(rows)}") for name, rows in missing]
-        + [("command", shlex.join(argv))]
+        backends
+        + _apt_rows("installs", installs)
+        + _apt_rows("upgrades", upgrades)
+        + [("command", shown)]
     )
-    if not console.confirm(f"install {_count(len(packages), 'apt package')} for {entry.name}?"):
+    asked = []
+    if installs:
+        asked.append(f"install {_count(len(installs), 'apt package')}")
+    if upgrades:
+        count = len(upgrades) if installs else _count(len(upgrades), "apt package")
+        asked.append(f"upgrade {count}")
+    if not console.confirm(f"{' and '.join(asked)} for {entry.name}?"):
         console.warn("apt-backed backends were not installed")
         return
-    try:
-        result = _run(argv, capture_output=True, text=True)
-    except OSError as exc:
-        raise ToolError(f"apt-get could not run: {exc}") from exc
+    console.info("apt is installing them; nothing more shows until it ends")
+    result = _run_apt(argv, _APT_QUIET)
     if result.returncode:
-        output = f"{result.stdout or ''}{result.stderr or ''}".strip()
-        tail = "\n".join(output.splitlines()[-10:])
-        raise ToolError(f"apt-get failed (exit {result.returncode}):\n{tail}")
+        raise ToolError(f"apt-get failed (exit {result.returncode}):\n{_apt_tail(result)}")
     console.ok(f"installed with apt: {', '.join(packages)}")
     # Apt packages are system-owned. A later pwn-shop failure never rolls them back.
 
@@ -324,8 +425,11 @@ def tool_doctor(session: Session, args: list[str]) -> None:
         ("runtime", ", ".join(build.requires) or "none"),
         ("depends", ", ".join(build.depends) or "none"),
     ]
-    if item is not None and item.optional:
-        rows.append(("optional", ", ".join(item.optional)))
+    # the backends this box selected with --full, not what another box chose for the same tool
+    record = next((t for t in current_tools(session.box) if t.name == name), None)
+    chosen = tooldeps.selected(record, item) if record is not None else []
+    if chosen:
+        rows.append(("optional", ", ".join(chosen)))
     session.console.fields(rows)
     if not build.backends:
         session.console.info("no optional backends declared")
@@ -417,8 +521,7 @@ def tool_remove(session: Session, args: list[str]) -> None:
             raise ToolError(toolinstall.runtime_refusal(name))
         raise ToolError(f"{name} is not installed for {box.name}")
     installed = toolstate.load_installed(session.paths)
-    current = {record.name for record in current_tools(box)}
-    parents = [parent for parent in tooldeps.users_of(installed, name) if parent in current]
+    parents = tooldeps.parents(box, installed, name)
     if parents:
         raise ToolError(f"{name} is required by {', '.join(parents)}; remove the parent first")
     names = [name, *tooldeps.orphaned(box, installed, {name})]

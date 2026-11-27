@@ -602,6 +602,60 @@ def test_finished_users_do_not_count(paths, box, other, tmp_path):
     assert (paths.tools / "kerbrute" / "1.0.3-2").is_dir()
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [
+        lambda entry: replace(entry, sha256="0" * 64),
+        lambda entry: replace(entry, commands=["kerbrute", "extra"]),
+        lambda entry: replace(entry, requires=["python-3.13"]),
+    ],
+    ids=["another SHA-256", "other commands", "other requires"],
+)
+def test_a_build_left_by_a_finished_box_stays_until_the_new_zip_is_known_good(
+    paths, box, other, tmp_path, fault
+):
+    # nobody uses 1.0.3-1 any more, so installing 1.0.3-2 replaces it; a zip that is refused
+    # replaces nothing
+    zip_path, entry = build(tmp_path)
+    _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path)
+    zip2, entry2 = build(tmp_path, build=2)
+    before = snapshot(paths)
+    state = paths.tools_state.read_bytes()
+    launcher = (paths.bin / "kerbrute").read_bytes()
+    with pytest.raises(ToolError):
+        do_install(
+            paths, other, fault(entry2), zip2, tmp_path,
+            installed=installed, unfinished={other.id: other.name},
+        )  # fmt: skip
+    assert snapshot(paths) == before
+    assert paths.tools_state.read_bytes() == state
+    assert (paths.bin / "kerbrute").read_bytes() == launcher
+    assert (installed["kerbrute"].build, installed["kerbrute"].users) == (1, [box.id])
+    assert other.tools == []
+
+
+def test_a_failure_after_the_old_build_is_taken_off_leaves_no_row_for_it(
+    paths, box, other, tmp_path
+):
+    # the zip is good, so the old build goes; then the upload step fails. Neither build is on
+    # the machine after that, and the installed list names neither
+    zip_path, entry = build(tmp_path)
+    _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path)
+    uploads = [
+        {"path": "files/kerbrute", "as": "same.exe"},
+        {"path": "files/kerbrute", "as": "same.exe"},
+    ]
+    zip2, entry2 = build(tmp_path, build=2, kind="both", upload=uploads)
+    with pytest.raises(ToolError, match="two uploads have the same name"):
+        do_install(
+            paths, other, entry2, zip2, tmp_path,
+            installed=installed, unfinished={other.id: other.name},
+        )  # fmt: skip
+    assert installed == {} and load_installed(paths) == {}
+    assert snapshot(paths) == ["tools/installed.toml"]
+    assert other.tools == []
+
+
 def test_unused_same_build_is_reused(paths, box, other, tmp_path):
     zip_path, entry = build(tmp_path)
     _i, _c, installed = do_install(paths, box, entry, zip_path, tmp_path)
