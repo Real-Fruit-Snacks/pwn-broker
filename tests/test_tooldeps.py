@@ -411,6 +411,67 @@ def test_partial_failure_rolls_back_new_tools_records_and_logs(session, graph, m
     assert not session.paths.tool_log.exists() or not session.paths.tool_log.read_text()
 
 
+def left_by_a_finished_box(session, name):
+    """Installs a tool, then leaves it as a finished box does when its removal is put off: on
+    the machine, with no box that still uses it."""
+    from pwn_broker.store import save_box
+
+    run(session, f"tool install {name}")
+    installed = toolstate.load_installed(session.paths)
+    installed[name].users = ["a-box-that-is-finished"]
+    toolstate.save_installed(session.paths, installed)
+    session.box.tools = []
+    save_box(session.box)
+    return installed[name]
+
+
+def newer_build(graph, **overrides):
+    manifest = {
+        "name": "netexec", "build": 2,
+        "command": [{"name": "nxc", "type": "binary", "path": "files/tool"}],
+        **overrides,
+    }  # fmt: skip
+    files = {"files/tool": b"#!/bin/sh\nexit 0\n"}
+    return toolkit.make_entry(graph.folder, manifest, files)[1]
+
+
+def test_a_refused_zip_leaves_the_build_a_finished_box_left(session, graph):
+    from pathlib import Path
+
+    old = left_by_a_finished_box(session, "netexec")
+    launcher = (session.paths.bin / "nxc").read_bytes()
+    # build 2 is published, and the index lists a command its package does not have
+    newer = replace(newer_build(graph), commands=["nxc", "extra"])
+    toolkit.write_index(graph.folder, [graph.entries["netexec"], newer])
+
+    console = run(session, "tool install netexec")
+    assert "are not the commands the index lists" in lines_matching(console, "fail")[0]
+    row = toolstate.load_installed(session.paths)["netexec"]
+    assert (row.build, row.users, row.folder) == (1, old.users, old.folder)
+    assert Path(row.folder).is_dir()
+    assert (session.paths.bin / "nxc").read_bytes() == launcher
+    assert current_tools(session.box) == []
+
+
+def test_a_failed_install_does_not_put_back_a_row_whose_files_it_took_off(session, graph):
+    from pathlib import Path
+
+    old = left_by_a_finished_box(session, "netexec")
+    # build 2's zip is good, so the old build goes; then its upload step fails
+    twice = [{"path": "files/tool", "as": "same"}, {"path": "files/tool", "as": "same"}]
+    newer = newer_build(graph, kind="both", upload=twice)
+    toolkit.write_index(graph.folder, [graph.entries["netexec"], newer])
+
+    console = run(session, "tool install netexec")
+    assert lines_matching(console, "fail") == ["two uploads have the same name"]
+    # the list names no build whose folder and launcher are gone
+    assert toolstate.load_installed(session.paths) == {}
+    assert not Path(old.folder).exists()
+    assert not (session.paths.bin / "nxc").exists()
+    assert current_tools(session.box) == []
+    assert toolinstall.stray_files(session.paths, {}) == []
+
+
 def test_dependency_cycle_is_refused_before_download(session, graph):
     entries = dict(graph.entries)
     entries["leaf-tool"] = replace(entries["leaf-tool"], depends=["root-tool"])

@@ -157,6 +157,7 @@ curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/downl
 - Unpacks the release's own Python into `python/`, creates a virtual environment in `app/` with it and installs the app and its dependencies from the release file, which it has checked against `SHA256SUMS.txt`. Nothing goes into Kali's system Python.
 - Writes the `pwn-broker` launcher into `bin/`.
 - Adds `/opt/pwn-broker/bin` to the front of PATH in the user's shell config, and prints that it did.
+- Takes that folder off its own PATH before it runs anything, from 0.1.15. An upgrade starts in a shell where the folder comes first, and tools put their commands there (phase 3). The command names a tool package may not use cannot hold every program a shell script runs, and `sha256sum`, which checks the release file, was not among them.
 - Asks no questions. Defaults are good enough to start a box immediately.
 
 Section 6.13 is how the second step is built: a release is one file that carries its own Python, its dependencies and asciinema. The first design of this section made the environment on Kali's `python3` and let `pip` fetch the dependencies.

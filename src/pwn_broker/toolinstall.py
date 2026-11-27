@@ -372,6 +372,8 @@ def install(
         raise ToolError(f"{name}: selected optional backends are not declared by the package")
     current = installed.get(name)
     wanted = build_id(entry.version, entry.build)
+    # the build this install replaces, when one is there that nobody uses
+    unused: Installed | None = None
 
     if current is not None:
         users = [u for u in current.users if u in unfinished]
@@ -386,10 +388,9 @@ def install(
             _sudo_lines(paths, console, joined, on_path)
             return joined
         if not others:
-            # nobody is using it and it is not wanted as it is: take it off first
-            remove_files(paths, current)
-            del installed[name]
-            save_installed(paths, installed)
+            # nobody is using it and it is not wanted as it is: it is taken off below, once
+            # the new zip has passed every check
+            unused = current
 
     folder = paths.tools / name / wanted
     _check_inside(folder, paths.tools, "the tool folder")
@@ -399,6 +400,9 @@ def install(
     made_launchers: list[Path] = []
     made_uploads = False
     saved_installed = False
+    # whether the row under this name is this install's own to drop if it fails: not while it
+    # is still the unused build's
+    mine = unused is None
     old_tools = list(box.tools)
     try:
         verify_zip(zip_path, size=entry.size, sha256=entry.sha256)
@@ -419,6 +423,19 @@ def install(
         if package.depends != list(entry.depends) or package.backends != list(entry.backends):
             raise ToolError(f"{name}: the package's ordinary dependencies differ from the index")
         note = _runtime_note(name, package.requires, runtime)
+        if (package.name, package.version, package.build) != (entry.name, entry.version, entry.build):
+            raise ToolError(
+                f"the package is {package.name} {package.version}-{package.build}, "
+                f"not {name} {wanted}"
+            )
+        if not arch_fits(package.arch):
+            raise ToolError(f"{name} is built for {package.arch}, this machine is {machine_arch()}")
+        if unused is not None:
+            # only now: a zip that is refused must not cost the build that was there
+            remove_files(paths, unused)
+            del installed[name]
+            save_installed(paths, installed)
+            mine = True
         if os.path.lexists(folder):
             _delete_tree(folder)
         manifest = unpack(zip_path, folder)
@@ -470,7 +487,8 @@ def install(
         save_box(box)
     except BaseException as exc:
         box.tools = old_tools
-        installed.pop(name, None)
+        if mine:
+            installed.pop(name, None)
         for launcher in made_launchers:
             try:
                 launcher.unlink()

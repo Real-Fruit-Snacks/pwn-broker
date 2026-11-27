@@ -161,6 +161,12 @@ def install_tool(
 
     before_items = deepcopy(installed)
     before_tools = list(box.tools)
+    # the tools whose files are in place now: a failed install puts a row back only if they
+    # still are
+    in_place = {
+        name for name, item in installed.items()
+        if item.kind != "runtime" and Path(item.folder).is_dir()
+    }  # fmt: skip
     attached: list[str] = []
     runtime_logs: list[Installed] = []
     new_runtimes: list[str] = []
@@ -225,6 +231,11 @@ def install_tool(
             if removed and item is not None:
                 console.ok(f"{item.name} {item.version} removed (runtime)")
         restored = deepcopy(before_items)
+        for name in in_place:
+            # a build no box used any more, taken off to make room for the one that then
+            # failed: its folder and launchers are gone, so its row would name nothing
+            if not Path(restored[name].folder).is_dir():
+                del restored[name]
         for name in keep:
             if name in installed:
                 restored[name] = installed[name]
