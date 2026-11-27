@@ -1,5 +1,4 @@
 from dataclasses import replace
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,7 +11,6 @@ from pwn_broker.console import FakeConsole
 from pwn_broker.model import current_tools
 from pwn_broker.shell import cmd_tool
 from pwn_broker.shell.commands import dispatch
-from pwn_broker.store import save_box
 from pwn_broker.toolpkg import ToolError, parse_manifest
 
 
@@ -249,6 +247,8 @@ def test_partial_failure_rolls_back_new_tools_records_and_logs(session, graph, m
 def left_by_a_finished_box(session, name):
     """Installs a tool, then leaves it as a finished box does when its removal is put off: on
     the machine, with no box that still uses it."""
+    from pwn_broker.store import save_box
+
     run(session, f"tool install {name}")
     installed = toolstate.load_installed(session.paths)
     installed[name].users = ["a-box-that-is-finished"]
@@ -269,6 +269,8 @@ def newer_build(graph, **overrides):
 
 
 def test_a_refused_zip_leaves_the_build_a_finished_box_left(session, graph):
+    from pathlib import Path
+
     old = left_by_a_finished_box(session, "netexec")
     launcher = (session.paths.bin / "nxc").read_bytes()
     # build 2 is published, and the index lists a command its package does not have
@@ -285,6 +287,8 @@ def test_a_refused_zip_leaves_the_build_a_finished_box_left(session, graph):
 
 
 def test_a_failed_install_does_not_put_back_a_row_whose_files_it_took_off(session, graph):
+    from pathlib import Path
+
     old = left_by_a_finished_box(session, "netexec")
     # build 2's zip is good, so the old build goes; then its upload step fails
     twice = [{"path": "files/tool", "as": "same"}, {"path": "files/tool", "as": "same"}]
