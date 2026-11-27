@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.14
+
+Added: package and index schema 4 separates ordinary tool dependencies (`depends`) from Python runtimes (`requires`) and declares optional external backends. `tool install <name>` resolves ordinary dependencies first, reuses installed builds across boxes, detects missing targets and cycles, and rolls back a failed package graph. `tool install <name> --full` also selects the requested tool's package-backed and apt-backed optional backends. Missing apt providers are shown with their exact `apt-get install --no-install-recommends` command and installed only after confirmation; they remain system-owned and are never removed by rollback, `tool remove` or `finish`. No recipe-supplied installer is run.
+
+Added: `tool doctor <name>` reports runtime and ordinary dependencies plus each declared backend's command, availability, provider and enabled feature. It only inspects state and executable paths; it installs nothing and runs no backend.
+
+Changed: automatic dependencies are released only when orphaned, while explicitly installing one takes ownership so removing its former parent leaves it alone. Restoring a box preserves that ownership. pwn-shop's `ad-sweep` 0.1.0 build 2 brings NetExec automatically; `cred-spray` 1.0.0 build 2 stays minimal by default and declares Nmap, NetExec, FreeRDP, ipmitool and Ruby evil-winrm for `--full`.
+
 ## v0.1.13
 
 Fixed: a relative `home` or `copy_to` in `config.toml`, or a relative `PWN_BROKER_HOME` or `PWN_BROKER_OPT`, named a different folder for the note window, `serve`, `scan`, `record` and the report, which each run from a folder of their own, so they failed or wrote elsewhere. Each must now be a whole path, such as `~/pwn-broker`, and pwn-broker says so at launch. An empty `PWN_BROKER_OPT` now means the default, as an empty `PWN_BROKER_HOME` does, not the current folder. With `copy_to` set to `wrapped/` itself, every `finish` warned that the report was there already, and `export` and `finish` copied the archive over itself; neither is copied now, as both are already there. A `.part` folder left in `copy_to` by a report copy that was cut off, by a power cut for instance, made every later copy of that report fail; it is now replaced, as the archive's `.part` file is.

@@ -193,7 +193,7 @@ Only one box is open on the VM at a time, enforced by a lock in `/opt/pwn-broker
 **Checks, every launch.** Fast, and quiet when they pass:
 
 ```
-pwn-broker 0.1.13
+pwn-broker 0.1.14
 
   ok    7 checks passed
   warn  display   no desktop session
@@ -569,7 +569,7 @@ pwn-broker-<version>/
 
 ```
 curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/download/install.sh | sh
-sh install.sh --from pwn-broker-0.1.13-linux-x86_64.tar.gz
+sh install.sh --from pwn-broker-0.1.14-linux-x86_64.tar.gz
 ```
 
 The installer comes from the release it installs, not from `main`, so the two always match.
@@ -658,7 +658,7 @@ Built. This section is the design, corrected where the build or a second hands-o
 **What it looks like.**
 
 ```
-pwn-broker 0.1.13
+pwn-broker 0.1.14
 
   ok    7 checks passed
   warn  vpn   no VPN tunnel is up
@@ -1758,6 +1758,21 @@ Added in 0.1.12. [pwn-report](https://github.com/Real-Fruit-Snacks/pwn-report) t
 - **A report never fails, hangs or undoes `finish`.** A `fail` line, a status with no line, a folder said built but not there, a command that cannot run and a bug in this code are each a `warn` line, `the report was not built: <why>`, and `finish` goes on to its undo steps; the archive is not touched. Past 600 seconds the run gets SIGTERM, which pwn-report answers by removing its staging folder, then SIGKILL after 5 seconds, and any `.<report>.tmp-*` folder left beside the archive is removed. Ctrl-C while it runs stops the report the same way, and a Ctrl-C anywhere else in the report step, its copy to `copy_to` included, is a `warn` line too: none of them stops the finish or skips its undo steps.
 - **New boxes**, as for the playbooks: the 0.1.10 question is now one per offered package, playbooks then report, each asked, saved and installed in turn, with its own setting (`report = true` or `false`) and saved answer (`new_box_report` in `state.toml`). The playbooks' question and lines are unchanged. For the report tool: `install the report tool in this box and every new box? [Y/n]`, then `saved: new boxes get the report tool` or `saved: new boxes start without the report tool`, with the same detail lines worded for it. An index without a `report` package is a `warn` line, `report tool not installed: <why>`, as a failed playbooks install is.
 - **Not at `export`, and no `report` command at the prompt.** Both can come later; the report is for the box as finished.
+
+### 8.16 Ordinary dependencies and optional backends
+
+Added in 0.1.14, with manifest, card and index schema 4. Earlier schemas and their runtime-only behavior above remain part of the format; schema 4 adds `depends` for ordinary tools and `[[backend]]` for optional features. A mixed catalog takes the highest schema any build needs, so older applications are told to upgrade rather than silently ignore these relationships.
+
+- **Runtime and ordinary dependencies stay separate.** `requires` still names Python runtimes. `depends` names installable `kali`, `upload` or `both` packages in the same index; runtimes and notes cannot be ordinary targets. Names are unique, self-dependencies, missing targets and cycles are refused.
+- **A topological plan installs dependencies first.** An installed ordinary dependency is reused at its current build only when that build and its SHA-256 are still represented by the index. Otherwise the install refuses rather than silently replacing it. A package-backed optional backend follows the same rules. The requested tool's ordinary graph is always installed; `--full` additionally selects only that tool's declared optional backends, not every backend of every dependency.
+- **Minimal and full installs are explicit.** `tool install <name>` selects no optional backend. `tool install <name> --full` selects every backend declared by that package. A package-backed provider comes from pwn-shop; an apt-backed provider is considered only when none of its alternative executable names can be found.
+- **Apt is the one system-package exception, with a plan and consent.** Before downloading the pwn-shop graph, `--full` shows the missing apt-backed features and the exact `apt-get install --no-install-recommends <packages>` command, prefixed with `sudo` when needed. Declining leaves those backends uninstalled and continues with the package graph. Apt failure aborts the install. Apt packages are system-owned: rollback, `tool remove` and `finish` never remove them. No recipe-supplied installer, `pipx` or download-and-execute command is allowed.
+- **A failed package graph is rolled back.** Each newly installed automatic dependency is released in reverse order; existing tools are joined, not replaced. Apt changes deliberately survive because they belong to the system.
+- **Ownership belongs to the box's tool record.** A dependency brought by a parent is marked automatic. An explicit `tool install` of that same package takes ownership, so removing the parent cannot remove it. Restoring a box preserves the recorded automatic-or-explicit state.
+- **Only orphaned automatic dependencies are released.** `tool remove` refuses to remove a package still required by an installed parent in the box. Otherwise it releases the requested tool and walks the remaining graph, releasing automatic dependencies no remaining tool needs. Explicit packages, shared users, and damaged or missing state are kept conservatively. `finish` uses the same orphan rule before idle runtimes are removed.
+- **Diagnostics never mutate.** `tool doctor <name>` uses the box's installed build when there is one, otherwise the latest index build. It prints runtime and ordinary dependencies, selected package backends, and each declared backend's availability and feature. Availability is a `PATH` lookup only: no backend command is executed, and no package or apt state changes.
+
+pwn-shop validates the same manifest relationships when building and checks folder-index closure for runtimes, ordinary targets and package-backed providers. Its install checks use minimal installs, so optional apt installation is not exercised by package CI.
 
 ## 9. What finish puts back
 

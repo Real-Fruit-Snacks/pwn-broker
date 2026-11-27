@@ -230,7 +230,7 @@ def make_package(
 def make_entry(folder: Path, manifest_overrides: dict | None = None, files: dict | None = None):
     # a binary package built for this machine, with its index entry
     from pwn_broker.toolindex import BuildEntry
-    from pwn_broker.toolpkg import machine_arch
+    from pwn_broker.toolpkg import machine_arch, parse_backends
 
     manifest = sample_manifest(arch=machine_arch(), **(manifest_overrides or {}))
     if files is None:
@@ -248,6 +248,10 @@ def make_entry(folder: Path, manifest_overrides: dict | None = None, files: dict
         size=size,
         sha256=sha,
         requires=list(manifest.get("requires", [])),
+        depends=list(manifest.get("depends", [])),
+        backends=parse_backends(
+            manifest.get("backend", []), manifest["name"], manifest["schema"]
+        ),
     )
     return zip_path, entry
 
@@ -337,9 +341,10 @@ def write_index(folder: Path, entries: list) -> Path:
                 "build": [_build_row(b) for b in builds],
             }
         )
-    # schema 2 only when an entry needs it, so an index of schema 1 packages stays schema 1;
-    # schema 3 when it holds a notes package
-    if any(e.kind == "notes" for e in entries):
+    # Use the oldest schema that represents every entry, including a mixed notes catalog.
+    if any(e.depends or e.backends for e in entries):
+        schema = 4
+    elif any(e.kind == "notes" for e in entries):
         schema = 3
     elif any(e.kind == "runtime" or e.requires for e in entries):
         schema = 2
@@ -364,6 +369,19 @@ def _build_row(b) -> dict:
     }
     if b.requires:
         row["requires"] = list(b.requires)
+    if b.depends:
+        row["depends"] = list(b.depends)
+    if b.backends:
+        row["backend"] = [
+            {
+                "name": backend.name,
+                "description": backend.description,
+                "commands": list(backend.commands),
+                **({"package": backend.package} if backend.package else {}),
+                **({"apt": list(backend.apt)} if backend.apt else {}),
+            }
+            for backend in b.backends
+        ]
     return row
 
 

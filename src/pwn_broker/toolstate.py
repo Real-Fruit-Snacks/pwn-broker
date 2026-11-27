@@ -38,6 +38,9 @@ class Installed:
     runtime_build: int = 0
     # for a notes package: its folder of notes, as an absolute path
     notes: str = ""
+    # ordinary pwn-shop tools this tool needs, and optional package backends selected by --full
+    depends: list[str] = field(default_factory=list)
+    optional: list[str] = field(default_factory=list)
 
 
 KINDS = ("tool", "runtime")
@@ -74,6 +77,12 @@ def _installed(row: object) -> Installed:
     requires = row.get("requires", [])
     if not isinstance(requires, list) or not all(isinstance(v, str) for v in requires):
         raise TypeError("requires must be a list of strings")
+    extra = {}
+    for key in ("depends", "optional"):
+        value = row.get(key, [])
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise TypeError(f"{key} must be a list of strings")
+        extra[key] = list(value)
     python = row.get("python", "")
     if not isinstance(python, str):
         raise TypeError("python must be a string")
@@ -104,6 +113,7 @@ def _installed(row: object) -> Installed:
         runtime_version=runtime_version,
         runtime_build=runtime_build,
         notes=notes,
+        **extra,
     )
 
 
@@ -161,6 +171,10 @@ def _row(t: Installed) -> dict:
         row["runtime_build"] = t.runtime_build
     if t.notes:
         row["notes"] = t.notes
+    if t.depends:
+        row["depends"] = list(t.depends)
+    if t.optional:
+        row["optional"] = list(t.optional)
     return row
 
 

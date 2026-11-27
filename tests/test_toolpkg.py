@@ -97,7 +97,7 @@ def expect_error(data, field):
     assert field in str(info.value)
 
 
-@pytest.mark.parametrize("schema", [4, 0, "1", True, None])
+@pytest.mark.parametrize("schema", [5, 0, "1", True, None])
 def test_an_unknown_schema_says_to_upgrade(schema):
     with pytest.raises(ToolError, match="upgrade pwn-broker"):
         parse_manifest(sample_manifest(schema=schema))
@@ -442,7 +442,7 @@ def test_missing_or_bad_manifest(tmp_path):
     with pytest.raises(ToolError):
         unpack(path, tmp_path / "d2")
     with zipfile.ZipFile(path, "w") as zf:
-        zf.writestr("manifest.toml", tomli_w.dumps(sample_manifest(schema=4)))
+        zf.writestr("manifest.toml", tomli_w.dumps(sample_manifest(schema=5)))
     with pytest.raises(ToolError, match="upgrade"):
         unpack(path, tmp_path / "d3")
     assert not (tmp_path / "d1").exists() and not (tmp_path / "d2").exists()
@@ -826,7 +826,7 @@ def test_kinds_and_schemas():
     assert toolpkg.KINDS == ("kali", "upload", "both", "runtime", "notes")
     # pwn-shop pins the same pattern, so the two repositories accept the same names
     assert toolpkg._NAME.pattern == r"[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*"
-    assert toolpkg.SCHEMAS == (1, 2, 3)
+    assert toolpkg.SCHEMAS == (1, 2, 3, 4)
 
 
 # ---- schema 1 as before

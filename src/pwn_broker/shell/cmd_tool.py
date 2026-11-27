@@ -1,10 +1,12 @@
 import os
 import re
+import shlex
 import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from pwn_broker import hosts, tooldata, toolhooks, toolindex, toolinstall, toolstate
+from pwn_broker import hosts, tooldata, tooldeps, toolhooks, toolindex, toolinstall, toolstate
 from pwn_broker.model import current_tools
 from pwn_broker.session import Session, current_tunnel
 from pwn_broker.shell.commands import ArgumentError, command, take_args
@@ -12,8 +14,9 @@ from pwn_broker.toolindex import BuildEntry, Index, ToolEntry
 from pwn_broker.toolpkg import MANIFEST, ToolError, build_id, read_manifest
 from pwn_broker.toolstate import Installed
 
-# tests replace this; the lookup never runs anything
+# tests replace these; neither the lookup nor diagnostics runs a backend command
 _lookup = shutil.which
+_run = subprocess.run
 
 _PLACEHOLDER = re.compile(r"\{(ip|hostname|domain|lhost)\}")
 
@@ -255,9 +258,103 @@ def tool_info(session: Session, args: list[str]) -> None:
         console.warn(problem)
 
 
-@command("tool install", "install a tool; name@version picks a version", "<name>[@<version>[-<build>]]")
+def _backend_command(session: Session, commands: list[str]) -> str | None:
+    # A pwn-shop launcher and a Kali executable both make a backend available to the tool.
+    folders = [str(session.paths.bin), _outside_bin(session)]
+    search = os.pathsep.join(folder for folder in folders if folder)
+    for command in commands:
+        found = _lookup(command, path=search)
+        if found:
+            return found
+    return None
+
+
+def _apt_backends(session: Session, entry: BuildEntry) -> list[tuple[str, list[str]]]:
+    # Package-backed backends always use pwn-shop, even if a manifest also names apt packages.
+    return [
+        (backend.name, list(backend.apt))
+        for backend in entry.backends
+        if not backend.package
+        and backend.apt
+        and _backend_command(session, backend.commands) is None
+    ]
+
+
+def _install_apt(session: Session, entry: BuildEntry) -> None:
+    missing = _apt_backends(session, entry)
+    if not missing:
+        return
+    packages = list(dict.fromkeys(package for _name, rows in missing for package in rows))
+    argv = ["apt-get", "install", "--no-install-recommends", *packages]
+    if getattr(os, "geteuid", lambda: 1)() != 0:
+        argv.insert(0, "sudo")
+    console = session.console
+    console.fields(
+        [("backend", f"{name}: apt {', '.join(rows)}") for name, rows in missing]
+        + [("command", shlex.join(argv))]
+    )
+    if not console.confirm(f"install {_count(len(packages), 'apt package')} for {entry.name}?"):
+        console.warn("apt-backed backends were not installed")
+        return
+    try:
+        result = _run(argv, capture_output=True, text=True)
+    except OSError as exc:
+        raise ToolError(f"apt-get could not run: {exc}") from exc
+    if result.returncode:
+        output = f"{result.stdout or ''}{result.stderr or ''}".strip()
+        tail = "\n".join(output.splitlines()[-10:])
+        raise ToolError(f"apt-get failed (exit {result.returncode}):\n{tail}")
+    console.ok(f"installed with apt: {', '.join(packages)}")
+    # Apt packages are system-owned. A later pwn-shop failure never rolls them back.
+
+
+@command("tool doctor", "show a tool's backend commands and enabled features", "<name>")
+def tool_doctor(session: Session, args: list[str]) -> None:
+    (name,) = take_args(args, required=("tool name",))
+    index = _index(session)
+    tool = toolindex.find_tool(index, name)
+    installed = toolstate.load_installed(session.paths)
+    item = installed.get(name) if name in _have(session) else None
+    wanted = build_id(item.version, item.build) if item is not None else ""
+    build = next((b for b in tool.builds if build_id(b.version, b.build) == wanted), None)
+    if build is None:
+        build = toolindex.pick_build(tool, None)
+    rows = [
+        ("name", f"{name} {build.version}-{build.build}"),
+        ("runtime", ", ".join(build.requires) or "none"),
+        ("depends", ", ".join(build.depends) or "none"),
+    ]
+    if item is not None and item.optional:
+        rows.append(("optional", ", ".join(item.optional)))
+    session.console.fields(rows)
+    if not build.backends:
+        session.console.info("no optional backends declared")
+        return
+    table = []
+    for backend in build.backends:
+        found = _backend_command(session, backend.commands)
+        provider = f"pwn-shop: {backend.package}" if backend.package else f"apt: {', '.join(backend.apt)}"
+        table.append(
+            [
+                backend.name,
+                "enabled" if found else "missing",
+                found or " or ".join(backend.commands),
+                provider,
+                backend.description if found else "not enabled",
+            ]
+        )
+    session.console.table(["backend", "status", "command", "provider", "feature"], table, cut="feature")
+
+
+@command(
+    "tool install", "install a tool; name@version picks a version; --full adds backends",
+    "<name>[@<version>[-<build>]] [--full]",
+)
 def tool_install(session: Session, args: list[str]) -> None:
-    (spec,) = take_args(args, required=("tool name",))
+    spec, option = take_args(args, required=("tool name",), optional=("--full",))
+    if option is not None and option != "--full":
+        raise ArgumentError(f"unknown option: {option}")
+    full = option == "--full"
     name, at, version = spec.partition("@")
     if not name or (at and not version):
         raise ValueError(f"expected <name> or <name>@<version>, not {spec}")
@@ -272,6 +369,7 @@ def tool_install(session: Session, args: list[str]) -> None:
 
     wanted = build_id(build.version, build.build)
     current = installed.get(name)
+    already = False
     for record in current_tools(box):
         if (
             record.name == name
@@ -279,8 +377,10 @@ def tool_install(session: Session, args: list[str]) -> None:
             and current is not None
             and build_id(current.version, current.build) == wanted
         ):
-            console.info(f"{name} {build.version} is already installed for {box.name}")
-            return
+            already = True
+            if not full and not record.dependency:
+                console.info(f"{name} {build.version} is already installed for {box.name}")
+                return
 
     unfinished = toolstate.holding_boxes(session.paths, installed)
     unfinished[box.id] = box.name
@@ -294,9 +394,13 @@ def tool_install(session: Session, args: list[str]) -> None:
         build,
         installed=installed,
         unfinished=unfinished,
+        full=full,
+        before_download=(lambda: _install_apt(session, build)) if full else None,
         # the app's own bin is left out, so another copy is found even once a launcher exists
         on_path=lambda cmd: _lookup(cmd, path=_outside_bin(session)),
     )
+    if full and already:
+        console.info(f"{name} {build.version} dependency and backend check complete")
     if sharing:
         console.warn(
             f"{name} writes to the home folder and {', '.join(sharing)} also uses it; "
@@ -304,7 +408,7 @@ def tool_install(session: Session, args: list[str]) -> None:
         )
 
 
-@command("tool remove", "take a tool off this box", "<name>")
+@command("tool remove", "take a tool off this box, with its orphaned dependencies", "<name>")
 def tool_remove(session: Session, args: list[str]) -> None:
     (name,) = take_args(args, required=("tool name",))
     box, console = session.box, session.console
@@ -312,42 +416,61 @@ def tool_remove(session: Session, args: list[str]) -> None:
         if _is_runtime_name(session, name):
             raise ToolError(toolinstall.runtime_refusal(name))
         raise ToolError(f"{name} is not installed for {box.name}")
-    found = toolstate.running(session.paths, tools=[name])
+    installed = toolstate.load_installed(session.paths)
+    current = {record.name for record in current_tools(box)}
+    parents = [parent for parent in tooldeps.users_of(installed, name) if parent in current]
+    if parents:
+        raise ToolError(f"{name} is required by {', '.join(parents)}; remove the parent first")
+    names = [name, *tooldeps.orphaned(box, installed, {name})]
+    found = toolstate.running(session.paths, tools=names)
     if found:
         raise ToolError(toolhooks.running_text(session.paths, *found[0]))
-    installed = toolstate.load_installed(session.paths)
     holding = toolstate.holding_boxes(session.paths, installed, excluding=box.id)
-    item = installed.get(name)
-    # only a runtime this tool required is this box's to log; any other idle one is housekeeping
-    required = set(item.requires) if item is not None else set()
-    # the last box to let go takes the tool's home data with it, as finish does
-    last = item is not None and bool(item.home) and not any(u in holding for u in item.users)
-    homes = toolhooks.user_homes() if last else []
-    named = tooldata.to_delete(item, homes, False) if last else []
-    console.fields([("home", f"{path}   (will be deleted)") for path in named])
+    plans = []
+    for tool_name in names:
+        item = installed.get(tool_name)
+        record = next(t for t in current_tools(box) if t.name == tool_name)
+        # the last box to let go takes the tool's home data with it, as finish does
+        last = item is not None and bool(item.home) and not any(u in holding for u in item.users)
+        homes = toolhooks.user_homes() if last else []
+        named = tooldata.to_delete(item, homes, False) if last else []
+        plans.append((record, item, homes, named))
+    if len(names) > 1:
+        console.info(f"automatic dependencies no longer needed: {', '.join(names[1:])}")
+    console.fields(
+        [("home", f"{path}   (will be deleted)") for _r, _i, _h, named in plans for path in named]
+    )
     if not console.confirm(f"remove {name}?"):
         console.info("nothing removed")
         return
-    record = next(t for t in current_tools(box) if t.name == name)
-    doomed: list[Path] = []
-    if last:
-        full: set[Path] = set()
-        if named:
-            full = toolhooks.collect_tool(box, item, record, homes, console)
-        doomed = toolhooks.home_to_delete(console, item, homes, False, full)
-    gone = toolhooks.release_tool(
-        session, record, "remove", installed=installed, unfinished=holding
-    )
-    tooldata.delete(doomed, homes)
-    item = installed.get(name)
-    if gone or item is None or not item.users:
-        console.ok(f"{name} removed; its files are deleted" if gone else f"{name} removed from {box.name}")
-    else:
-        users = [holding.get(u, "another box") for u in item.users]
-        verb = "still uses" if len(users) == 1 else "still use"
-        console.ok(
-            f"{name} removed from {box.name}; {', '.join(users)} {verb} it, so its files stay"
+    required: set[str] = set()
+    for record, item, homes, named in plans:
+        tool_name = record.name
+        doomed: list[Path] = []
+        if homes:
+            collected: set[Path] = set()
+            if named:
+                collected = toolhooks.collect_tool(box, item, record, homes, console)
+            doomed = toolhooks.home_to_delete(console, item, homes, False, collected)
+        gone = toolhooks.release_tool(
+            session, record, "remove", installed=installed, unfinished=holding
         )
+        tooldata.delete(doomed, homes)
+        if item is not None:
+            required.update(item.requires)
+        after = installed.get(tool_name)
+        if gone or after is None or not after.users:
+            console.ok(
+                f"{tool_name} removed; its files are deleted" if gone
+                else f"{tool_name} removed from {box.name}"
+            )
+        else:
+            users = [holding.get(u, "another box") for u in after.users]
+            verb = "still uses" if len(users) == 1 else "still use"
+            console.ok(
+                f"{tool_name} removed from {box.name}; {', '.join(users)} {verb} it, "
+                "so its files stay"
+            )
     for runtime in toolhooks.remove_idle_runtimes(session.paths, installed, console):
         if runtime.name in required:
             toolhooks.log_tool(session, "remove", runtime, kind="runtime")

@@ -12,7 +12,7 @@ from pathlib import Path
 from pwn_broker.filescan import sha256_file
 
 KINDS = ("kali", "upload", "both", "runtime", "notes")
-SCHEMAS = (1, 2, 3)
+SCHEMAS = (1, 2, 3, 4)
 COMMAND_TYPES = ("binary", "python-entry", "python-script")
 MANIFEST = "manifest.toml"
 
@@ -113,6 +113,15 @@ class RuntimeSpec:
 
 
 @dataclass
+class BackendSpec:
+    name: str
+    description: str
+    commands: list[str]
+    package: str = ""
+    apt: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Manifest:
     name: str
     version: str
@@ -133,6 +142,8 @@ class Manifest:
     requires: list[str] = field(default_factory=list)
     runtime: RuntimeSpec | None = None
     notes: "NotesSpec | None" = None
+    depends: list[str] = field(default_factory=list)
+    backends: list[BackendSpec] = field(default_factory=list)
 
 
 @dataclass
@@ -300,6 +311,77 @@ def _table_list(data: dict, key: str) -> list[dict]:
     return rows
 
 
+def parse_depends(data: dict, name: str, schema: int, label: str = "depends") -> list[str]:
+    if "depends" not in data:
+        return []
+    if schema != 4:
+        raise ToolError(f"{label}: ordinary dependencies need schema 4")
+    depends = _strings(data, "depends", label)
+    seen = set()
+    for wanted in depends:
+        if not valid_tool_name(wanted):
+            raise ToolError(f"{label}: {wanted!r} is not a valid package name")
+        if wanted == name:
+            raise ToolError(f"{label}: {name} cannot depend on itself")
+        if wanted in seen:
+            raise ToolError(f"{label}: {wanted!r} appears more than once")
+        seen.add(wanted)
+    return depends
+
+
+def parse_backends(rows: object, name: str, schema: int, label: str = "backend") -> list[BackendSpec]:
+    if rows in (None, []):
+        return []
+    if schema != 4:
+        raise ToolError(f"{label}: optional backends need schema 4")
+    if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
+        raise ToolError(f"{label}: must be a list of tables")
+    answer = []
+    names, packages = set(), set()
+    for index, row in enumerate(rows):
+        where = f"{label}[{index}]"
+        unknown = set(row) - {"name", "description", "commands", "package", "apt"}
+        if unknown:
+            raise ToolError(f"{where}: unknown key {sorted(unknown)[0]!r}")
+        backend_name = _text(row, "name", f"{where}.name")
+        if not valid_tool_name(backend_name):
+            raise ToolError(f"{where}.name: {backend_name!r} is not a valid backend name")
+        if backend_name in names:
+            raise ToolError(f"{where}.name: {backend_name!r} appears more than once")
+        names.add(backend_name)
+        commands = _strings(row, "commands", f"{where}.commands")
+        if not commands or any(_COMMAND_NAME.fullmatch(c) is None for c in commands):
+            raise ToolError(f"{where}.commands: needs plain executable names")
+        if len(set(commands)) != len(commands):
+            raise ToolError(f"{where}.commands: a command appears more than once")
+        package = row.get("package", "")
+        if not isinstance(package, str) or (package and not valid_tool_name(package)):
+            raise ToolError(f"{where}.package: must be a valid package name")
+        if package == name:
+            raise ToolError(f"{where}.package: {name} cannot be its own backend")
+        if package in packages:
+            raise ToolError(f"{where}.package: {package!r} appears more than once")
+        if package:
+            packages.add(package)
+        apt = _strings(row, "apt", f"{where}.apt")
+        if any(re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", p) is None for p in apt):
+            raise ToolError(f"{where}.apt: package names must be lower-case Debian names")
+        if len(set(apt)) != len(apt):
+            raise ToolError(f"{where}.apt: a package appears more than once")
+        if not package and not apt:
+            raise ToolError(f"{where}: needs a pwn-shop package or apt packages")
+        answer.append(
+            BackendSpec(
+                backend_name,
+                _text(row, "description", f"{where}.description"),
+                commands,
+                package,
+                apt,
+            )
+        )
+    return answer
+
+
 def _command(row: dict, index: int) -> Command:
     label = f"command[{index}]"
     name = _text(row, "name", f"{label}.name")
@@ -420,6 +502,8 @@ _NOT_IN_NOTES = (
     ("upload", "upload: a notes package has no uploads"),
     ("python", "python: a notes package has no Python"),
     ("requires", "requires: a notes package requires nothing"),
+    ("depends", "depends: a notes package has no ordinary dependencies"),
+    ("backend", "backend: a notes package has no optional backends"),
     ("data", "data: a notes package keeps no tool data"),
     ("runtime", "runtime: a notes package is not a runtime"),
 )
@@ -496,10 +580,14 @@ def parse_manifest(data: dict) -> Manifest:
     if kind == "notes":
         return _notes_manifest(data, name, version, build, needs_root)
     requires = _requires(data, name, schema)
+    depends = parse_depends(data, name, schema)
+    backends = parse_backends(data.get("backend", []), name, schema)
+    if set(depends) & {b.package for b in backends}:
+        raise ToolError("depends: a package cannot be both a dependency and an optional backend")
     runtime = None
     if kind == "runtime":
-        if requires:
-            raise ToolError("requires: a runtime requires nothing")
+        if requires or depends or backends:
+            raise ToolError("requires: a runtime requires nothing and has no backends")
         runtime = _runtime(data)
 
     commands = [_command(r, i) for i, r in enumerate(_table_list(data, "command"))]
@@ -519,18 +607,20 @@ def parse_manifest(data: dict) -> Manifest:
         raise ToolError("upload: a kali package has no uploads")
 
     python = _python(data, any(c.type != "binary" for c in commands), schema)
-    if schema == 2 and kind != "runtime":
-        # schema 2 is only for what schema 1 cannot say, so published builds stay as they are
+    if schema in (2, 4) and kind != "runtime":
+        # requires remains runtime-only in schema 4; depends is the separate ordinary graph
         if python is not None and len(requires) != 1:
             raise ToolError(
                 f"requires: a Python tool requires exactly one runtime; this one names {len(requires)}"
             )
         if python is None and requires:
             raise ToolError("requires: a tool that is not Python requires nothing")
-        if not requires:
+        if schema == 2 and not requires:
             raise ToolError(
                 "schema: a package that is not a runtime and requires nothing must be schema 1"
             )
+        if schema == 4 and not (depends or backends):
+            raise ToolError("schema: schema 4 needs ordinary dependencies or optional backends")
 
     home_table = data.get("data", {})
     if not isinstance(home_table, dict):
@@ -565,6 +655,8 @@ def parse_manifest(data: dict) -> Manifest:
         schema=schema,
         requires=requires,
         runtime=runtime,
+        depends=depends,
+        backends=backends,
     )
 
 

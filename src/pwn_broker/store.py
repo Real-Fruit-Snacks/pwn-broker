@@ -113,8 +113,15 @@ def save_box(box: Box) -> None:
         "flags": {k: {"value": f.value, "at": f.at} for k, f in box.flags.items()},
     }
     if box.tools:
-        # a tool with no runtime and no removal time is written as before these existed
-        data["tools"] = [_without_none(asdict(t)) for t in box.tools]
+        # ordinary and runtime-only records stay byte-compatible; only automatic dependencies
+        # carry the extra flag
+        rows = []
+        for tool in box.tools:
+            row = _without_none(asdict(tool))
+            if not tool.dependency:
+                row.pop("dependency", None)
+            rows.append(row)
+        data["tools"] = rows
     if box.hosts:
         data["hosts"] = list(box.hosts)
     if box.vpn:
@@ -232,6 +239,10 @@ def _tool(row: dict) -> ToolRecord:
     if "removed" in row:
         # absent in boxes written before removed tools were kept
         record.removed = _checked(row, {"removed": datetime}, "tools")["removed"]
+    if "dependency" in row:
+        if not isinstance(row["dependency"], bool):
+            raise TypeError("tools.dependency must be true or false")
+        record.dependency = row["dependency"]
     return record
 
 

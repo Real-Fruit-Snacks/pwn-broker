@@ -1,8 +1,9 @@
 from collections.abc import Callable
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
-from pwn_broker import lifecycle, tooldata, toolindex, toolinstall, toollog, toolstate
+from pwn_broker import lifecycle, tooldata, tooldeps, toolindex, toolinstall, toollog, toolstate
 from pwn_broker.console import Cancelled, Console
 from pwn_broker.model import Box, RuntimeRecord, ToolRecord, current_tools
 from pwn_broker.paths import AppPaths
@@ -117,66 +118,131 @@ def install_tool(
     *,
     installed: dict[str, Installed],
     unfinished: dict[str, str],
+    full: bool = False,
+    dependency: bool = False,
+    before_download: Callable[[], None] | None = None,
     **options,
 ) -> Installed:
-    """Installs a tool for the session's box, with the runtime it requires installed first.
+    """Install a tool's ordinary dependency graph, then the tool, as one box operation.
 
-    A runtime already on the machine, at any build, is used as it is; otherwise the index's
-    latest build is installed. A damaged one that installed tools require is installed again at
-    the build it was, or refused if the index no longer lists it. If the tool then cannot be
-    installed, a runtime this call brought is removed again; one that was there before is left
-    alone.
+    Existing exact builds are joined rather than downloaded again. Every package and missing
+    runtime is checked before the first download; `before_download` is the confirmed system-
+    package hook used by --full. Nothing is logged until the whole graph has succeeded.
     """
-    paths, console = session.paths, session.console
-    # a tool the box would refuse costs no download; nor does a runtime the index lacks
-    toolinstall.check_install(session.box, entry, installed=installed, unfinished=unfinished)
-    ignoring = _replaced(entry, installed, unfinished)
-    missing = [
-        _runtime_build(paths, index, installed, name, ignoring)
-        for name in entry.requires
-        if not toolinstall.runtime_intact(paths, installed.get(name))
-    ]
-    brought: list[Installed] = []
-    try:
-        for runtime_entry in missing:
-            before = installed.get(runtime_entry.name)
-            zip_path = toolindex.fetch_zip(paths, session.settings, runtime_entry)
-            item = toolinstall.install_runtime(
-                paths, runtime_entry, zip_path, installed=installed, console=console,
-                ignoring=ignoring,
-            )  # fmt: skip
-            if item is not before:
-                brought.append(item)
-        runtime = installed.get(entry.requires[0]) if entry.requires else None
-        zip_path = toolindex.fetch_zip(paths, session.settings, entry)
-        tool = toolinstall.install(
-            paths,
-            session.box,
-            entry,
-            zip_path,
-            installed=installed,
-            unfinished=unfinished,
-            home=user_home(),
-            console=console,
-            now=session.clock(),
-            runtime=runtime,
-            **options,
-        )
-    except BaseException:
-        for item in brought:
-            try:
-                removed = toolinstall.forget_runtime(paths, installed, item.name)
-            except Exception as exc:  # the install's own error is the one to report
-                console.warn(f"{item.name} {item.version}   {exc}")
+    paths, console, box = session.paths, session.console, session.box
+    plan = tooldeps.resolve(index, entry, installed=installed, full=full)
+    current = installed.get(entry.name)
+    selected = plan.optional.get(entry.name, [])
+    optional_missing = full and not set(selected) <= set(current.optional if current else [])
+    make_explicit = any(r.name == entry.name and r.dependency for r in current_tools(box))
+
+    # A box with another build, a launcher collision, or a missing runtime pays no download.
+    work = []
+    for planned in plan.entries:
+        toolinstall.check_install(box, planned, installed=installed, unfinished=unfinished)
+        needed = not tooldeps.satisfied(box, planned, installed)
+        if planned.name == entry.name:
+            needed = needed or optional_missing or make_explicit
+        if needed:
+            work.append(planned)
+    missing: dict[str, tuple[BuildEntry, str | None]] = {}
+    for planned in work:
+        ignoring = _replaced(planned, installed, unfinished)
+        for name in planned.requires:
+            if name in missing or toolinstall.runtime_intact(paths, installed.get(name)):
                 continue
-            if removed:
+            missing[name] = (_runtime_build(paths, index, installed, name, ignoring), ignoring)
+    if before_download is not None:
+        before_download()
+
+    before_items = deepcopy(installed)
+    before_tools = list(box.tools)
+    attached: list[str] = []
+    runtime_logs: list[Installed] = []
+    new_runtimes: list[str] = []
+    try:
+        for planned in work:
+            for name in planned.requires:
+                if name not in missing or toolinstall.runtime_intact(paths, installed.get(name)):
+                    continue
+                runtime_entry, ignoring = missing[name]
+                before = installed.get(name)
+                zip_path = toolindex.fetch_zip(paths, session.settings, runtime_entry)
+                item = toolinstall.install_runtime(
+                    paths, runtime_entry, zip_path, installed=installed, console=console,
+                    ignoring=ignoring,
+                )  # fmt: skip
+                if item is not before:
+                    runtime_logs.append(item)
+                if before is None:
+                    new_runtimes.append(name)
+            runtime = installed.get(planned.requires[0]) if planned.requires else None
+            zip_path = toolindex.fetch_zip(paths, session.settings, planned)
+            toolinstall.install(
+                paths,
+                box,
+                planned,
+                zip_path,
+                installed=installed,
+                unfinished=unfinished,
+                home=user_home(),
+                console=console,
+                now=session.clock(),
+                runtime=runtime,
+                optional=selected if full and planned.name == entry.name else None,
+                dependency=dependency or planned.name != entry.name,
+                **options,
+            )
+            attached.append(planned.name)
+    except BaseException:
+        keep: set[str] = set()
+        # Reverse order takes parents off before their dependencies. A pre-existing row is
+        # restored, never deleted merely because this call briefly attached the box to it.
+        for name in reversed(attached):
+            if name in before_items:
+                installed[name] = deepcopy(before_items[name])
+                continue
+            try:
+                toolinstall.release(
+                    paths, box, name, installed=installed, unfinished=unfinished, removed=None
+                )
+            except Exception as exc:  # the install's own error remains the one to report
+                keep.add(name)
+                console.warn(f"{name} could not be rolled back: {exc}")
+        for name in reversed(new_runtimes):
+            item = installed.get(name)
+            try:
+                removed = toolinstall.forget_runtime(paths, installed, name)
+            except Exception as exc:
+                keep.add(name)
+                shown = f"{item.name} {item.version}" if item is not None else name
+                console.warn(f"{shown}   {exc}")
+                continue
+            if removed and item is not None:
                 console.ok(f"{item.name} {item.version} removed (runtime)")
+        restored = deepcopy(before_items)
+        for name in keep:
+            if name in installed:
+                restored[name] = installed[name]
+        installed.clear()
+        installed.update(restored)
+        box.tools = before_tools
+        try:
+            toolstate.save_installed(paths, installed)
+            save_box(box)
+        except Exception as exc:
+            console.warn(f"the install state could not be fully restored: {exc}")
+        toolstate.write_notes_file(paths, box)
         raise
-    # nothing is logged until the tool is in: a runtime taken away again was never the box's
-    for runtime_item in brought:
+
+    for runtime_item in runtime_logs:
         log_tool(session, "install", runtime_item, kind="runtime")
-    log_tool(session, "install", tool)
-    toolstate.write_notes_file(paths, session.box)
+    for name in attached:
+        log_tool(session, "install", installed[name])
+    toolstate.write_notes_file(paths, box)
+    tool = installed.get(entry.name)
+    if tool is None:
+        raise ToolError(f"{entry.name}: the install plan left no installed tool")
     return tool
 
 
@@ -553,7 +619,10 @@ def _restore(session: Session) -> None:
                 console.warn(f"{label}   the index lists a different SHA-256 than the box; skipped")
                 continue
             ran_on = record.runtime
-            install_tool(session, index, entry, installed=installed, unfinished=unfinished)
+            install_tool(
+                session, index, entry, installed=installed, unfinished=unfinished,
+                dependency=record.dependency,
+            )  # fmt: skip
             _runtime_changed(console, record.name, ran_on, installed)
         except Exception as exc:  # one tool failing must not stop the rest
             console.warn(f"{label}   {exc}")

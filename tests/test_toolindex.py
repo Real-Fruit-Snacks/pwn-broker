@@ -132,7 +132,7 @@ def test_parse_defaults_for_tags_commands_url():
     assert parsed.builds[0].url == ""
 
 
-@pytest.mark.parametrize("schema", [4, 0, "1", True, None])
+@pytest.mark.parametrize("schema", [5, 0, "1", True, None])
 def test_parse_unknown_schema_says_to_upgrade(schema):
     data = index_data()
     data["schema"] = schema
@@ -386,7 +386,7 @@ def test_bad_download_never_replaces_good_cache(paths):
 
 
 def test_bad_download_wrong_schema_is_refused_without_cache(paths):
-    bad = tomli_w.dumps({"schema": 4, "tool": []}).encode()
+    bad = tomli_w.dumps({"schema": 5, "tool": []}).encode()
     with pytest.raises(ToolError, match="upgrade pwn-broker"):
         toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(bad))
     assert not (paths.cache / "index.toml").exists()
@@ -1037,14 +1037,14 @@ def test_an_http_error_without_a_cache_says_where(paths):
     assert_says_where(err, URL)
 
 
-@pytest.mark.parametrize("body", [b"garbage = [", b"tool = []\n", b"schema = 4\n"])
+@pytest.mark.parametrize("body", [b"garbage = [", b"tool = []\n", b"schema = 5\n"])
 def test_a_download_that_does_not_parse_says_where(paths, body):
     with pytest.raises(ToolError) as err:
         toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(body))
     assert_says_where(err, URL)
 
 
-@pytest.mark.parametrize("body", ["garbage = [", "tool = []\n", "schema = 4\n"])
+@pytest.mark.parametrize("body", ["garbage = [", "tool = []\n", "schema = 5\n"])
 def test_a_folder_index_that_does_not_parse_says_where(paths, tmp_path, body):
     (tmp_path / "index.toml").write_text(body, encoding="utf-8")
     with pytest.raises(ToolError) as err:

@@ -22,8 +22,11 @@ from pwn_broker.toolpkg import (
     KINDS,
     SCHEMAS,
     VERSION_RULE,
+    BackendSpec,
     ToolError,
     build_id,
+    parse_backends,
+    parse_depends,
     shown,
     valid_tool_name,
     valid_version,
@@ -55,6 +58,8 @@ class BuildEntry:
     size: int
     sha256: str
     requires: list[str] = field(default_factory=list)
+    depends: list[str] = field(default_factory=list)
+    backends: list[BackendSpec] = field(default_factory=list)
 
 
 @dataclass
@@ -144,9 +149,15 @@ def _build(tool: str, row: object, label: str, schema: int) -> BuildEntry:
         raise ToolError(f"{label}.kind: must be one of {', '.join(KINDS)}")
     if kind == "runtime" and schema == 1:
         raise ToolError(f"{label}.kind: runtime needs a schema 2 index")
-    if kind == "notes" and schema != 3:
+    if kind == "notes" and schema not in (3, 4):
         raise ToolError(f"{label}.kind: notes needs a schema 3 index")
     requires = _requires(tool, row, kind, schema, label)
+    depends = parse_depends(row, tool, schema, f"{label}.depends")
+    backends = parse_backends(row.get("backend", []), tool, schema, f"{label}.backend")
+    if set(depends) & {b.package for b in backends}:
+        raise ToolError(f"{label}: a package cannot be both a dependency and an optional backend")
+    if kind in ("runtime", "notes") and (depends or backends):
+        raise ToolError(f"{label}: a {kind} package has no ordinary dependencies or backends")
     if requires and kind == "notes":
         raise ToolError(f"{label}.requires: a notes package requires nothing")
     commands = _strings(row, "commands", f"{label}.commands")
@@ -177,6 +188,8 @@ def _build(tool: str, row: object, label: str, schema: int) -> BuildEntry:
         size=size,
         sha256=sha256.lower(),
         requires=requires,
+        depends=depends,
+        backends=backends,
     )
 
 

@@ -28,6 +28,8 @@ class ToolRecord:
     runtime: RuntimeRecord | None = None
     # set by tool remove; the row stays, so the box shows every tool it ever used
     removed: datetime | None = None
+    # true when this row was brought in for another tool, not explicitly requested
+    dependency: bool = False
 
 
 def current_tools(box: "Box") -> list[ToolRecord]:

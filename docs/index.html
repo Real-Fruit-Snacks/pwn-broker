@@ -73,7 +73,7 @@
 
 <main class="wrap stack">
 <section class="card first" aria-labelledby="top-h">
-    <p class="runhead"><b>pwn-broker 0.1.13</b><span>Kali Linux · x86_64 · glibc</span><span>MIT</span></p>
+    <p class="runhead"><b>pwn-broker 0.1.14</b><span>Kali Linux · x86_64 · glibc</span><span>MIT</span></p>
     <div class="hero">
         <div>
             <h1 class="title" id="top-h">pwn-broker</h1>
@@ -95,7 +95,7 @@
             <div class="screenbox">
                 <p class="bar" aria-hidden="true"><b>Session</b><span>zsh · forest/dc01</span></p>
 <pre class="screen" id="screen" tabindex="0" aria-label="A pwn-broker session"><code><span class="ln"><span class="p">$</span> <span class="t">pwn-broker new</span></span>
-<span class="ln">pwn-broker 0.1.13</span>
+<span class="ln">pwn-broker 0.1.14</span>
 
 <span class="ln s">  ok    8 checks passed</span>
 
@@ -172,9 +172,9 @@
     <div class="rfs-code-card">
         <div class="rfs-code-head">
             <span class="rfs-badge b-steel"><span class="k">[sh]</span> offline install</span>
-            <button class="copy" type="button" data-copy="sh install.sh --from pwn-broker-0.1.13-linux-x86_64.tar.gz">Copy</button>
+            <button class="copy" type="button" data-copy="sh install.sh --from pwn-broker-0.1.14-linux-x86_64.tar.gz">Copy</button>
         </div>
-        <pre class="rfs-code-block"><code><span class="rfs-tok-kw">sh</span> <span class="rfs-tok-fn">install.sh</span> <span class="rfs-tok-kw">--from</span> <span class="rfs-tok-str">pwn-broker-0.1.13-linux-x86_64.tar.gz</span></code></pre>
+        <pre class="rfs-code-block"><code><span class="rfs-tok-kw">sh</span> <span class="rfs-tok-fn">install.sh</span> <span class="rfs-tok-kw">--from</span> <span class="rfs-tok-str">pwn-broker-0.1.14-linux-x86_64.tar.gz</span></code></pre>
     </div>
 </section>
 
@@ -203,7 +203,7 @@
             <li><span class="ch">Search across the box</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>search</code></span>
                 <p class="why">Text in the current target's files, the text copies of its recordings and its section of the note, or with <code>search all</code> the whole box, credential lists included. Binary files and the VPN folder are skipped, and so is a playbook's text until you fill it in.</p></li>
             <li><span class="ch">Tools, on and off again</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>tool install</code></span>
-                <p class="why">A package from <a href="https://real-fruit-snacks.github.io/pwn-shop/">pwn-shop</a>'s index, with its size and SHA-256 checked and no install script: NetExec, Impacket, Certipy, Rubeus and the BloodHound collectors, PEASS-ng and pspy, the potatoes, ligolo-ng and chisel, and the rest of <a href="https://real-fruit-snacks.github.io/pwn-shop/#packages">its list</a>. The Python ones bring their own Python as a shared runtime that puts nothing on PATH. <code>finish</code> takes them off unless another unfinished box still uses them, and <code>tool history</code> lists every tool the box has had.</p></li>
+                <p class="why">A package from <a href="https://real-fruit-snacks.github.io/pwn-shop/">pwn-shop</a>'s index, with its size and SHA-256 checked and no install script: NetExec, Impacket, Certipy, Rubeus and the BloodHound collectors, PEASS-ng and pspy, the potatoes, ligolo-ng and chisel, and the rest of <a href="https://real-fruit-snacks.github.io/pwn-shop/#packages">its list</a>. The Python ones bring their own Python as a shared runtime that puts nothing on PATH, and ordinary dependencies come automatically. <code>tool install &lt;name&gt; --full</code> selects optional backends, with confirmation before any apt installation; <code>tool doctor &lt;name&gt;</code> reports them without changing anything. <code>finish</code> takes the tools and orphaned automatic dependencies off unless another unfinished box still uses them, and <code>tool history</code> lists every tool the box has had.</p></li>
             <li><span class="ch">Playbooks in the note</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>:Pb</code></span>
                 <p class="why"><code>tool install playbooks</code> gets <a href="https://real-fruit-snacks.github.io/pwn-playbooks/">pwn-playbooks</a>, short notes for one job each. <code>:Pb &lt;name&gt;</code> in the note window reads one in below the cursor, Tab completing the name from any part of it, and its few lines of vim fill in its <code>&lt;Placeholder&gt;</code> values in that playbook and nowhere else. At the prompt, <code>playbook list</code> lists them by folder and title and <code>playbook show &lt;name&gt;</code> prints one. The first new box on a machine asks whether new boxes should get them, and keeps the answer.</p></li>
             <li><span class="ch">A report at finish</span><span class="ld" aria-hidden="true"></span><span class="rs"><code>tool install report</code></span>

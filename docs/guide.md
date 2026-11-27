@@ -11,7 +11,7 @@ curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/downl
 For a release file already on the machine:
 
 ```sh
-sh install.sh --from pwn-broker-0.1.13-linux-x86_64.tar.gz
+sh install.sh --from pwn-broker-0.1.14-linux-x86_64.tar.gz
 ```
 
 Run the installer as the user who will use pwn-broker, not with `sudo`. It asks no questions. It creates `/opt/pwn-broker` and gives it to you, using `sudo` for that only, and only when it cannot create the folder itself. It then unpacks the release's own Python into `python/`, makes a virtual environment in `app/` with that Python, and installs the app and its dependencies there from the wheels in the release file. It copies asciinema into `app/bin/`, runs the app's `setup`, and adds `/opt/pwn-broker/bin` to PATH in `~/.zshrc` and, if it exists, `~/.bashrc`. Nothing goes into the system Python. If the PATH line cannot be written, the install is kept and one `fail` line says to add `bin/` to PATH yourself.
@@ -76,7 +76,7 @@ On x86_64 Linux. The build downloads the pinned inputs, refuses any that does no
 git clone https://github.com/Real-Fruit-Snacks/pwn-broker.git
 cd pwn-broker
 python3 -m venv .venv && .venv/bin/pip install -e . && .venv/bin/python release/build.py
-sh install.sh --from dist/pwn-broker-0.1.13-linux-x86_64.tar.gz
+sh install.sh --from dist/pwn-broker-0.1.14-linux-x86_64.tar.gz
 ```
 
 The `git clone` line needs `git` and the `python3 -m venv` line needs `python3-venv` (`apt install python3-venv git`); installing the app needs neither. That `.venv` is the build machine's own environment and its dependencies are not pinned; what goes into the release file is. `release/build.py` makes its own build environment with the Python it packs. [CONTRIBUTING.md](../CONTRIBUTING.md#building-a-release-file) has the build's options.
@@ -154,9 +154,10 @@ Everything the app prints is indented two spaces, apart from the prompt line, th
 | `target show [<target>]` | Show one target |
 | `target use <target>` | Switch to a target |
 | `tool cache clear` | Empty the download cache |
+| `tool doctor <name>` | Show a tool's dependencies, backend commands and enabled features without changing anything |
 | `tool history` | List every tool this box has had, removed ones too |
 | `tool info <name>` | Show a tool's details, how to run it and its examples |
-| `tool install <name>[@<version>[-<build>]]` | Install a tool; `name@version` picks a version |
+| `tool install <name>[@<version>[-<build>]] [--full]` | Install a tool and its dependencies; `--full` selects its optional backends |
 | `tool list [--installed]` | List the tools in the index; `--installed` shows this box's |
 | `tool refresh` | Fetch the tool index now |
 | `tool remove <name>` | Take a tool off this box |
@@ -370,6 +371,18 @@ A Python tool can bring its own Python instead of using Kali's. Such a tool requ
 - The first such tool on a machine costs the runtime: a download the app shows as 34 MB, about 100 MB unpacked, and the zip, which stays in the download cache until `tool cache clear`. A runtime carries its own OpenSSL and other libraries, fixed when a new build of the runtime is published, not when Kali updates.
 
 Build 3 of `certipy` and `targetedkerberoast` requires a runtime, and is the only build of each that is published: builds 1 and 2 were withdrawn on 2026-11-15, before any box had used them. The tools that are not Python need no Python at all. The app still reads a package that runs on Kali's own Python (schema 1), and such a tool says so if Kali's Python cannot make its environment; none is published.
+
+### Ordinary dependencies and optional backends
+
+Package and index schema 4 adds ordinary tool dependencies and optional external backends. They are separate from Python runtimes: `requires` names runtimes, `depends` names tools that must always be present, and a package's `[[backend]]` entries describe optional features. An index with any schema-4 build needs pwn-broker 0.1.14 or later, including one that also contains schema-3 notes packages.
+
+- **Minimal installs bring only what is required.** `tool install <name>` resolves the ordinary dependency graph first, detects missing targets and cycles, and reuses an installed build that is still pinned by the index. A failed graph is rolled back. Another box using the same tool shares it.
+- **`--full` is opt-in.** `tool install <name> --full` additionally selects every optional backend declared by that tool. Package-backed providers are installed from pwn-shop; a dependency's own optional backends are not selected. Repeating a minimal install makes no optional change, while an explicit install of an automatic dependency takes ownership of it.
+- **Apt needs a plan and confirmation.** For each apt-backed feature whose command is missing, `--full` shows the provider and the exact `apt-get install --no-install-recommends` command, with `sudo` when needed, before asking. Declining skips those system packages and continues with pwn-shop's packages. Apt failure aborts the install. Apt packages remain system-owned: rollback, `tool remove` and `finish` never remove them. No recipe-supplied installer is run.
+- **Orphaned automatic dependencies go; explicit tools stay.** `tool remove` refuses a package that one of the box's installed parents still requires. Removing the parent releases only automatic dependencies no remaining tool needs; explicitly installed packages are kept. `finish` follows the same ownership rule, then removes idle runtimes.
+- **Diagnostics are read-only.** `tool doctor <name>` reports runtime and ordinary dependencies, selected package backends, and each optional backend's command, provider and enabled feature. It looks up executables but never runs a backend, installs a package or changes apt state. It uses the box's installed build when present, otherwise the latest index build.
+
+For example, `tool install ad-sweep` brings NetExec and its Python runtime automatically. `tool install cred-spray` installs the tool and runtime without optional backends; `tool install cred-spray --full` selects NetExec from pwn-shop and offers any missing Nmap, FreeRDP, ipmitool and Ruby evil-winrm apt packages for confirmation. `tool doctor cred-spray` shows which of those features is enabled.
 
 ### Playbooks
 
