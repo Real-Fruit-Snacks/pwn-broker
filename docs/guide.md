@@ -391,7 +391,7 @@ Playbooks are short notes, one per job, that you read into the box's note and fi
 ```
 forest/dc01 > tool install playbooks
 
-  ok    playbooks 2026.11.23 installed (88 playbooks)
+  ok    playbooks 2026.11.26 installed (132 playbooks)
   read  :Pb <name>      in the note window
   list  playbook list   at the prompt
 ```
@@ -406,7 +406,7 @@ forest/dc01 > tool install playbooks
 
     ok    saved: new boxes get the playbooks
           to change it: playbooks = false in /opt/pwn-broker/config.toml
-    ok    playbooks 2026.11.23 installed (88 playbooks)
+    ok    playbooks 2026.11.26 installed (132 playbooks)
     read  :Pb <name>      in the note window
     list  playbook list   at the prompt
   ```
@@ -425,11 +425,11 @@ forest/dc01 > playbook list windows
 
   name                     folder              title
   always-install-elevated  06-privesc/windows  Windows privesc: AlwaysInstallElevated
-  potatoes                 06-privesc/windows  Windows privesc: SeImpersonate and potatoes
+  backup-looting           06-privesc/windows  Backup Software Looting (Veeam)
   ...
   windows-kernel           06-privesc/windows  Windows privesc: kernel exploits
   port-forwarding          08-pivoting         Port forwarding on Windows
-  11 of 88 playbooks in playbooks 2026.11.23; playbook show <name> prints one
+  16 of 132 playbooks in playbooks 2026.11.26; playbook show <name> prints one
 ```
 
 `playbook show <name>` prints one in the terminal: its `Playbook:` line, then the playbook without its fold markers, run block and `END OF` line. It is flush left, so a command copies cleanly, and its placeholders are left as they are, since only the note fills them in. It takes the name `:Pb` takes, or the playbook's path, such as `02-enum/smb`, and Tab completes the name from any part of it. When two installed packages hold the same name, it names both, and `playbook show <package>/<path>` picks one.

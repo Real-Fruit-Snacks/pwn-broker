@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.15 (unreleased)
+
+Changed: the workflows that test and publish pwn-broker name each GitHub action by its full commit, with its version in a comment, where they named a tag. A tag can be moved to other code, and the job that publishes a release has write access.
+
 ## v0.1.14
 
 Added: package and index schema 4 separates ordinary tool dependencies (`depends`) from Python runtimes (`requires`) and declares optional external backends. `tool install <name>` resolves ordinary dependencies first, reuses installed builds across boxes, detects missing targets and cycles, and rolls back a failed package graph. `tool install <name> --full` also selects the requested tool's package-backed and apt-backed optional backends. Missing apt providers are shown with their exact `apt-get install --no-install-recommends` command and installed only after confirmation; they remain system-owned and are never removed by rollback, `tool remove` or `finish`. No recipe-supplied installer is run.

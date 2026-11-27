@@ -44,6 +44,18 @@ Target 1
   ok    10.10.10.161 answered in 43 ms
   ok    box forest created
 
+  install playbooks in this box and every new box? [Y/n] > n
+
+  ok    saved: new boxes start without playbooks
+        for this box only: tool install playbooks
+        for every new box: playbooks = true in /opt/pwn-broker/config.toml
+
+  install the report tool in this box and every new box? [Y/n] > n
+
+  ok    saved: new boxes start without the report tool
+        for this box only: tool install report
+        for every new box: report = true in /opt/pwn-broker/config.toml
+
 forest/dc01 > cred add
 
   ok    cred 1 saved, found on dc01
@@ -63,6 +75,8 @@ forest/dc01 > finish
   ok    archive /home/kali/pwn-broker/wrapped/2026-11-14_htb_forest.finished.tar.gz
   ok    removed 1 line from /etc/hosts
 ```
+
+The two `install ...?` questions come only with the first new box on a machine. The answers are kept in `/opt/pwn-broker/state.toml`, and `playbooks` and `report` in `config.toml` decide instead when they are set. With yes, the box gets the package there and then, and so does every later new box.
 
 ## What's In It
 
@@ -101,7 +115,7 @@ forest/dc01 > finish
 
 - Unit suite on Windows 11 (Python 3.13) and Ubuntu 24.04 CI (Python 3.11–3.14 + root), warnings as errors.
 - Full offline end-to-end box lifecycle in the official Kali 2026.3 image in CI (OpenVPN + `tun0`, virtual display + `xterm`), plus bare `debian:stable-slim` with no Python and no network.
-- End-to-end manual runs in Kali 2026.2 under WSL 2 (root and normal user with `sudo`, `qterminal`) across releases `v0.1.0` through `v0.1.13`.
+- End-to-end manual runs in Kali 2026.2 under WSL 2 (root and normal user with `sudo`, `qterminal`) across releases `v0.1.0` through `v0.1.14`.
 
 See [tested.md](tested.md) for the full record.
 

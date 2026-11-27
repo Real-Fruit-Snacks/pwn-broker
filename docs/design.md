@@ -2,7 +2,7 @@
 
 Keeps a box's targets, notes, creds and tools in order
 
-Written 2026-11-14. Nothing is built yet. This document is the agreed design for `pwn-broker` (the app) and `pwn-shop` (the tools repo).
+Written 2026-11-14, before anything was built. All three phases have been built and released since: later sections say where the build changed the plan, and [tested.md](tested.md) records what has been run. This document is the agreed design for `pwn-broker` (the app) and `pwn-shop` (the tools repo).
 
 ## 1. Intent
 
@@ -533,7 +533,7 @@ On a fresh VM the file does not exist. The installer takes `--config <path>` to 
 
 ### 6.13 A self-contained release
 
-Built. This section is the design, with what was built where it differs; the differences are listed at its end. It is how section 6.1 installs the app and how section 7.10 gets asciinema. CI has built the release file twice to the same bytes, installed it with the network off in Kali and with no Python and no network in Debian, and run the whole cycle on its bundled Python; the release workflow has never run and the installer's download has never run against a real release.
+Built. This section is the design, with what was built where it differs; the differences are listed at its end. It is how section 6.1 installs the app and how section 7.10 gets asciinema. CI has built the release file twice to the same bytes, installed it with the network off in Kali and with no Python and no network in Debian, and run the whole cycle on its bundled Python. The release workflow has published every release since `v0.1.0`, and the installer's download has been run against a real release since then too; [tested.md](tested.md) has each run.
 
 **The rule.** The Kali machine only ever downloads files I built and pinned, and nothing inside them fetches anything else. Section 8.12 does this for the tools. This section does it for the app.
 
@@ -627,7 +627,7 @@ Nothing else. With `--from` and a folder index, the install and the tool command
 - The wheels' licence texts are taken from the wheels themselves at build time. Python's is the file pwn-shop's runtime carries. `licences/README.txt` is written by the build from `release/licences/sources.toml`.
 - CI's `installer` job proves the install in a Debian container with no Python and no network. The Kali job installs with the network off and connects it again for the cycle.
 
-**Not tested.** The release workflow, and the installer's download against a real release.
+**Tested since.** When this section was written, the release workflow had never run and the installer had never downloaded a real release. Both have since `v0.1.0`: [tested.md](tested.md) lists the workflow's run for each release, and the `curl` line run on Kali against the release it published.
 
 **Run by hand.** On 2026-11-16, at commit cf585e7, in Kali 2026.2 under WSL 2, as root, with Kali's own Python 3.14.7: an install made by the installer from before the release file (`sh install.sh --from .` at commit b1f66bd, an environment on Kali's Python) was upgraded with `sh install.sh --from` the release file. Every `ok` line printed, the app was then on Python 3.13.18 at `/opt/pwn-broker/python/bin/python3.13`, `config.toml` and a box folder under `~/pwn-broker/active` were untouched, and `python/.pwn-broker` was there. A second run over that install succeeded. With `python/.pwn-broker` removed, the installer refused `/opt/pwn-broker/python` as not a pwn-broker Python, and the install still worked.
 
