@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.1.15 (unreleased)
+
+Fixed: the installer ran `sha256sum`, `tar`, `gzip`, `stat`, `mktemp` and the rest by name with `/opt/pwn-broker/bin` still on its PATH, first, as it is in the shell an upgrade is run from. Tool packages put their commands in that folder, and none of those names was reserved, so a package with a command named `sha256sum` would have answered for the check of the next release file. The installer now takes that folder off its own PATH before it runs anything, under any spelling of it or a link to it.
+
+Fixed: a package download had a time limit only between reads that could each wait five minutes, so a server sending a byte now and then held `tool install` for as long as it liked. The whole download now gets five minutes. And the size the index gives for a package, at which the download is cut off, had no limit of its own: an index may now give no more than a package can be, 1 GiB and 8 MiB for its lists of entries.
+
+Fixed: installing a newer build over one left by a finished box deleted the old build before the new zip was checked, and when the install then failed, the list of installed tools was put back naming the old build, whose folder and launchers were gone. The old build now stays until the new zip has passed every check, and a failure after that leaves no row for files that are not there.
+
+Fixed: `tool install <name>@<version>-<build>` looked for a version of that whole name before the build, and a version may hold a hyphen. With builds `1.0-1` and `1.0-1-2`, `name@1.0-1` gave the second, and a box reopened asked for its build and was offered the other. The exact build is now looked for first.
+
 ## v0.1.14
 
 Added: package and index schema 4 separates ordinary tool dependencies (`depends`) from Python runtimes (`requires`) and declares optional external backends. `tool install <name>` resolves ordinary dependencies first, reuses installed builds across boxes, detects missing targets and cycles, and rolls back a failed package graph. `tool install <name> --full` also selects the requested tool's package-backed and apt-backed optional backends. Missing apt providers are shown with their exact `apt-get install --no-install-recommends` command and installed only after confirmation; they remain system-owned and are never removed by rollback, `tool remove` or `finish`. No recipe-supplied installer is run.

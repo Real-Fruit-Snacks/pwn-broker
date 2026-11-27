@@ -347,6 +347,7 @@ Those are the shape of the output, not recorded runs. The runtime's size is its 
 A package is one zip for one build of one tool: a manifest, the upstream licence, the tool's own files exactly as upstream published them, and, for a Python tool, every dependency as a wheel with its SHA-256 recorded. A package holds no install script, and nothing from it runs during install.
 
 - Every download and every cached zip is checked against the size and SHA-256 in the index before it is used. The index itself is not signed, so the check catches corruption and a swapped zip, not who published the index.
+- A package download is cut off at the size the index gives and gets five minutes in all, however slowly the server sends. The index may give a package no more than 1,082,130,432 bytes: the 1 GiB a package may unpack to, and 8 MiB for the lists of its entries. An index that gives more is refused.
 - A Python tool gets its own virtual environment, built from the bundled wheels with no network access, wheels only and hash checking on. Its `wheels.lock` is checked line by line before pip reads it.
 - The first set of packages is x86_64 only, and a package built for another architecture is refused at install.
 - A package's commands may not take a name that must never be stood in for:
@@ -358,7 +359,7 @@ A package is one zip for one build of one tool: a manifest, the upstream licence
     - what other programs start to show or edit something: `less`, `more`, `pager`, `man`, `nano`, `editor`
     - what manages the system or fetches something to run: `apt`, `apt-get`, `dpkg`, `systemctl`, `mount`, `umount`, `curl`, `wget`, `git`
 
-  It is not a list of everything Kali has. A tool may take the name of Kali's own copy of it, and install prints a `warn` line when it does.
+  It is not a list of everything Kali has. A tool may take the name of Kali's own copy of it, and install prints a `warn` line when it does. The installer does not lean on the list: it takes `/opt/pwn-broker/bin` off its own PATH before it runs anything, so an upgrade checks and unpacks the release with Kali's `sha256sum`, `tar` and the rest, whatever a package's commands are called.
 
 ### Runtimes
 
