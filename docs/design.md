@@ -194,7 +194,7 @@ Only one box is open on the VM at a time, enforced by a lock in `/opt/pwn-broker
 **Checks, every launch.** Fast, and quiet when they pass:
 
 ```
-pwn-broker 0.1.14
+pwn-broker 0.1.15
 
   ok    7 checks passed
   warn  display   no desktop session
@@ -570,7 +570,7 @@ pwn-broker-<version>/
 
 ```
 curl -fsSL https://github.com/Real-Fruit-Snacks/pwn-broker/releases/latest/download/install.sh | sh
-sh install.sh --from pwn-broker-0.1.14-linux-x86_64.tar.gz
+sh install.sh --from pwn-broker-0.1.15-linux-x86_64.tar.gz
 ```
 
 The installer comes from the release it installs, not from `main`, so the two always match.
@@ -659,7 +659,7 @@ Built. This section is the design, corrected where the build or a second hands-o
 **What it looks like.**
 
 ```
-pwn-broker 0.1.14
+pwn-broker 0.1.15
 
   ok    7 checks passed
   warn  vpn   no VPN tunnel is up
