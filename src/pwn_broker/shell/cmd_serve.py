@@ -1,5 +1,3 @@
-import urllib.parse
-
 from pwn_broker import serving
 from pwn_broker.serving import Marker, ServeError
 from pwn_broker.session import Session, current_tunnel
@@ -47,7 +45,7 @@ def serve_files(session: Session, args: list[str]) -> None:
         else:
             session.console.info(f"no file served matches {word}")
     for path, found in files:
-        link = serving.url(marker.address, marker.port, f"/{marker.secret}" + urllib.parse.quote(path))
+        link = serving.url(marker.address, marker.port, f"/{marker.secret}" + serving.link_path(path))
         for line in serving.download_lines(session.box.os or "", link, found.name):
             session.console.detail(line)
     if word is None:

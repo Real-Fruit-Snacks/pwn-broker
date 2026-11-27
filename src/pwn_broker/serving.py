@@ -44,6 +44,16 @@ READY_WAIT = 3.0
 # the random first part of every URL: 62**6, some 57 billion, so no one guesses it
 SECRET_LENGTH = 6
 SECRET_LETTERS = string.ascii_letters + string.digits
+# a connection that sends nothing, or takes nothing, for this long is closed: one left open would
+# hold a thread, a descriptor and, in an upload, the room promised to it
+IDLE_TIMEOUT = 30.0
+# once the log is larger than LOG_MAX, only its last LOG_KEEP bytes are kept
+LOG_MAX = 1024**2
+LOG_KEEP = LOG_MAX // 2
+# what the log keeps of a request line or of an error's text
+MAX_LOGGED = 200
+# the log's tail is read in blocks of this size, from the end
+TAIL_BLOCK = 8192
 
 
 def new_secret() -> str:
@@ -247,16 +257,30 @@ def _walk(root: Path, prefix: str) -> list[tuple[str, Path]]:
     return found
 
 
+def _tool_folder(tools: Path, name: str) -> bool:
+    # a tool's files are in a folder of its name; a link there is no tool's folder
+    path = tools / name
+    return _visible(name) and path.is_dir() and not path.is_symlink()
+
+
 def offered(folder: Path, tools: Path) -> list[tuple[str, Path]]:
     """Every file served, by URL path: the target's at the top, each tool's under its name. A name
-    at the top that is also a tool's folder is the tool's."""
-    tool_names = set()
+    at the top that is also a tool's folder is the tool's. A file that sits beside the tools'
+    folders, in none of them, is no tool's and is not served."""
     try:
-        tool_names = {e.name for e in os.scandir(tools) if e.is_dir(follow_symlinks=False) and _visible(e.name)}
+        tool_names = sorted(e.name for e in os.scandir(tools) if _tool_folder(tools, e.name))
     except OSError:
-        pass
+        tool_names = []
     mine = [(p, f) for p, f in _walk(folder, "/") if p.split("/")[1] not in tool_names]
-    return mine + _walk(tools, "/")
+    theirs: list[tuple[str, Path]] = []
+    for name in tool_names:
+        theirs += _walk(tools / name, f"/{name}/")
+    return mine + theirs
+
+
+def link_path(path: str) -> str:
+    """A served path as it goes in a URL. A name that is not UTF-8 goes as the bytes it is."""
+    return urllib.parse.quote(os.fsencode(path))
 
 
 # starting with a letter: PowerShell reads a word starting with - as a parameter, and one starting
@@ -264,18 +288,42 @@ def offered(folder: Path, tools: Path) -> list[tuple[str, Path]]:
 _PLAIN_NAME = re.compile(r"[A-Za-z][A-Za-z0-9._-]*")
 # PowerShell takes each of these as a single quote, and a doubled one as that character
 _SINGLE_QUOTES = "'\u2018\u2019\u201a\u201b"
+# what a file name on Windows cannot hold
+_NOT_ON_WINDOWS = frozenset('<>:"/\\|?*')
+
+
+def _powershell_quoted(text: str) -> str:
+    return "'" + "".join(c * 2 if c in _SINGLE_QUOTES else c for c in text) + "'"
 
 
 def _powershell_word(name: str) -> str:
     # pasted into PowerShell on the target: a name with a space, ; or $ in it is one quoted word
     if _PLAIN_NAME.fullmatch(name):
         return name
-    return "'" + "".join(c * 2 if c in _SINGLE_QUOTES else c for c in name) + "'"
+    return _powershell_quoted(name)
+
+
+def windows_name(name: str) -> str:
+    """The name a file is saved under on Windows: "_" for each character a name there cannot hold,
+    and for each byte of a name that is not UTF-8."""
+    return "".join(
+        "_" if c in _NOT_ON_WINDOWS or ord(c) < 0x20 or 0xD800 <= ord(c) < 0xE000 else c for c in name
+    )
+
+
+def _windows_line(link: str, name: str) -> str:
+    saved = windows_name(name)
+    if "[" in saved or "]" in saved:
+        # Windows PowerShell 5.1 reads [ and ] after -OutFile as a wildcard pattern, quoted or not,
+        # and has no literal form of it; .NET takes the whole path as it is written
+        there = f"(Join-Path $pwd {_powershell_quoted(saved)})"
+        return f"(New-Object Net.WebClient).DownloadFile({_powershell_quoted(link)}, {there})"
+    return f"iwr {link} -OutFile {_powershell_word(saved)}"
 
 
 def download_lines(os_name: str, link: str, name: str) -> list[str]:
     """The line to paste on the target for one file, by the box's OS; both kinds when it is neither."""
-    windows = f"iwr {link} -OutFile {_powershell_word(name)}"
+    windows = _windows_line(link, name)
     linux = f"wget {link}"
     kind = os_name.strip().lower()
     if kind.startswith("win"):
@@ -386,7 +434,11 @@ def _write_into(loot: Path, name: str, size: int, reader) -> Path:
 
 def upload_lines(os_name: str, base: str) -> list[str]:
     """The line a target runs to send a file back, by the box's OS; `base` ends in /."""
-    windows = f"iwr -Method PUT -InFile <file> {base}<file>"
+    # -UseBasicParsing: without it Windows PowerShell 5.1 asks before it parses the answer, and in
+    # a shell that cannot ask (-NonInteractive, or one with no console) the line fails after the
+    # file was saved, so a second try saves it twice. The download line needs none: with -OutFile
+    # the answer is not parsed.
+    windows = f"iwr -UseBasicParsing -Method PUT -InFile <file> {base}<file>"
     linux = f"curl -T <file> {base}"
     kind = os_name.strip().lower()
     if kind.startswith("win"):
@@ -456,6 +508,8 @@ def start(
         reason = exc.strerror or str(exc)
         raise ServeError(f"cannot listen on {address} port {port}: {reason}") from None
     try:
+        # the server cuts the log as it grows; here, one left large by an earlier run
+        trim_log(log)
         with open(log, "a", encoding="utf-8") as fh:
             fh.write(f"{clock():%Y-%m-%d %H:%M:%S}  serving {url(address, port)} for {box.name}/{target.name}\n")
         os.chmod(log, 0o600)
@@ -515,11 +569,60 @@ def stop(
 
 
 def log_tail(paths: AppPaths, lines: int = LOG_LINES) -> list[str]:
+    """The log's last lines, read from its end: never the whole file for a few lines of it."""
+    if lines <= 0:
+        return []
     try:
-        text = log_path(paths).read_bytes().decode("utf-8", "replace")
+        with open(log_path(paths), "rb") as fh:
+            start = fh.seek(0, os.SEEK_END)
+            tail = b""
+            # one line more than asked for, so the first one kept is whole
+            while start > 0 and tail.count(b"\n") <= lines:
+                step = min(TAIL_BLOCK, start)
+                start -= step
+                fh.seek(start)
+                tail = fh.read(step) + tail
     except OSError:
         return []
-    return text.splitlines()[-lines:] if lines > 0 else []
+    return tail.decode("utf-8", "replace").splitlines()[-lines:]
+
+
+def trim_log(path: Path) -> None:
+    """Cut a log larger than LOG_MAX down to its last LOG_KEEP bytes, from the start of a line.
+    The file is cut where it is, never replaced: the server's own output is appended to it by
+    name and by an open descriptor, and both go on writing to its end."""
+    try:
+        with open(path, "rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            if size <= LOG_MAX:
+                return
+            fh.seek(size - min(LOG_KEEP, size))
+            tail = fh.read()
+        first = tail.find(b"\n")
+        os.truncate(path, 0)
+        with open(path, "ab") as fh:
+            fh.write(tail[first + 1 :] if first >= 0 else b"")
+    except OSError:
+        pass
+
+
+def _logger(log_file: Path) -> Callable[[str], None]:
+    """What writes one line to the log. Every request has a thread of its own, so one at a time."""
+    lock = threading.Lock()
+
+    def log(line: str) -> None:
+        with lock:
+            try:
+                with open(log_file, "a", encoding="utf-8", errors="replace") as fh:
+                    fh.write(line + "\n")
+                    fh.flush()
+                    size = os.fstat(fh.fileno()).st_size
+            except OSError:
+                return
+            if size > LOG_MAX:
+                trim_log(log_file)
+
+    return log
 
 
 # ---- the server, in the child process
@@ -537,14 +640,20 @@ def find(folder: Path, tools: Path, request_path: str, secret: str) -> Path | No
     """The file a URL path names, or None. The path starts with the run's secret. Read on every
     request, so a file dropped in later is served; a dot name, a link, a folder or anything
     outside the two folders is not."""
-    parts = [p for p in urllib.parse.unquote(request_path.split("?", 1)[0]).split("/") if p]
-    if not parts or not hmac.compare_digest(parts[0].encode(), secret.encode()):
+    # surrogateescape: a file whose name is not UTF-8 is asked for by its bytes, as its line has them
+    asked = urllib.parse.unquote(request_path.split("?", 1)[0], errors="surrogateescape")
+    parts = [p for p in asked.split("/") if p]
+    if not parts or not hmac.compare_digest(parts[0].encode("utf-8", "surrogateescape"), secret.encode()):
         return None
     parts = parts[1:]
-    if not parts or any(p in (".", "..") or not _visible(p) or "\\" in p or "\0" in p for p in parts):
+    if not parts or any(p in (".", "..") or not _visible(p) or "\0" in p for p in parts):
         return None
-    # under a tool's name only the tool's own files, as the listing has it
-    for root in ((tools,) if (tools / parts[0]).is_dir() else (folder,)):
+    # a backslash is part of a name here, as the listing has it, and a separator only on Windows
+    if os.sep != "/" and any(os.sep in p for p in parts):
+        return None
+    # under a tool's name only the tool's own files, as the listing has it; what sits beside the
+    # tools' folders is no tool's, and a top-level name is then looked for in the target's folder
+    for root in ((tools,) if _tool_folder(tools, parts[0]) else (folder,)):
         candidate = root.joinpath(*parts)
         # a link anywhere on the way is refused, as the listing leaves links out
         steps = [root.joinpath(*parts[: n + 1]) for n in range(len(parts))]
@@ -557,12 +666,18 @@ def find(folder: Path, tools: Path, request_path: str, secret: str) -> Path | No
 
 
 def _shown(text: str) -> str:
-    # what a client sent, with anything unprintable made visible, so a log line stays one line
-    return "".join(c if c.isprintable() else "?" for c in text)
+    # what a client sent, with anything unprintable made visible, so a log line stays one line,
+    # and cut, so a request line of 60,000 characters does not fill the log
+    text = "".join(c if c.isprintable() else "?" for c in text)
+    return text if len(text) <= MAX_LOGGED else text[:MAX_LOGGED] + "..."
+
+
+def _stamp() -> str:
+    return f"{datetime.now().astimezone():%Y-%m-%d %H:%M:%S}"
 
 
 def _handler(
-    folder: Path, tools: Path, secret: str, log: Callable[[str], None]
+    folder: Path, tools: Path, secret: str, log: Callable[[str], None], idle: float = IDLE_TIMEOUT
 ) -> type[BaseHTTPRequestHandler]:
     loot = loot_folder(folder)
 
@@ -571,6 +686,8 @@ def _handler(
         sys_version = ""
         # 1.1, so a client that sends Expect: 100-continue before a large upload is answered at once
         protocol_version = "HTTP/1.1"
+        # each read and each write on the connection waits this long and no longer
+        timeout = idle
         saved = ""
 
         def _answer(self, body: bool) -> None:
@@ -615,6 +732,11 @@ def _handler(
                 self.close_connection = True
                 self._reply(507, "not enough space\n")
                 return
+            except TimeoutError:
+                # the sender went quiet: by now the room promised to it is free and its part gone
+                self.close_connection = True
+                self._reply(408, "timed out\n")
+                return
             except OSError:
                 self.close_connection = True
                 self._reply(500, "not saved\n")
@@ -639,7 +761,7 @@ def _handler(
             status = getattr(code, "value", code)
             line = _shown(getattr(self, "requestline", "") or "-")
             saved, self.saved = self.saved, ""
-            log(f"{datetime.now().astimezone():%Y-%m-%d %H:%M:%S}  {self.client_address[0]}  {line}  {status}{saved}")
+            log(f"{_stamp()}  {self.client_address[0]}  {line}  {status}{saved}")
 
         def log_message(self, format: str, *args) -> None:  # noqa: A002
             pass
@@ -647,23 +769,33 @@ def _handler(
     return Handler
 
 
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, address, handler: type[BaseHTTPRequestHandler], log: Callable[[str], None], **options) -> None:
+        super().__init__(address, handler, **options)
+        self._log = log
+
+    def handle_error(self, request, client_address) -> None:
+        # a client that hangs up part of the way through is one line in the log, as a request is;
+        # the default writes a traceback of some sixty lines for each
+        exc = sys.exc_info()[1]
+        if isinstance(exc, OSError) and exc.strerror:
+            why = exc.strerror
+        else:
+            why = f"{type(exc).__name__}: {exc}"
+        self._log(f"{_stamp()}  {client_address[0]}  the connection ended early: {_shown(why)}")
+
+
 def main(argv: list[str]) -> None:
     fd, log_file, folder, tools, secret = int(argv[0]), Path(argv[1]), Path(argv[2]), Path(argv[3]), argv[4]
     sock = socket.socket(fileno=fd)
-
-    def log(line: str) -> None:
-        try:
-            with open(log_file, "a", encoding="utf-8") as fh:
-                fh.write(line + "\n")
-        except OSError:
-            pass
-
-    server = ThreadingHTTPServer(sock.getsockname()[:2], _handler(folder, tools, secret, log), bind_and_activate=False)
-    server.daemon_threads = True
+    log = _logger(log_file)
+    server = _Server(sock.getsockname()[:2], _handler(folder, tools, secret, log), log, bind_and_activate=False)
     server.socket.close()
     server.socket = sock
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    log(f"{datetime.now().astimezone():%Y-%m-%d %H:%M:%S}  {ready_line(os.getpid())}")
+    log(f"{_stamp()}  {ready_line(os.getpid())}")
     try:
         server.serve_forever()
     finally:
