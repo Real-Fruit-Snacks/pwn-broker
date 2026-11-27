@@ -30,6 +30,10 @@ class ToolRecord:
     removed: datetime | None = None
     # true when this row was brought in for another tool, not explicitly requested
     dependency: bool = False
+    # the package backends tool install --full chose for this tool in this box, by name. Kept
+    # here and not in the machine's list: another box with the same tool chose for itself, and
+    # this row is what is read when the box is reopened or imported
+    optional: list[str] = field(default_factory=list)
 
 
 def current_tools(box: "Box") -> list[ToolRecord]:
