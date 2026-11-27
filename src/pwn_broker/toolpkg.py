@@ -43,6 +43,16 @@ VERSION_RULE = (
     "100 characters at most"
 )
 _COMMAND_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+# A Debian package name as policy has it: lower-case letters, digits, + - and ., two characters
+# or more, starting with a letter or digit. And ending with one: to apt-get install a name with
+# - after it is a package to remove and one with + after it a package to install, so `nmap-`
+# behind an install question would take nmap off. No name is an option, a version (=), a
+# release (/), an architecture (:) or a pattern (* ? [).
+_APT_NAME = re.compile(r"[a-z0-9][a-z0-9+.-]*[a-z0-9]")
+APT_NAME_RULE = (
+    "package names must be lower-case Debian names: letters, digits and + - . between a first "
+    "and a last character that are each a letter or digit"
+)
 _TOP_FILES = (MANIFEST, "LICENSE", "wheels.lock")
 # A launcher by one of these names, first on PATH, would stand in for something the user,
 # sudo or the app itself relies on. It is a list of what must never be stood in for, not of
@@ -162,6 +172,10 @@ def reserved_command_name(name: str) -> bool:
 
 def valid_command_name(name: str) -> bool:
     return _COMMAND_NAME.fullmatch(name) is not None and not reserved_command_name(name)
+
+
+def valid_apt_name(name: object) -> bool:
+    return isinstance(name, str) and _APT_NAME.fullmatch(name) is not None
 
 
 def valid_version(version: object) -> bool:
@@ -364,8 +378,8 @@ def parse_backends(rows: object, name: str, schema: int, label: str = "backend")
         if package:
             packages.add(package)
         apt = _strings(row, "apt", f"{where}.apt")
-        if any(re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", p) is None for p in apt):
-            raise ToolError(f"{where}.apt: package names must be lower-case Debian names")
+        if any(not valid_apt_name(p) for p in apt):
+            raise ToolError(f"{where}.apt: {APT_NAME_RULE}")
         if len(set(apt)) != len(apt):
             raise ToolError(f"{where}.apt: a package appears more than once")
         if not package and not apt:
