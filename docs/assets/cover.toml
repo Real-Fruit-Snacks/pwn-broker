@@ -5,7 +5,9 @@ description = "Keeps a box's targets, notes, creds, and tools in order"
 kind  = "terminal"
 title = "kali · zsh"
 lines = [
-  "$ pwn-broker new htb-forest",
-  "ok workspace created: ~/boxes/htb-forest",
-  "ok notes, loot, and creds initialized",
+  "$ pwn-broker new",
+  "ok target dc01 created",
+  "ok /etc/hosts updated",
+  "ok box forest created",
+  "~/pwn-broker/active/2026-11-14_htb_forest",
 ]
