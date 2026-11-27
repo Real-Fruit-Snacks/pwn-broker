@@ -11,6 +11,16 @@ MAX_SIZE = 1000
 # the last second of the year 9999 (UTC): no later start time can be shown as a date
 MAX_TIMESTAMP = 253402300799
 _BLOCK = 64 * 1024
+# The longest line a cast may have. asciinema writes a line for each piece of output it reads from
+# the terminal, a few kilobytes of it, and a line is read whole and costs three times its length
+# in memory: a cast from an archive could hold one of any length.
+MAX_LINE_BYTES = 4 * 1024 * 1024
+_TOO_LONG = f"is longer than {MAX_LINE_BYTES // (1024 * 1024)} MiB, which no line of a recording is"
+
+
+def _line(fh) -> bytes:
+    """The next line, read no further than one byte past the longest a cast may have."""
+    return fh.readline(MAX_LINE_BYTES + 1)
 
 
 class CastError(Exception):
@@ -37,9 +47,11 @@ def _whole_number(value) -> bool:
 def read_header(path: Path) -> Header:
     try:
         with path.open("rb") as fh:
-            first = fh.readline()
+            first = _line(fh)
     except OSError as exc:
         raise CastError(path, f"cannot be read ({exc.strerror or exc})") from exc
+    if len(first) > MAX_LINE_BYTES:
+        raise CastError(path, f"the first line {_TOO_LONG}")
     if not first.strip():
         raise CastError(path, "empty file")
     try:
@@ -93,12 +105,16 @@ def events(path: Path) -> Iterator[tuple[float, str, str]]:
     """(seconds since the start, code, data) for each event, read line by line."""
     try:
         with path.open("rb") as fh:
-            fh.readline()  # the header
+            if len(_line(fh)) > MAX_LINE_BYTES:  # the header
+                raise CastError(path, f"the first line {_TOO_LONG}")
             elapsed = 0.0
             bad: tuple[int, str] | None = None
-            for number, raw in enumerate(fh, start=2):
+            for number, raw in enumerate(iter(lambda: _line(fh), b""), start=2):
                 if bad is not None:
                     raise CastError(path, f"line {bad[0]} is not a valid event ({bad[1]})")
+                if len(raw) > MAX_LINE_BYTES:
+                    # before the check for a line that was cut off: the rest of it is not read
+                    raise CastError(path, f"line {number} {_TOO_LONG}")
                 if not raw.endswith(b"\n"):
                     return  # cut off where the writing stopped
                 if not raw.strip() or raw.startswith(b"#"):

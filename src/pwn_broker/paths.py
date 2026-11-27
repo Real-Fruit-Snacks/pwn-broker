@@ -4,6 +4,10 @@ from datetime import date
 from pathlib import Path
 
 _UNSAFE = re.compile(r"[^a-z0-9.-]+")
+# A box's folder as box_folder_name makes it, with the -2 a second one of that name gets: the date,
+# an underscore, and the two safe names. An imported box's folder is held to these characters, as
+# long as a file name may be.
+BOX_FOLDER = re.compile(r"[a-z0-9][a-z0-9._-]{0,254}")
 
 
 @dataclass(frozen=True)

@@ -9,6 +9,7 @@ from pwn_broker.archive import (
     ArchiveError,
     archive_path,
     copy_out,
+    free_name,
     pack,
     peek_folder,
     unpack,
@@ -424,15 +425,24 @@ def import_box(
             if not replace:
                 return None
 
-        def check(unpacked: Path) -> None:
-            twin = _same_box_elsewhere(paths, _opens(unpacked).id, folder)
+        def check(unpacked: Path) -> str | None:
+            box_id = _opens(unpacked).id
+            twin = _same_box_elsewhere(paths, box_id, folder)
             if twin is not None:
                 raise ArchiveError(f"this box is already here as {twin}, under another folder name")
             if replace:
                 # only now that the new box is known to open: a refused archive closes no window
                 _close_replaced(paths, console, folder, unsaved, close)
+                return None
+            # a folder name is also the name of its archives: one whose archives in wrapped/ are
+            # another box's is taken, as it is for a new box
+            return free_name(paths, folder, box_id)
 
         box = load_box(unpack(archive, paths.active, replace=replace, check=check))
+        if box.path.name != folder:
+            console.warn(
+                f"{paths.wrapped} holds archives of another box named {folder}; this one is {box.path.name}"
+            )
         if box.status == "finished":
             reopen_box(box)
         session = load_session(paths, settings, console, box, clock)

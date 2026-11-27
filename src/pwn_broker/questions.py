@@ -8,6 +8,7 @@ from pwn_broker.hosts import plain_ip
 from pwn_broker.model import Cred, Target
 from pwn_broker.paths import safe_name
 from pwn_broker.session import Session
+from pwn_broker.store import FIRST_YEAR, LAST_YEAR, year_is_kept
 
 
 @dataclass
@@ -243,7 +244,10 @@ def _ask_box(console: Console, default_platform: str, today: date) -> BoxAnswers
         except ValueError:
             console.fail("use the date format YYYY-MM-DD")
             continue
-        break
+        if year_is_kept(day.year):
+            break
+        # any other year would be written to box.toml and never read back
+        console.fail(f"use a date from {FIRST_YEAR} to {LAST_YEAR}")
 
     os_name = console.ask("os")
     difficulty = console.ask("difficulty")

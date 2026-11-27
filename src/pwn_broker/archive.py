@@ -16,8 +16,8 @@ from pathlib import Path
 
 from pwn_broker.filescan import BOX_PRIVATE_FOLDERS, NOTE_SWAP, ROOT_TRANSIENT_FILES, is_temp_name, sha256_file
 from pwn_broker.model import Box, FileRecord
-from pwn_broker.paths import AppPaths
-from pwn_broker.store import MAX_TOML_BYTES, SCHEMA, write_toml
+from pwn_broker.paths import BOX_FOLDER, AppPaths
+from pwn_broker.store import MAX_SMALL_TOML_BYTES, MAX_TOML_BYTES, SCHEMA, write_toml
 
 MANIFEST = "manifest.toml"
 # the most an archive is read at once: see _Capped
@@ -47,8 +47,54 @@ class ArchiveError(Exception):
     pass
 
 
+KINDS = ("finished", "exported")
+
+
+def packed_id(archive: Path) -> str | None:
+    """The ID of the box an archive holds, from the box.toml in it. None for a file that is not
+    a box's archive, or that cannot be read: whose it is, is then not known."""
+    try:
+        with _open(archive) as tar:
+            for member in tar:
+                parts = member.name.split("/")
+                if len(parts) == 2 and parts[1] == "box.toml":
+                    if not member.isreg() or member.issparse() or not 0 <= member.size <= MAX_SMALL_TOML_BYTES:
+                        return None
+                    tar.fileobj.entries_read()
+                    found = tomllib.loads(b"".join(_pieces(tar, member)).decode("utf-8")).get("id")
+                    return found if isinstance(found, str) else None
+                tar.fileobj.next_entry()
+    except Exception:
+        # an unreadable file is nobody's: it is neither replaced nor offered for replacing
+        pass
+    return None
+
+
+def _another_s(wrapped: Path, name: str, box_id: str) -> bool:
+    # an archive under this name that is there and does not hold this box
+    for kind in KINDS:
+        archive = wrapped / f"{name}.{kind}.tar.gz"
+        if os.path.lexists(archive) and packed_id(archive) != box_id:
+            return True
+    return False
+
+
+def free_name(paths: AppPaths, name: str, box_id: str) -> str:
+    """The name a box's folder and archives go under, given the one it has or came with: that
+    name, unless wrapped/ holds an archive of another box under it. Then the first of name-2,
+    name-3 and on that is neither another box's folder nor another box's archive, as a second
+    new box of a name gets. So one box's archive is never replaced by another's."""
+    number = 1
+    while True:
+        found = name if number == 1 else f"{name}-{number}"
+        taken = number > 1 and os.path.lexists(paths.active / found)
+        if not taken and not _another_s(paths.wrapped, found, box_id):
+            return found
+        number += 1
+
+
 def archive_path(paths: AppPaths, box: Box, kind: str) -> Path:
-    return paths.wrapped / f"{box.path.name}.{kind}.tar.gz"
+    return paths.wrapped / f"{free_name(paths, box.path.name, box.id)}.{kind}.tar.gz"
 
 
 def write_manifest(box: Box, records: list[FileRecord], *, kind: str, now: datetime) -> Path:
@@ -224,6 +270,12 @@ def _top_folder(members: Iterable[tarfile.TarInfo]) -> str:
         if first.startswith("."):
             # the app's own temporary folders in active/ start with one, and no list shows such a folder
             raise ArchiveError(f"archive's folder {first[:60]!r} starts with a dot, which a box's never does")
+        if not BOX_FOLDER.fullmatch(first):
+            # the name becomes a folder in active/ and is printed in paths meant to be copied
+            raise ArchiveError(
+                f"archive's folder {first[:60]!a} is not named as a box's folder is: "
+                "lowercase letters, digits, dots, hyphens and underscores, a letter or digit first"
+            )
         if top is None:
             top = first
         elif first != top:
@@ -479,7 +531,8 @@ def unpack(
     """Unpacks the archive's one folder into active and returns it.
 
     `check` is given the folder where it was unpacked, before anything in active is moved: what
-    it raises stops the unpack with the folder that was there, if any, untouched.
+    it raises stops the unpack with the folder that was there, if any, untouched. It may return
+    another name for the folder to have in active, which must be free.
     """
     if not hasattr(tarfile, "data_filter"):
         raise ArchiveError("this Python cannot unpack archives safely; install a newer Python 3.11 patch release")
@@ -504,7 +557,12 @@ def unpack(
             raise ArchiveError(f"cannot unpack {archive}: {_said(exc)}") from exc
         # what the caller's check raises is the caller's: it is not an error in the archive
         if check is not None:
-            check(tmp / top)
+            renamed = check(tmp / top)
+            if isinstance(renamed, str) and renamed != top:
+                if not BOX_FOLDER.fullmatch(renamed):
+                    raise ArchiveError(f"{renamed!a} is not a name for a box's folder")
+                # never over a folder that is there: the question was about the archive's own name
+                final, replace = active / renamed, False
         try:
             _move_into_place(tmp / top, final, replace)
         except OSError as exc:

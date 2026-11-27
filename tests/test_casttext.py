@@ -4,6 +4,7 @@ from datetime import datetime
 
 import pytest
 from casts import START, TZ, cast_text, write_cast
+from helpers import odd_name
 
 from pwn_broker import casttext
 from pwn_broker.cast import CastError, Header
@@ -1097,3 +1098,84 @@ def test_a_start_time_past_what_a_date_can_hold_is_a_cast_error(tmp_path):
     with pytest.raises(CastError, match="start time"):
         casttext.write(path, box_name="forest", box_id="6f9c-id", target="dc01", tz=TZ)
     assert [p.name for p in path.parent.iterdir()] == ["far.cast"]
+
+
+# ---- the most a cast may cost
+
+
+def test_no_cast_gets_more_than_ten_minutes_however_large():
+    # by its size alone a cast of 96 MiB from an archive got 6,100 seconds
+    assert casttext.MAX_RENDER_SECONDS == 600
+    assert casttext.allowance(8_000_000).seconds == casttext.RENDER_SECONDS + 480
+    assert casttext.allowance(9_000_000).seconds == 600
+    assert casttext.allowance(96 * 1024 * 1024).seconds == 600
+
+
+def test_refresh_gives_no_cast_more_than_ten_minutes_either(box, monkeypatch):
+    now = ticking(monkeypatch)
+    large = _cast_in(box, "dc01", "2026-11-14_1400")
+    os.truncate(large, 96 * 1024 * 1024)
+    small = _cast_in(box, "dc01", "2026-11-14_1500")
+    given = {}
+
+    def note_the_time(cast_path, *, allowed, **kwargs):
+        given[cast_path.name] = (allowed.seconds, allowed.deadline - now[0])
+
+    monkeypatch.setattr(casttext, "write", note_the_time)
+    _refresh(box)
+    assert given == {large.name: (600, 600.0), small.name: (10, pytest.approx(10.0, abs=0.01))}
+
+
+def test_a_cast_with_a_line_too_long_gets_a_warn_line_and_a_note_and_is_not_tried_again(box, monkeypatch):
+    from pwn_broker import cast as cast_module
+
+    monkeypatch.setattr(cast_module, "MAX_LINE_BYTES", 2000)
+    long = _cast_in(box, "dc01", "2026-11-14_1400", events=[(0, "o", "before\r\n"), (1, "o", "A" * 5000)])
+    fine = _cast_in(box, "dc01", "2026-11-14_1500")
+    console = _refresh(box)
+    assert console.lines == [
+        ("warn", "no text copy of targets/dc01/recordings/2026-11-14_1400.cast: "
+                 "line 3 is longer than 4 MiB, which no line of a recording is")
+    ]  # fmt: skip
+    text = long.with_suffix(".txt").read_text(encoding="utf-8")
+    assert text.endswith("[no text copy: line 3 is longer than 4 MiB, which no line of a recording is]\n")
+    assert "hello" in fine.with_suffix(".txt").read_text(encoding="utf-8")
+    assert _refresh(box).lines == []
+
+
+def test_a_cast_whose_first_line_is_too_long_gets_a_warn_line_and_no_text(box, monkeypatch):
+    from pwn_broker import cast as cast_module
+
+    monkeypatch.setattr(cast_module, "MAX_LINE_BYTES", 2000)
+    long = write_cast(box.path / "targets" / "dc01" / "recordings" / "2026-11-14_1400.cast", [], title="t" * 5000)
+    assert _refresh(box).lines == [
+        ("warn", "no text copy of targets/dc01/recordings/2026-11-14_1400.cast: "
+                 "the first line is longer than 4 MiB, which no line of a recording is")
+    ]  # fmt: skip
+    assert not long.with_suffix(".txt").exists()
+
+
+def test_a_cast_whose_name_is_not_utf8_gets_its_text_copy(box):
+    # the name goes into the text copy, which cannot hold such a byte: it is written as "?"
+    made = odd_name(box.path / "targets" / "dc01" / "recordings", b"2026-11-14_1432\xff.cast",
+                    cast_text([(0, "o", "hello\r\n")]).encode())  # fmt: skip
+    if made is None:
+        pytest.skip("no file here can have a name that is not UTF-8")
+    assert _refresh(box).lines == []
+    text = (made[: -len(b".cast")] + b".txt").decode("utf-8", "surrogateescape")
+    with open(text, encoding="utf-8") as fh:
+        lines = fh.read().splitlines()
+    assert lines[3] == "cast     2026-11-14_1432?.cast" and lines[-1].endswith("  hello")
+    assert _refresh(box).lines == []
+
+
+def test_a_cast_in_a_folder_whose_name_is_not_utf8_gets_its_text_copy(box):
+    try:
+        folder = os.path.join(os.fsencode(box.path / "targets"), b"web\xff", b"recordings")
+        os.makedirs(folder)
+    except (OSError, UnicodeError):
+        pytest.skip("no folder here can have a name that is not UTF-8")
+    odd_name(os.fsdecode(folder), b"2026-11-14_1432.cast", cast_text([(0, "o", "hello\r\n")]).encode())
+    assert _refresh(box).lines == []
+    with open(os.path.join(folder, b"2026-11-14_1432.txt"), encoding="utf-8") as fh:
+        assert fh.read().splitlines()[1] == "target   web?"

@@ -57,6 +57,25 @@ def test_ask_box_reasks_empty_name_and_bad_date():
     assert console.asked == ["box name"] * 3 + ["platform", "date", "date", "os", "difficulty"]
 
 
+@pytest.mark.parametrize(
+    "typed",
+    ["0001-01-01", "1026-11-14", "1969-12-31", "1970-01-01", "2026-11-14", "8999-12-31", "9000-01-01", "9999-12-31"],
+)
+def test_every_date_the_question_takes_makes_a_box_that_opens(paths, typed):
+    # what new accepts against what loading accepts: the two must not differ
+    console = FakeConsole(["forest", "", typed, "2026-11-15", "windows", "easy"])
+    a = ask_box(console, default_platform="htb", today=date(2026, 11, 14))
+    if a.day == date(2026, 11, 15):
+        assert ("fail", "use a date from 1970 to 8999") in console.lines
+        with pytest.raises(BoxError):
+            create_box(paths, name=a.name, platform=a.platform, day=date.fromisoformat(typed), os_name="", difficulty="", now=NOW)
+        return
+    assert a.day == date.fromisoformat(typed) and [k for k, _ in console.lines] == ["heading"]
+    box = create_box(paths, name=a.name, platform=a.platform, day=a.day, os_name=a.os_name, difficulty=a.difficulty, now=NOW)
+    assert load_box(box.path).started.date() == a.day
+    assert boxes.list_boxes(paths) == ([load_box(box.path)], [])
+
+
 def test_ask_box_platform_stored_as_typed():
     a = ask_box(
         FakeConsole(["Forest ", "Other Lab", "", "", ""]),

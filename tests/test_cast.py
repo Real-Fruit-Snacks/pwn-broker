@@ -174,3 +174,73 @@ def test_a_cast_error_keeps_its_reason_apart_from_the_path(tmp_path):
     with pytest.raises(CastError) as err:
         cast.read_header(tmp_path / "missing.cast")
     assert str(tmp_path) not in err.value.reason and err.value.reason.startswith("cannot be read")
+
+
+# ---- how long a line may be
+
+
+def test_the_longest_line_a_cast_may_have_is_four_mebibytes():
+    assert cast.MAX_LINE_BYTES == 4 * 1024 * 1024
+
+
+def event_line(length: int) -> bytes:
+    """One event as a line of exactly `length` bytes, its line break included."""
+    empty = len(json.dumps([1, "o", ""])) + 1
+    return json.dumps([1, "o", "x" * (length - empty)]).encode() + b"\n"
+
+
+def test_a_line_as_long_as_a_cast_may_have_is_read_and_one_byte_more_is_not(tmp_path, monkeypatch):
+    monkeypatch.setattr(cast, "MAX_LINE_BYTES", 500)
+    head = cast_text([(1, "o", "a")]).encode()
+    fits = tmp_path / "fits.cast"
+    fits.write_bytes(head + event_line(500) + event_line(40))
+    assert len(event_line(500)) == 500
+    assert [len(data) for _, _, data in cast.events(fits)] == [1, 487, 27]
+    over = tmp_path / "over.cast"
+    over.write_bytes(head + event_line(501) + event_line(40))
+    got = cast.events(over)
+    assert next(got) == (1, "o", "a")
+    with pytest.raises(CastError) as err:
+        next(got)
+    assert err.value.reason == "line 3 is longer than 4 MiB, which no line of a recording is"
+
+
+def test_a_last_line_that_is_too_long_is_not_taken_for_one_cut_off(tmp_path, monkeypatch):
+    # a line still being written has no line break yet, and is left out quietly; one too long to
+    # be a line of a recording is said, break or no break
+    monkeypatch.setattr(cast, "MAX_LINE_BYTES", 500)
+    path = tmp_path / "a.cast"
+    path.write_bytes(cast_text([]).encode() + event_line(2000)[:-1])
+    with pytest.raises(CastError, match="line 2 is longer than"):
+        list(cast.events(path))
+
+
+def test_a_first_line_that_is_too_long_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(cast, "MAX_LINE_BYTES", 500)
+    long_title = json.dumps(header(title="t" * 1000))
+    path = _write(tmp_path / "a.cast", long_title + "\n" + '[1, "o", "a"]\n')
+    for read in (cast.read_header, lambda p: list(cast.events(p))):
+        with pytest.raises(CastError) as err:
+            read(path)
+        assert err.value.reason == "the first line is longer than 4 MiB, which no line of a recording is"
+
+
+def test_a_line_of_many_mebibytes_is_not_read_into_memory(tmp_path):
+    # one line of 48 MiB, as an archive can hold: read whole it cost three times that
+    import tracemalloc
+
+    path = tmp_path / "long.cast"
+    with open(path, "wb") as fh:
+        fh.write(cast_text([]).encode())
+        fh.write(b'[0.1,"o","')
+        for _ in range(48):
+            fh.write(b"A" * (1024 * 1024))
+        fh.write(b'"]\n[0.1,"o","after"]\n')
+    tracemalloc.start()
+    try:
+        with pytest.raises(CastError, match="line 2 is longer than 4 MiB"):
+            list(cast.events(path))
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 3 * cast.MAX_LINE_BYTES

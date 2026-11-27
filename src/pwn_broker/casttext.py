@@ -34,6 +34,10 @@ RENDER_SECONDS_PER_MB = 60
 # what each cast refresh writes may take of the shared allowance at most, besides its own share by
 # size: so a crafted cast early in the order spends seconds, not the minute the others need
 RENDER_SECONDS_EACH = 10
+# and the most one cast gets, however large: by its size alone a cast of 96 MiB from an archive
+# would get more than an hour and a half, and export, finish or replay would wait for it. A real
+# recording of hours is a few megabytes.
+MAX_RENDER_SECONDS = 600
 _clock = time.monotonic
 # pyte draws a run of plain text in one call, whose cost can grow with the square of its length
 # (combining marks) or with the screen's width for each character (insert mode): an event's data
@@ -48,8 +52,12 @@ class Allowance(NamedTuple):
 
 def allowance(size: int) -> Allowance:
     """From now, for a cast of `size` bytes with the whole base."""
-    seconds = RENDER_SECONDS + RENDER_SECONDS_PER_MB * size / 1_000_000
-    return Allowance(_clock() + seconds, round(seconds))
+    return _allowed(RENDER_SECONDS, size, _clock())
+
+
+def _allowed(base: float, size: int, now: float) -> Allowance:
+    seconds = min(base + RENDER_SECONDS_PER_MB * size / 1_000_000, MAX_RENDER_SECONDS)
+    return Allowance(now + seconds, round(seconds))
 
 
 def _spoken(seconds: int) -> str:
@@ -514,6 +522,12 @@ def _head(cast_path: Path, box_name: str, box_id: str, target: str, started: str
     ]
 
 
+# How a text copy is written. The name of a cast, or of the folder it is in, need not be UTF-8,
+# and a text file cannot hold such a byte: it is written as "?". Refused instead, it stopped the
+# export or finish that was writing the text copy, and no archive was made.
+_UNWRITABLE = "replace"
+
+
 def write(
     cast_path: Path,
     *,
@@ -556,7 +570,7 @@ def write(
         _note(cast_path, head, failed.reason)
         raise failed from exc
     lines = [*head, *body]
-    store.write_text(out, "\n".join(lines) + "\n")
+    store.write_text(out, "\n".join(lines) + "\n", errors=_UNWRITABLE)
     # no earlier than its cast, whose time an archive may set in the future, or it stays stale
     when = max(time.time_ns(), cast_path.stat().st_mtime_ns)
     os.utime(out, ns=(when, when))
@@ -629,7 +643,7 @@ def _note(cast_path: Path, head: list[str], why: str) -> None:
         except OSError:
             pass
     if fh is None:
-        store.write_text(out, "\n".join([*head, f"{_NOTE}{why}]"]) + "\n")
+        store.write_text(out, "\n".join([*head, f"{_NOTE}{why}]"]) + "\n", errors=_UNWRITABLE)
     else:
         with fh:
             at, last = _last_line(fh)
@@ -705,8 +719,7 @@ def refresh(box: Box, console: Console, *, tz: tzinfo, target: str | None = None
                 what = f"the text copy of {shown} is not up to date"
             now = _clock()
             base = min(RENDER_SECONDS_EACH, max(0.0, base_ends - now))
-            seconds = base + RENDER_SECONDS_PER_MB * cast_path.stat().st_size / 1_000_000
-            allowed = Allowance(now + seconds, round(seconds))
+            allowed = _allowed(base, cast_path.stat().st_size, now)
             fair = base >= 1
             write(
                 cast_path, box_name=box.name, box_id=box.id, target=target_name, tz=tz,
