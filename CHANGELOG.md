@@ -2,6 +2,8 @@
 
 ## v0.1.15 (unreleased)
 
+Changed: the workflows that test and publish pwn-broker name each GitHub action by its full commit, with its version in a comment, where they named a tag. A tag can be moved to other code, and the job that publishes a release has write access.
+
 Fixed: the installer ran `sha256sum`, `tar`, `gzip`, `stat`, `mktemp` and the rest by name with `/opt/pwn-broker/bin` still on its PATH, first, as it is in the shell an upgrade is run from. Tool packages put their commands in that folder, and none of those names was reserved, so a package with a command named `sha256sum` would have answered for the check of the next release file. The installer now takes that folder off its own PATH before it runs anything, under any spelling of it or a link to it.
 
 Fixed: a package download had a time limit only between reads that could each wait five minutes, so a server sending a byte now and then held `tool install` for as long as it liked. The whole download now gets five minutes. And the size the index gives for a package, at which the download is cut off, had no limit of its own: an index may now give no more than a package can be, 1 GiB and 8 MiB for its lists of entries.

@@ -10,10 +10,12 @@ name: release
 # install.sh downloads the other two from releases/latest/download/.
 #
 # The build job has read access only and runs all of the repository's code. Every package it
-# installs before the release file's SHA-256 is recorded is pinned by hash in this repository
-# (the actions are pinned by tag, and setup-python gives the newest 3.13),
+# installs before the release file's SHA-256 is recorded is pinned by hash in this repository,
 # since code that ran there could replace the release file and SHA256SUMS.txt together and
-# sha256sum -c would still accept them. The SHA-256 is recorded right after the build, as a job
+# sha256sum -c would still accept them. The actions, in both jobs and in the other workflows,
+# are pinned to a full commit, with that commit's version in a comment beside it: a tag can
+# be moved to other code, a commit cannot. setup-python still gives the newest 3.13.
+# The SHA-256 is recorded right after the build, as a job
 # output. install.sh and the notes are set aside with the release file before anything unpinned
 # runs (apt, pytest), with their SHA-256 recorded too, and the publish job refuses any of the
 # three that does not have its recorded SHA-256. The publish job has write access and runs none
@@ -41,10 +43,10 @@ jobs:
       install_sh_sha256: ${{ steps.aside.outputs.install_sh }}
       notes_sha256: ${{ steps.aside.outputs.notes }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.13'
       - name: Tag matches pyproject.toml
@@ -220,7 +222,7 @@ jobs:
           "$suite" -m pytest -q -W error
       - name: Release files
         # the folder set aside before anything unpinned ran
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-files
           path: ${{ runner.temp }}/release-upload/
@@ -232,7 +234,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-files
           path: ${{ runner.temp }}/release-files
