@@ -573,6 +573,19 @@ def installed_list() -> dict[str, dict]:
     return {row["name"]: row for row in read_toml(TOOLS / "installed.toml").get("tool", [])}
 
 
+def mode_is(path: Path, wanted: int) -> None:
+    """private.py: what holds a box's secrets is its owner's alone, whatever the umask."""
+    found = stat.S_IMODE(path.lstat().st_mode) if os.path.lexists(path) else None
+    check(found == wanted, f"{path} has mode {wanted:o}", oct(found) if found is not None else "missing")
+
+
+def box_is_private(s: "State") -> None:
+    mode_is(s.folder, 0o700)
+    mode_is(s.folder / "lists", 0o700)
+    for name in ("creds.toml", "notes.md", ".history", "lists/passwords.txt", "lists/userpass.txt"):
+        mode_is(s.folder / name, 0o600)
+
+
 def tools_left() -> None:
     left = sorted(p.name for p in TOOLS.iterdir())
     # toolseen: the SHA-256 the index gave for each build stays when the tools go
@@ -1049,6 +1062,7 @@ def step_cred(s: State) -> None:
     for name, value in (("usernames.txt", USERNAME), ("passwords.txt", SECRET), ("userpass.txt", f"{USERNAME}:{SECRET}")):
         found = (lists / name).read_text(encoding="utf-8") if (lists / name).is_file() else None
         check(found == value + "\n", f"lists/{name} holds {value!r}", repr(found))
+    box_is_private(s)
 
 
 def step_host_add(s: State) -> None:
@@ -1147,6 +1161,8 @@ def step_export(s: State) -> None:
     archive = Path(found[1])
     expected = WRAPPED / f"{s.folder.name}.exported.tar.gz"
     check(archive == expected and archive.is_file(), f"the archive is {expected}", str(archive))
+    mode_is(archive, 0o600)
+    mode_is(WRAPPED, 0o700)
     names = tar_names(archive)
     recordings = f"{s.folder.name}/targets/{TARGET}/recordings/"
     check(any(n.startswith(recordings) and n.endswith(".cast") for n in names), "tar tzf lists the .cast", "\n".join(names))
@@ -1470,6 +1486,7 @@ def step_finish(s: State) -> None:
     archive = s.finished = Path(found[1])
     expected = WRAPPED / f"{s.folder.name}.finished.tar.gz"
     check(archive == expected and archive.is_file(), f"the finished archive is {expected}", str(archive))
+    mode_is(archive, 0o600)
     verify(archive)
     names = tar_names(archive)
     shown = "\n".join(names)
@@ -1511,6 +1528,7 @@ def step_import(s: State) -> None:
     s.window = (found.pid, found.ppid)
     note(f"vim {found.pid} on the imported note; its terminal {found.ppid}")
     check((s.folder / "box.toml").is_file(), f"{s.folder} is back")
+    box_is_private(s)
     check(read_toml(s.folder / "box.toml").get("status") == "active", "the box is active again")
     check_hosts(
         s,

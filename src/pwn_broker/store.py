@@ -1,5 +1,6 @@
 import os
 import shutil
+import stat
 import tempfile
 import tomllib
 from dataclasses import asdict
@@ -29,14 +30,26 @@ class StoreError(Exception):
     pass
 
 
-def write_text(path: Path, text: str, *, newline: str = "\n", errors: str = "strict") -> None:
+def write_text(
+    path: Path, text: str, *, newline: str = "\n", errors: str = "strict", private: bool = False
+) -> None:
+    """Writes the file whole, beside the old one and then over it.
+
+    `private` is for what only its owner may read (credentials, the lists, the note): the file
+    is 0600 whatever the umask, and one that was readable by others stops being so. A mode
+    tighter than that is kept."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=TEMP_PREFIX, suffix=TEMP_SUFFIX)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", errors=errors, newline=newline) as fh:
             fh.write(text)
         # mkstemp makes the file 0600; keep the old mode, or the usual default for a new file
-        if path.exists():
+        if private:
+            # only when the old file was tighter still, which is kept
+            kept = stat.S_IMODE(os.stat(path).st_mode) & 0o600 if path.exists() else 0o600
+            if kept != 0o600:
+                os.chmod(tmp_name, kept)
+        elif path.exists():
             shutil.copymode(path, tmp_name)
         else:
             umask = os.umask(0)
@@ -51,8 +64,8 @@ def write_text(path: Path, text: str, *, newline: str = "\n", errors: str = "str
         raise
 
 
-def write_toml(path: Path, data: dict) -> None:
-    write_text(path, tomli_w.dumps(data))
+def write_toml(path: Path, data: dict, *, private: bool = False) -> None:
+    write_text(path, tomli_w.dumps(data), private=private)
 
 
 # The most of one of a box's files that is read, and so the largest manifest an archive may
@@ -322,6 +335,7 @@ def save_creds(box: Box, creds: list[Cred]) -> None:
     write_toml(
         box.path / "creds.toml",
         {"schema": SCHEMA, "box_id": box.id, "cred": [_without_none(asdict(c)) for c in creds]},
+        private=True,
     )
 
 

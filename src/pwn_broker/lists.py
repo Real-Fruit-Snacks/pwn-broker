@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 
+from pwn_broker import private
 from pwn_broker.model import Box, Cred, Target
 from pwn_broker.store import write_text
 
@@ -41,7 +42,9 @@ def _hosts_lines(targets: list[Target]) -> list[str]:
 
 def rebuild_lists(box: Box, targets: list[Target], creds: list[Cred]) -> ListSummary:
     folder = box.path / "lists"
-    folder.mkdir(parents=True, exist_ok=True)
+    # the lists hold every password and hash of the box: the folder and each file in it are
+    # their owner's alone
+    private.folder(folder)
 
     passwords = _pairs(creds, "password")
     hashes = _pairs(creds, "hash")
@@ -69,7 +72,7 @@ def rebuild_lists(box: Box, targets: list[Target], creds: list[Cred]) -> ListSum
                 files[f"works-{target.name}-{suffix}.txt"] = lines
 
     for name, lines in files.items():
-        write_text(folder / name, _text(lines))
+        write_text(folder / name, _text(lines), private=True)
 
     for pattern in ("works-*-userpass.txt", "works-*-userhash.txt"):
         for stale in folder.glob(pattern):

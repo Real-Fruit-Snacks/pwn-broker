@@ -14,6 +14,7 @@ from datetime import datetime
 from fnmatch import fnmatchcase
 from pathlib import Path
 
+from pwn_broker import private
 from pwn_broker.filescan import BOX_PRIVATE_FOLDERS, NOTE_SWAP, ROOT_TRANSIENT_FILES, is_temp_name, sha256_file
 from pwn_broker.model import Box, FileRecord
 from pwn_broker.paths import BOX_FOLDER, AppPaths
@@ -233,7 +234,9 @@ def pack(box: Box, dest: Path, cut: Mapping[str, int] | None = None) -> list[str
     part = dest.with_name(dest.name + ".part")
     top = box.path.name
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        # an archive holds the box's credentials and its note: wrapped/ and the archive are
+        # their owner's alone, from the first byte written
+        private.folder(dest.parent)
         entries, special = _entries(box.path)
         root = os.path.realpath(box.path)
         if len(entries) > MAX_ENTRIES:
@@ -241,7 +244,7 @@ def pack(box: Box, dest: Path, cut: Mapping[str, int] | None = None) -> list[str
             raise ArchiveError(
                 f"the box holds {len(entries)} files and folders, and an archive holds {MAX_ENTRIES} at most"
             )
-        with tarfile.open(part, "w:gz") as tar:
+        with private.create(part) as out, tarfile.open(part, "w:gz", fileobj=out) as tar:
             for rel, full in entries:
                 arcname = f"{top}/{rel}" if rel else top
                 if rel in cut:
@@ -549,6 +552,9 @@ def unpack(
                 _check_room(members, active)
                 tmp = Path(tempfile.mkdtemp(prefix=".import-", dir=active))
                 tar.extractall(tmp, filter=tarfile.data_filter)
+                # unpacked, a folder has the mode the umask gives: the box's is its owner's
+                # alone before it is moved to where others could look
+                private.unpacked(tmp / top)
         except ArchiveError:
             raise
         except Exception as exc:
@@ -610,7 +616,8 @@ def copy_out(archive: Path, copy_to: Path) -> Path:
     final = copy_to / archive.name
     part = copy_to / (archive.name + ".part")
     try:
-        shutil.copyfile(archive, part)
+        # as private as the archive, wherever copy_to is
+        private.copy(archive, part)
         if sha256_file(part) != sha256_file(archive):
             raise ArchiveError(f"copy to {copy_to} failed: checksum differs from the original")
         os.replace(part, final)

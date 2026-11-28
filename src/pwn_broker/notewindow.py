@@ -23,6 +23,9 @@ def _spawn(argv: list[str], cwd: Path) -> None:
     subprocess.Popen(
         argv,
         cwd=cwd,
+        # what the vim in it makes is its owner's alone. A terminal that hands the command to
+        # a process already running does not pass this on, so the vimrc sees to the note too
+        umask=0o077,
         start_new_session=True,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,

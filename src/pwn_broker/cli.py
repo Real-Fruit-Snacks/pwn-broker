@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pwn_broker import __version__, boxes, checks, config, lifecycle, note, notewindow, privilege
 from pwn_broker import hostflow, hosts, kalihooks, questions, recorder, session as sessions, setup
-from pwn_broker import targetflow, toolhooks, vpn
+from pwn_broker import private, targetflow, toolhooks, vpn
 from pwn_broker.boxes import BoxError
 from pwn_broker.config import ConfigError, Settings
 from pwn_broker.console import INDENT, Cancelled, Console, TermConsole
@@ -54,7 +54,21 @@ class Env:
     made_box: bool = False
 
 
+def _tighten(env: Env, box: Box) -> None:
+    """A box made by an earlier version, or unpacked from an archive, has its credentials,
+    lists, note, history and archives readable by others: not once it is opened. Said only
+    when it could not be done."""
+    failed = private.tighten_box(env.paths, box)
+    if failed:
+        path, exc = failed[0]
+        more = f", nor {len(failed) - 1} more" if len(failed) > 1 else ""
+        env.console.warn(
+            f"{path} could not be made readable by you alone{more}: {exc.strerror or exc}"
+        )
+
+
 def _load(env: Env, box: Box) -> Session:
+    _tighten(env, box)
     session = sessions.load_session(env.paths, env.settings, env.console, box, env.clock)
     session.hosts_path = env.hosts_path
     session.is_root = env.is_root

@@ -424,10 +424,22 @@ function! s:Reload(timer) abort
   endif
 endfunction
 
+" The note is its owner's alone. One this vim made, or one left readable by others, loses
+" what group and others could do with it each time it is saved, whatever the umask of the
+" terminal vim runs in; the owner's own bits stay as they are, so nothing is ever added.
+function! s:Private() abort
+  let l:file = expand('<afile>:p')
+  let l:perm = getfperm(l:file)
+  if len(l:perm) == 9 && l:perm[3:] !=# '------'
+    call setfperm(l:file, l:perm[:2] . '------')
+  endif
+endfunction
+
 augroup pwn_broker
   autocmd!
   autocmd TextChanged,TextChangedI notes.md call s:Mark(1)
   autocmd BufWritePost notes.md call s:Mark(0)
+  autocmd BufWritePost notes.md call s:Private()
   " ++nested: a command run by an autocommand sets off no autocommands of its own unless asked to,
   " and this save has to run BufWritePost below, or the mark would go on saying "unsaved"
   autocmd FocusLost,CursorHold,CursorHoldI * ++nested silent! update

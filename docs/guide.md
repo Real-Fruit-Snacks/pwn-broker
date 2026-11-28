@@ -188,6 +188,14 @@ targets/
 
 Only the app writes `box.toml`, `files.toml` and the rest of the metadata. `finish` and `export` write archives to `~/pwn-broker/wrapped/`. `~/pwn-broker/tools.log` records every tool each box installed and took off ([below](#the-tool-log)).
 
+What holds a box's secrets is yours alone, whatever your umask:
+
+- A box's folder is mode 700, and so are its `lists/` and `~/pwn-broker/wrapped/`. `creds.toml`, every file in `lists/`, `notes.md`, the prompt's history (`.history`) and every archive in `wrapped/` are mode 600. The other files in a box keep the mode the umask gives them, inside the folder that is yours alone.
+- The copy `copy_to` gets of an archive is mode 600 too, and of a report mode 700 with its files 600. The `copy_to` folder itself is yours to set and is not changed, and a stick or a shared folder that keeps no modes shows whatever its mount gives.
+- The note's vim keeps `notes.md` at mode 600 each time it saves it, also when you start that vim by hand, and a note it makes itself is made so.
+- A box from 0.1.15 or earlier, or one unpacked from an archive, had these as the umask left them, usually readable by everyone on the machine. They are tightened when the box is opened, resumed or imported, with the archives in `wrapped/`, and nothing is printed. A file that cannot be changed, one another user owns for instance, gets one `warn` line that names it, and the box opens.
+- A file or folder that is already tighter than this, mode 400 for one, is left as it is.
+
 ### Ping
 
 Each new target with an IP is pinged once at its first IP, with a two-second wait, wherever it was added: `ok    10.10.10.161 answered in 43 ms`, or a `warn` line that it did not answer, since Windows targets often do not. Ctrl-C cancels the ping and nothing else. With no `ping` on the machine, the app says once per session that it did not check.
@@ -674,7 +682,7 @@ Unpacking refuses any entry that would land outside the box folder, and an archi
 | Setting | Default | Meaning |
 |---|---|---|
 | `home` | `~/pwn-broker` | Where `active/`, `wrapped/` and `tools.log` live; a whole path, as `copy_to` is |
-| `copy_to` | not set | A second folder every finished archive, report and export is also copied to |
+| `copy_to` | not set | A second folder every finished archive, report and export is also copied to, each copy made mode 600 |
 | `default_platform` | `htb` | Platform used when a box is created |
 | `terminal` | `x-terminal-emulator` | What opens the note window |
 | `check_updates` | `true` | Look for a newer release at launch |

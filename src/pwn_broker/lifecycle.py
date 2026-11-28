@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from pwn_broker import recstate, reportflow
+from pwn_broker import private, recstate, reportflow
 from pwn_broker.archive import (
     ArchiveError,
     archive_path,
@@ -443,6 +443,9 @@ def import_box(
             console.warn(
                 f"{paths.wrapped} holds archives of another box named {folder}; this one is {box.path.name}"
             )
+        # an archive gives its files the modes they were packed with, which an earlier
+        # version left to the umask; what cannot be tightened is said when the box is opened
+        private.tighten_box(paths, box)
         if box.status == "finished":
             reopen_box(box)
         session = load_session(paths, settings, console, box, clock)
