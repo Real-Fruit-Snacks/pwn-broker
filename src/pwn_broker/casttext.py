@@ -1,4 +1,4 @@
-"""The timed plain-text copy of a recording (design section 7.4)."""
+"""The timed plain-text copy of a recording, as docs/guide.md describes it under "The text copy"."""
 
 import copy
 import os
@@ -28,7 +28,7 @@ _ALTERNATE = frozenset({1049, 1047, 47})
 # minutes. A cast gets this many seconds for each megabyte of it, room for a real recording that
 # size on a busy machine, and a base: record gives its own recording the whole of it, and refresh
 # shares it between the casts it writes, each taking at most RENDER_SECONDS_EACH of it. One that
-# takes longer gets a text copy that says so (section 7.4).
+# takes longer gets a text copy that says so.
 RENDER_SECONDS = 60
 RENDER_SECONDS_PER_MB = 60
 # what each cast refresh writes may take of the shared allowance at most, besides its own share by

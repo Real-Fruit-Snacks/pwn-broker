@@ -20,7 +20,15 @@ Remove real credentials, flags and addresses from the output first.
 4. Add a line to `CHANGELOG.md` under the version being worked on.
 5. A new dependency, or a new version of one, goes in `pyproject.toml`, in `release/requirements.lock`, and in `release/licences/sources.toml`. The lock has one `name==version --hash=sha256:<hex>` line per package, for every package the app needs including the dependencies of dependencies, and today every one is a pure Python wheel, so one set serves. `sources.toml` needs a table for it with its licence and the address of its exact source. A new or raised build tool for the release goes in `release/build-requirements.lock`. Tests check that `requirements.lock` names every direct dependency in `pyproject.toml` (names only, not versions) and that `sources.toml` has a table for everything a release carries. One test lists the dependency names, so a new dependency also means updating `test_sources_toml_has_a_table_for_everything_a_release_carries` in `tests/test_release_build.py`.
 
-The design is in [docs/design.md](docs/design.md). Read the intent and the anti-goals before changing behaviour; most of the rules below come from there.
+pwn-broker keeps one box's work in order while the box is being solved, and puts Kali back the way it was when the box is finished. Each of these would make it a failure even if it works, so read a change against them before anything else:
+
+- Friction in the middle of an exploit. If recording a credential takes more than a few keystrokes, it will not be used.
+- Kali left changed after `finish`: stray tools, `/etc/hosts` lines, tool data in the home folder.
+- Work lost because a throwaway VM was destroyed.
+- Anything deleted or overwritten without asking first.
+- A credential altered on the way in or out: quoting, escaping, trimmed spaces, colour markup.
+
+What each command does, and every limit it keeps, is in [docs/guide.md](docs/guide.md). The package and index format the tools come in is pwn-shop's: its [guide](https://github.com/Real-Fruit-Snacks/pwn-shop/blob/main/docs/guide.md#the-package-format) has the manifest and the index, and its [CONTRIBUTING.md](https://github.com/Real-Fruit-Snacks/pwn-shop/blob/main/CONTRIBUTING.md#manifest-rules) the rules a manifest is held to. A change to what `toolpkg.py` or `toolindex.py` accepts is a change to that format, and goes there too.
 
 Rules that matter to a change:
 
@@ -64,7 +72,7 @@ One short, plain line in the imperative: `Archive files whose names contain a ba
 
 1. Edit the top heading of `CHANGELOG.md` to the version and drop `(unreleased)`, for example `## v0.1.0`. The notes under it become the release notes.
 2. Set `version` in `pyproject.toml` and `__version__` in `src/pwn_broker/__init__.py` to match.
-3. Set the examples that name the version to match too: the issue template, `docs/guide.md`, `docs/design.md` and `docs/index.html`. `git grep -nE 'pwn-broker[ -]0\.1\.0'`, with the old version, finds them.
+3. Set the examples that name the version to match too: the issue template, `docs/guide.md` and `docs/index.html`. `git grep -nE 'pwn-broker[ -]0\.1\.0'`, with the old version, finds them.
 4. Commit, then tag and push: `git tag v0.1.0 && git push origin main v0.1.0`.
 
 The `release` workflow fails if the tag is not `v` and three dot-separated numbers, or not the version in `pyproject.toml`. It builds the release file with `release/build.py`, in an environment installed from the two locks only, and records the file's SHA-256. Before anything unpinned runs, it sets aside the release file, `install.sh` and the release notes, recording the SHA-256 of each. It installs the file, runs the tests against the release's own wheels on the Python it carries, and publishes three files: the release file, `SHA256SUMS.txt` and `install.sh`, from a second job that runs none of the repository's code and refuses any of the three whose SHA-256 is not the one recorded. The release is created as a draft with all three files, then made public. If creating it fails part-way and leaves a draft, delete the draft (`gh release delete <tag>`, which keeps the tag) before you rerun. `install.sh` downloads the first two from the latest release, so don't attach anything else that ends in `-linux-x86_64.tar.gz`. Started by hand, the workflow is a dry run: every step runs but the one that publishes.

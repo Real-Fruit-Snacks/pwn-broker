@@ -67,7 +67,7 @@ PY_TOOL, PY_VERSION, PY_BUILD = "hello-py", "1.0.0", 1
 PY_LINE = "hello-py-py 1.0"
 RUNTIME, RUNTIME_VERSION, RUNTIME_BUILD = "python-3.13", "3.13.18", 1  # toolkit.make_runtime
 # pwn-shop's published report package, served from the folder index on the runtime above
-REPORT, REPORT_VERSION, REPORT_BUILD = "report", "0.1.0", 1
+REPORT, REPORT_VERSION, REPORT_BUILD = "report", "0.1.1", 1
 REPORT_COMMAND = "pwn-report"
 TOOLS = OPT / "tools"
 TOOL_LOG = HOME / "pwn-broker" / "tools.log"  # paths.AppPaths.tool_log: home / "tools.log"
