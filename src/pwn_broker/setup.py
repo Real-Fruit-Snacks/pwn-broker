@@ -3,6 +3,7 @@ import importlib.resources
 import os
 from pathlib import Path
 
+from pwn_broker import private
 from pwn_broker.paths import AppPaths
 from pwn_broker.store import write_text
 
@@ -47,10 +48,12 @@ def install_data(paths: AppPaths) -> None:
         paths.run, paths.bin, paths.templates, paths.vim_dir,
         paths.tools, paths.upload, paths.cache, paths.run_tools,
         paths.run_recordings, paths.run_vpn, paths.run_shell, paths.run_asciinema,
-        paths.active, paths.wrapped,
+        paths.active,
     )  # fmt: skip
     for folder in folders:
         folder.mkdir(parents=True, exist_ok=True)
+    # archives hold credentials: their folder is its owner's alone from the start
+    private.folder(paths.wrapped)
     template = paths.templates / TEMPLATE_NAME
     if not template.exists() or _template_is_old_default(template):
         write_text(template, _packaged(TEMPLATE_NAME))

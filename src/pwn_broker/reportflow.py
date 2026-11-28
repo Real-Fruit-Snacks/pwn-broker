@@ -11,6 +11,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from pwn_broker import private
 from pwn_broker.console import shown
 from pwn_broker.model import current_tools
 from pwn_broker.session import Session
@@ -199,7 +200,8 @@ def _discard(path: Path) -> None:
 
 def _copy_into(source: Path, dest: Path) -> None:
     """The report's files and folders by their content alone: no modes or times, which a FAT or
-    exFAT copy_to refuses, and folders made 0700, so the copy is as private as the report."""
+    exFAT copy_to refuses, and folders made 0700 and files 0600, so the copy is as private as
+    the archive's."""
     for entry in sorted(source.iterdir()):
         target = dest / entry.name
         if entry.is_symlink():
@@ -208,4 +210,4 @@ def _copy_into(source: Path, dest: Path) -> None:
             target.mkdir(mode=0o700)
             _copy_into(entry, target)
         else:
-            shutil.copyfile(entry, target)
+            private.copy(entry, target)

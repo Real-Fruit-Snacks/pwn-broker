@@ -10,7 +10,7 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
 
-from pwn_broker import boxlock, toolindex, toolstate
+from pwn_broker import boxlock, private, toolindex, toolstate
 from pwn_broker.boxes import TARGET_FOLDERS
 from pwn_broker.model import current_tools
 from pwn_broker.session import (
@@ -169,9 +169,17 @@ def _read_status(session: Session) -> None:
 
 def run_shell(session: Session) -> None:
     console = session.console
+    history = session.box.path / ".history"
+    try:
+        # every line typed at the prompt, a password given to cred add among them: made for
+        # its owner alone before the prompt, which would make it as the umask says
+        private.keep(history)
+    except OSError:
+        # a box that cannot be written to: the prompt says so itself when it keeps a line
+        pass
     prompt = PromptSession(
         lambda: [("class:prompt", prompt_text(session))],
-        history=FileHistory(str(session.box.path / ".history")),
+        history=FileHistory(str(history)),
         auto_suggest=AutoSuggestFromHistory(),
         completer=ShellCompleter(session),
         bottom_toolbar=lambda: [("class:toolbar", toolbar_text(session, session.clock()))],

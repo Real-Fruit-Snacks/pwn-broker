@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from pwn_broker import __version__, recorder, setup, vpn
+from pwn_broker import __version__, private, recorder, setup, vpn
 from pwn_broker.config import Settings
 from pwn_broker.console import Cancelled, Console
 from pwn_broker.notewindow import has_display
@@ -82,7 +82,11 @@ def run_checks(
     problems = []
     for folder in (paths.active, paths.wrapped):
         try:
-            folder.mkdir(parents=True, exist_ok=True)
+            if folder == paths.wrapped:
+                # archives hold credentials: their folder is its owner's alone from the start
+                private.folder(folder)
+            else:
+                folder.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             problems.append(f"cannot make {folder}: {exc.strerror or exc}")
     if problems:

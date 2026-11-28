@@ -640,7 +640,7 @@ def test_copy_out_disk_full_leaves_no_part_file(tmp_path, monkeypatch):
             fh.write(b"pay")
         raise OSError(28, "No space left on device")
 
-    monkeypatch.setattr(archive.shutil, "copyfile", full)
+    monkeypatch.setattr(archive.private, "copy", full)
     with pytest.raises(ArchiveError):
         copy_out(src, target)
     assert os.listdir(target) == []
@@ -655,7 +655,7 @@ def test_copy_out_detects_a_bad_copy(tmp_path, monkeypatch):
     def empty_copy(s, d, **kwargs):
         open(d, "wb").close()
 
-    monkeypatch.setattr(archive.shutil, "copyfile", empty_copy)
+    monkeypatch.setattr(archive.private, "copy", empty_copy)
     with pytest.raises(ArchiveError, match="checksum"):
         copy_out(src, target)
     assert os.listdir(target) == []
@@ -667,7 +667,7 @@ def test_copy_out_keeps_an_existing_copy_when_it_fails(tmp_path, monkeypatch):
     target = tmp_path / "usb"
     target.mkdir()
     (target / "a.tar.gz").write_bytes(b"earlier")
-    monkeypatch.setattr(archive.shutil, "copyfile", raising(OSError("x")))
+    monkeypatch.setattr(archive.private, "copy", raising(OSError("x")))
     with pytest.raises(ArchiveError):
         copy_out(src, target)
     assert (target / "a.tar.gz").read_bytes() == b"earlier"

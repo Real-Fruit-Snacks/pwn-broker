@@ -6,7 +6,7 @@ from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
-from pwn_broker import hosts
+from pwn_broker import hosts, private
 from pwn_broker.model import Box, Cred, Target
 from pwn_broker.paths import AppPaths, box_folder_name, safe_name
 from pwn_broker.store import (
@@ -91,7 +91,11 @@ def create_box(
         extra={},
         path=folder,
     )
-    for sub in ("lists", "screenshots", "targets"):
+    # the box's folder is its owner's alone, and with it everything in the box; lists/,
+    # which holds every password, is so in its own right as well
+    private.folder(folder)
+    private.folder(folder / "lists")
+    for sub in ("screenshots", "targets"):
         (folder / sub).mkdir(parents=True)
     save_box(box)
     return box

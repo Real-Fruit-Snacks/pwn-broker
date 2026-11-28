@@ -5,7 +5,9 @@ own: the scripts call the vimrc's check function or run :checktime by hand.
 """
 
 import json
+import os
 import shutil
+import stat
 import subprocess
 from dataclasses import replace
 from importlib import resources
@@ -845,3 +847,65 @@ call Put('map', maparg(',x', 'n'))
     assert (got["ticked"], got["unticked"], got["plain"]) == ("- [x] a", "- [ ] a", "plain")
     assert "no [ ] or [x] on this line" in got["msg"]
     assert "ToggleBox()" in got["map"]
+
+
+# ---- the note is its owner's alone, whatever vim's umask
+
+
+def _mode(path) -> int:
+    return stat.S_IMODE(os.lstat(path).st_mode)
+
+
+@pytest.fixture
+def loose_umask():
+    old = os.umask(0o022)
+    yield
+    os.umask(old)
+
+
+needs_modes = pytest.mark.skipif(os.name == "nt", reason="needs file modes")
+
+
+@needs_modes
+@pytest.mark.parametrize(("before", "after"), [(0o644, 0o600), (0o664, 0o600), (0o640, 0o600), (0o600, 0o600)])
+def test_a_note_others_could_read_stops_being_so_when_vim_saves_it(
+    box, note, work, loose_umask, before, after
+):
+    path = box.path / "notes.md"
+    os.chmod(path, before)
+    run_vim(box.path, work, "normal! Gofound: Passw0rd!\nwrite\n")
+    assert path.read_text(encoding="utf-8").endswith("found: Passw0rd!\n")
+    assert _mode(path) == after
+
+
+@needs_modes
+@pytest.mark.parametrize("event", ["FocusLost", "CursorHold"])
+def test_the_save_the_vimrc_makes_by_itself_closes_the_note_too(box, note, work, loose_umask, event):
+    path = box.path / "notes.md"
+    os.chmod(path, 0o644)
+    run_vim(box.path, work, f"normal! Gotyped by hand\ndoautocmd <nomodeline> {event}\n")
+    assert path.read_text(encoding="utf-8").endswith("typed by hand\n") and _mode(path) == 0o600
+
+
+@needs_modes
+def test_a_note_vim_makes_itself_is_the_owner_s_alone(box, work, loose_umask):
+    # no note there: vim makes the file, under a umask that would leave it readable by anyone
+    path = box.path / "notes.md"
+    assert not path.exists()
+    run_vim(box.path, work, "call setline(1, 'a new note')\nwrite\n")
+    assert path.read_text(encoding="utf-8") == "a new note\n" and _mode(path) == 0o600
+
+
+@needs_modes
+def test_vim_adds_nothing_to_a_note_that_is_tighter(box, note, work, loose_umask):
+    path = box.path / "notes.md"
+    os.chmod(path, 0o400)
+    run_vim(box.path, work, "normal! Goforced\nwrite!\n")
+    assert path.read_text(encoding="utf-8").endswith("forced\n") and _mode(path) == 0o400
+
+
+@needs_modes
+def test_vim_changes_the_mode_of_no_other_file_it_writes(box, note, work, loose_umask, tmp_path):
+    other = tmp_path / "other.txt"
+    run_vim(box.path, work, f"edit {other.as_posix()}\ncall setline(1, 'mine')\nwrite\n")
+    assert other.read_text(encoding="utf-8") == "mine\n" and _mode(other) == 0o644

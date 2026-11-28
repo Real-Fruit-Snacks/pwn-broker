@@ -158,4 +158,5 @@ def read_note(box: Box) -> str:
 
 
 def write_note(box: Box, text: str) -> None:
-    write_text(box.path / NOTE_NAME, text, newline="")
+    # the note holds what was found, passwords among it: its owner's alone
+    write_text(box.path / NOTE_NAME, text, newline="", private=True)
