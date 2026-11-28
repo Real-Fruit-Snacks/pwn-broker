@@ -227,6 +227,124 @@ function! s:Pb(name) abort
 endfunction
 command! -nargs=? -complete=customlist,PwnPbComplete Pb call <SID>Pb(<q-args>)
 
+" The run block. A playbook starts with one, written by pwn-playbooks: the lines from `my` to
+" `'y`, which are yanked into a register and run with @q. Run as keys they mark the playbook's
+" ends and put each value typed over <Replace> in place of its placeholder with :s, so a value
+" is part of an Ex command: a / in it ends the replacement and vim runs what follows it, and
+" & ~ and \ each mean something there. So @ is taken over for a register that holds a run
+" block, and for no other. Its lines are read as what they say and never run, and each value
+" goes into the playbook as the text it is, whatever it holds. A register that holds anything
+" else runs as it always did.
+let s:name = '<[A-Z][0-9A-Za-z_-]*\%( [0-9A-Za-z_-]\+\)*>'
+" :'y,'zs/<Name>/a value/ge   the value is all there is between the two, a / in it included
+let s:fill = '^:''y,''zs/\(' . s:name . '\)/\(.*\)/ge\s*$'
+let s:fill_start = '^:''y,''zs/<'
+" /^\%>'yEND OF smb PLAYBOOK$
+let s:end_search = '^/\^\\%>''yEND OF \(\S\+\) PLAYBOOK\$$'
+
+function! s:Refused(why) abort
+  let l:msg = 'run block: ' . a:why . '; nothing was filled in'
+  let v:errmsg = l:msg
+  echohl ErrorMsg | echomsg l:msg | echohl None
+endfunction
+
+" {} for a register that holds no run block. For one that does: its playbook's name, its
+" [placeholder, value] pairs in order, and the lines from 'y on; or why it cannot be taken.
+" Every line has to be one of the block's own. A value with a line break in it leaves a line
+" that is not, and run as keys that line would be typed into vim as commands.
+function! s:RunBlock(lines) abort
+  let l:starts = len(a:lines) > 1 && a:lines[0] ==# 'my' && a:lines[1] =~# s:end_search
+  if !l:starts && match(a:lines, '\C' . s:fill_start) < 0
+    return {}
+  endif
+  if !l:starts || get(a:lines, 2, '') !=# 'mz'
+    return {'error': 'its first three lines are not there; select it from its my line with V}'}
+  endif
+  let l:block = {'name': matchlist(a:lines[1], s:end_search)[1], 'fills': [], 'tail': 0}
+  let l:n = 3
+  while l:n < len(a:lines) && a:lines[l:n] !=# "'y"
+    let l:found = matchlist(a:lines[l:n], '\C' . s:fill)
+    if empty(l:found)
+      return {'error': 'line ' . (l:n + 1) . ' is not :''y,''zs/<Name>/a value/ge, with the value on that one line'}
+    endif
+    call add(l:block.fills, [l:found[1], l:found[2]])
+    let l:n += 1
+  endwhile
+  if l:n == len(a:lines)
+    return {'error': 'its last line, ''y, is not there; select it down to its blank line with V}'}
+  endif
+  if match(a:lines, '\S', l:n + 1) >= 0
+    return {'error': 'there is text after its last line, ''y'}
+  endif
+  " run as keys, the Enter ending 'y and each line after it move the cursor down a line
+  let l:block.tail = len(a:lines) - l:n
+  return l:block
+endfunction
+
+" What the run block's keys would do, without typing any of them: mark this line y and the
+" playbook's END OF line below it z, put each value in place of its placeholder on the lines
+" between the two, which are every line of this copy of the playbook and of no other, and
+" leave the cursor where 'y and the Enters after it would.
+function! s:Fill(block) abort
+  let l:first = line('.')
+  let l:end = 'END OF ' . a:block.name . ' PLAYBOOK'
+  let l:last = l:first + 1
+  while l:last <= line('$') && getline(l:last) !=# l:end
+    let l:last += 1
+  endwhile
+  if l:last > line('$')
+    " what the search in the block says when its line is gone
+    call s:Refused('E486: Pattern not found: no ' . l:end . ' line below the cursor')
+    return
+  endif
+  call setpos("'y", [0, l:first, col('.'), 0])
+  call setpos("'z", [0, l:last, 1, 0])
+  let l:places = 0
+  for [l:name, l:value] in a:block.fills
+    for l:n in range(l:first, l:last)
+      let l:line = getline(l:n)
+      if stridx(l:line, l:name) >= 0
+        " cut at the placeholder and joined with the value: nothing in a value is a pattern,
+        " a replacement or a command here
+        let l:parts = split(l:line, '\V\C' . l:name, 1)
+        let l:places += len(l:parts) - 1
+        call setline(l:n, join(l:parts, l:value))
+      endif
+    endfor
+  endfor
+  call cursor(min([l:first + a:block.tail, line('$')]), 1)
+  normal! ^
+  echo printf('run block: %d filled in, in %d places', len(a:block.fills), l:places)
+endfunction
+
+" @ and then a register, as vim has it. @@ runs again the register run last.
+let s:ran = ''
+function! s:At() abort
+  let l:count = v:count ? v:count : ''
+  let l:reg = getcharstr()
+  if l:reg ==# '@' && s:ran !=# ''
+    let l:reg = s:ran
+  endif
+  let l:block = l:reg =~# '^[0-9a-zA-Z"*+-]$' ? s:RunBlock(getreg(l:reg, 1, 1)) : {}
+  if empty(l:block)
+    let s:ran = ''
+    if l:reg ==# '='
+      " the expression register asks for its expression, which :normal would cut short
+      call feedkeys(l:count . '@=', 'n')
+    else
+      execute 'normal! ' . l:count . '@' . l:reg
+    endif
+    return
+  endif
+  let s:ran = l:reg
+  if has_key(l:block, 'error')
+    call s:Refused(l:block.error)
+  else
+    call s:Fill(l:block)
+  endif
+endfunction
+nnoremap <silent> @ <Cmd>call <SID>At()<CR>
+
 " ,h: what this vimrc adds to vim, and the fold keys the note is built around
 function! s:HelpLines() abort
   return [
@@ -237,6 +355,7 @@ function! s:HelpLines() abort
         \ ',x       tick or untick the first [ ] or [x] on this line',
         \ 'F8       new empty fold below the cursor, in normal or insert mode',
         \ ':Pb      read a playbook into the note below the cursor; Tab completes its name',
+        \ '@q       fill a playbook in from its run block in register q; a value goes in as typed',
         \ 'za       open or close the fold under the cursor',
         \ 'zo  zc   open, close the fold under the cursor',
         \ 'zR  zM   open, close every fold',
