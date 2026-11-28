@@ -67,6 +67,42 @@ def _reason(exc: OSError) -> str:
     return "disappeared" if isinstance(exc, FileNotFoundError) else "cannot read"
 
 
+def _target_of(rel: str) -> str:
+    parts = rel.split("/")
+    return parts[1] if parts[0] == "targets" and len(parts) > 2 else ""
+
+
+def packed_records(records: list[FileRecord], packed: Mapping, *, now: datetime) -> list[FileRecord]:
+    """The records of a box as it went into an archive.
+
+    `records` is the box as it was last scanned and `packed` what the archive then took, by
+    path: anything with a size, a sha256 and an mtime. Each file that was packed keeps the
+    time it was first seen and gets the size, SHA-256 and time it was packed with, which is
+    not what the scan found when something was still writing to it. A file made since the
+    scan is first seen now, and one that was gone by the time it was reached has no record.
+    What a scan never lists is not listed here either: the app's own files, and a name that
+    is not UTF-8.
+    """
+    known = {r.path: r for r in records}
+    found = []
+    for rel in sorted(packed):
+        if is_app_file(rel) or not _is_utf8(rel):
+            continue
+        took = packed[rel]
+        old = known.get(rel)
+        found.append(
+            FileRecord(
+                path=rel,
+                target=_target_of(rel),
+                first_seen=old.first_seen if old else now,
+                size=took.size,
+                mtime=took.mtime,
+                sha256=took.sha256,
+            )
+        )
+    return found
+
+
 def scan(
     box: Box,
     records: list[FileRecord],
@@ -137,11 +173,10 @@ def scan(
             except OSError as exc:
                 skip(rel, exc)
                 continue
-            parts = rel.split("/")
             found.append(
                 FileRecord(
                     path=rel,
-                    target=parts[1] if parts[0] == "targets" and len(parts) > 2 else "",
+                    target=_target_of(rel),
                     first_seen=old.first_seen if old else now,
                     size=size,
                     mtime=st.st_mtime,

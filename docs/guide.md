@@ -622,7 +622,7 @@ forest/dc01 > note
 - Each mode writes `-oA` output, `.nmap`, `.gnmap` and `.xml`, named with the date and time it started and the mode: `scans/2026-11-18_010203-quick.nmap`. Full's first stage is `...-full-ports`.
 - The line that a mode is done comes after the output of the next command you type, with the open ports and the file to read. A mode that nmap ended with an error gets a `warn` line instead.
 - While a scan runs, the status bar shows `scan dc01`. One scan runs per target at a time; `scan stop` stops the current target's, nmap with it. `scan log` shows the last 20 lines of the commands it ran and what nmap printed.
-- It outlives `quit`. `finish` waits while any scan of the box is running, since what it wrote after the archive would be lost: wait for it, or `scan stop`.
+- It outlives `quit`. `finish` waits while any scan of the box is running, since what it wrote after the archive would be lost: wait for it, or `scan stop`. `export`, and the export `quit` offers, do not wait: they pack the scan's files as far as they are written, with `warn  a scan is still running: dc01 (full); the export holds its files as they are now` ([below](#finish-export-and-import)).
 - Each mode's options are a setting, read as a shell would split them. `-oA` and the target are always added, so leave them out.
 
 ## Serving files
@@ -668,6 +668,13 @@ It also takes files back from the target. A `PUT` to the same address and random
 It refuses while a window is recording for the box or one of the box's tools is running, and names them. A box whose archive already exists asks `replace the existing archive?`, which is only ever asked about the same box.
 
 `export` writes a snapshot archive to `wrapped/` and keeps working, replacing the box's earlier export. An archive in `wrapped/` that holds another box, or that cannot be read, is never replaced: the box's archives then go under the next free name, `<box folder>-2` and on. It copies tool data into the box and removes nothing; a window still recording gets a `warn` line and is packed up to its last whole line. `exit` and `quit` ask `export forest before you go? [Y/n]` first.
+
+An archive lists what it holds. Each file goes in as it is when the packing reaches it, and `manifest.toml`, written from what went in and packed last, gives each file the size and SHA-256 it has in the archive. So something still writing into the box does not stop an `export`:
+
+- A file that grows while the box is packed, a scan's output for one, is packed as long as it was when it was opened, and listed as that. Before 0.1.16 the files were hashed first and packed after, and such an export failed with `size differs from the manifest`.
+- A scan still running gets the `warn` line above, and the manifest names it under `running_scans`, with its target, its plan and when it started. `import` of such an archive says so: `warn  this archive was made while a scan was still running: dc01 (full); its files hold what the scan had written by then`.
+- A file removed while the box is packed is in neither the archive nor the manifest, and one made meanwhile is in both. A file that gets shorter while it is being read starts the packing again, once; a second time the export fails and names the file.
+- `finish` writes its archive the same way, and still refuses while a scan or a recording runs: its archive is the one the folder is removed for.
 
 Links and special files (named pipes, sockets, devices) in a box are not archived. `export` and `finish` list them, and `finish` says how many will go when the folder is removed. A file whose name is not UTF-8 is archived under the name it has, but `files.toml` and the manifest cannot hold that name, so it is not listed or checked; a `warn` line names it. Two names for one file (a hard link) are packed as two files. A box of more than 300,000 files and folders is refused by `export` and `finish`.
 

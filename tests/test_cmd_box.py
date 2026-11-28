@@ -40,7 +40,7 @@ def test_quit_declined_exports_nothing(session):
 
 
 def _failing_pack(monkeypatch):
-    def pack(box, dest, cut=None):
+    def pack(box, dest, cut=None, manifest=None):
         raise ArchiveError("disk full")
 
     monkeypatch.setattr(lifecycle, "pack", pack)

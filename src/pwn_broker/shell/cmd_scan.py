@@ -93,6 +93,13 @@ def toolbar_part(session: Session) -> str | None:
     return f"scan {', '.join(m.target for m in found)}" if found else None
 
 
+def still_running(session: Session) -> list[dict]:
+    """For an export, which packs the box while a scan writes into it: each scan still running,
+    as the archive's manifest names it."""
+    found = scanning.running(session.paths, session.box.id, **checks(session))
+    return [{"target": m.target, "plan": m.plan, "started": m.started} for m in found]
+
+
 def block(session: Session) -> str | None:
     """finish waits while a scan writes into the box: what it writes later would not be archived."""
     found = scanning.running(session.paths, session.box.id, **checks(session))

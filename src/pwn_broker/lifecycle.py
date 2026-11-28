@@ -7,18 +7,20 @@ from pathlib import Path
 from pwn_broker import private, recstate, reportflow
 from pwn_broker.archive import (
     ArchiveError,
+    Shrunk,
     archive_path,
     copy_out,
     free_name,
     pack,
     peek_folder,
+    running_scans as running_scans_of,
     unpack,
     verify,
     write_manifest,
 )
 from pwn_broker.config import Settings
 from pwn_broker.console import Cancelled, Console
-from pwn_broker.filescan import NOT_UTF8, scan, sha256_file
+from pwn_broker.filescan import NOT_UTF8, packed_records, scan, sha256_file
 from pwn_broker.model import Box, FileRecord
 from pwn_broker.note import NOTE_NAME
 from pwn_broker.notewindow import note_unsaved, shut_note
@@ -43,6 +45,9 @@ UNDO_HOOKS: list[Callable[[Session], None]] = []
 RESTORE_HOOKS: list[Callable[[Session], None]] = []
 # run by import only, before RESTORE_HOOKS: what the archive asks for that a box of my own would not
 IMPORT_HOOKS: list[Callable[[Session], None]] = []
+# each gives the scans still writing into the box, one table a scan: its target, plan and start.
+# finish refuses while there is one (BLOCK_HOOKS); an export says so, on screen and in the archive
+RUNNING_HOOKS: list[Callable[[Session], list[dict]]] = []
 
 _FAILURES = (ArchiveError, StoreError, OSError, ToolError)
 _SHOWN = 10
@@ -54,15 +59,51 @@ def reopen_box(box: Box) -> None:
     save_box(box)
 
 
-def _pack(session: Session, kind: str) -> tuple[Path, list[str]]:
+# a file that got shorter while it was read costs the whole archive: it is started again,
+# and a second time is given up on
+_PACK_TRIES = 2
+
+
+def running_scans(session: Session) -> list[dict]:
+    return [row for hook in RUNNING_HOOKS for row in hook(session)]
+
+
+def scans_text(scans: list[dict], *, now: bool = False) -> str:
+    """`a scan was still running: dc01 (full)`, for the scans a manifest names; with `now`,
+    `a scan is still running: ...`, for the ones just found."""
+    names = ", ".join(f"{row['target']} ({row['plan']})" for row in scans)
+    if len(scans) == 1:
+        return f"a scan {'is' if now else 'was'} still running: {names}"
+    return f"scans {'are' if now else 'were'} still running: {names}"
+
+
+def _pack(
+    session: Session, kind: str, scans: list[dict] | None = None
+) -> tuple[Path, list[str], list[FileRecord]]:
+    """Packs the box, and returns the archive, what was left out, and the records of what went
+    in. The manifest is written from those records, once the files are in the archive: a file
+    still being written to is listed as it was packed. `scans` are the scans still running,
+    which the manifest of an export names."""
     box = session.box
     refresh(session)
     # read once: the manifest and the archive must hold the same length of each live recording
     live = recstate.live_casts(session.paths, box, **process_checks(session))
     records = rescan(session, hash_all=True, live=live)
-    write_manifest(box, records, kind=kind, now=session.clock())
     dest = archive_path(session.paths, box, kind)
-    return dest, pack(box, dest, cut=live)
+    now = session.clock()
+    listed: list[FileRecord] = []
+
+    def manifest(packed) -> None:
+        listed[:] = packed_records(records, packed, now=now)
+        write_manifest(box, listed, kind=kind, now=now, running_scans=scans)
+
+    for attempt in range(_PACK_TRIES):
+        try:
+            return dest, pack(box, dest, cut=live, manifest=manifest), listed
+        except Shrunk:
+            if attempt + 1 == _PACK_TRIES:
+                raise
+    raise AssertionError("unreachable")
 
 
 def _report_left_out(console: Console, left_out: list[str]) -> None:
@@ -106,7 +147,13 @@ def export_box(
         fix(session.box.path)
         for hook in PRE_PACK_HOOKS:
             hook(session)
-        dest, left_out = _pack(session, "exported")
+        # an export does not wait for a scan, as finish does: it packs what is there, and says
+        # here and in the archive which scan had not ended
+        scans = running_scans(session)
+        if scans:
+            said = scans_text(scans, now=True)
+            session.console.warn(f"{said}; the export holds its files as they are now")
+        dest, left_out, _listed = _pack(session, "exported", scans)
     except _FAILURES as exc:
         session.console.fail(f"export failed: {exc}")
         return None
@@ -287,8 +334,9 @@ def finish_box(
         save_box(box)
         # the records cannot hold a name that is not UTF-8, so those files are noted here
         unlisted = _look(session)[1]
-        packed, left_out = _pack(session, "finished")
-        archived = load_files(box)
+        # the records of what went into the archive, which is what the folder is held to
+        # before it is removed
+        packed, left_out, archived = _pack(session, "finished")
         archived_note = _recorded_note(archived)
         copy = _copy(session, packed)
     except _FAILURES as exc:
@@ -403,6 +451,18 @@ def _same_box_elsewhere(paths: AppPaths, box_id: str, folder: str) -> str | None
     return None
 
 
+def _say_running_scans(console: Console, box: Box) -> None:
+    # an export made while a scan ran holds that scan's files part written: said once, here
+    scans = running_scans_of(box.path)
+    if not scans:
+        return
+    more = f" and {len(scans) - _SHOWN} more" if len(scans) > _SHOWN else ""
+    console.warn(
+        f"this archive was made while {scans_text(scans[:_SHOWN])}{more}; "
+        "its files hold what the scan had written by then"
+    )
+
+
 def import_box(
     paths: AppPaths,
     settings: Settings,
@@ -443,6 +503,7 @@ def import_box(
             console.warn(
                 f"{paths.wrapped} holds archives of another box named {folder}; this one is {box.path.name}"
             )
+        _say_running_scans(console, box)
         # an archive gives its files the modes they were packed with, which an earlier
         # version left to the umask; what cannot be tightened is said when the box is opened
         private.tighten_box(paths, box)
