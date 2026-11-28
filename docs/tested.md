@@ -43,7 +43,7 @@ All five in Kali 2026.2 under WSL 2 on Windows 11, on 2026-11-16, with Kali's ow
 
 Installed with the installer from before the release file (`sh install.sh --from .`), with Kali's own qterminal as `x-terminal-emulator`.
 
-- The layout was as [design.md](design.md) section 6.14 describes: the header, the `Boxes`, `New box` and `Target <n>` headings, the indent, and one blank line around each command's output and each yes or no question.
+- The layout was as [the guide](guide.md#the-launch-and-the-prompt) describes: the header, the `Boxes`, `New box` and `Target <n>` headings, the indent, and one blank line around each command's output and each yes or no question.
 - `note` with the note open printed `ok    the note is already open` and one vim ran; after `finish` removed the folder, neither that vim nor its terminal window was left.
 - A second box named `forest` on the same day, after the first was finished and removed, got the folder `2026-11-15_htb_forest-2` and the archive `2026-11-15_htb_forest-2.finished.tar.gz`.
 - The start menu's import with no file asked again, and a folder got `fail  /root is a folder, not an exported box`.

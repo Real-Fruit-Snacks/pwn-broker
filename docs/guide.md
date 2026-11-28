@@ -482,7 +482,7 @@ Afterwards the `Fill in:` line shows the values used, and a placeholder still on
   ok    archive /home/kali/pwn-broker/wrapped/2026-11-23_htb_forest.finished.tar.gz
   report  building beside the archive
   ok    report /home/kali/pwn-broker/wrapped/2026-11-23_htb_forest.finished.report
-  ok    report 0.1.0 removed
+  ok    report 0.1.1 removed
   ok    python-3.13 3.13.18 removed (runtime)
 ```
 
@@ -499,7 +499,7 @@ Afterwards the `Fill in:` line shows the values used, and a placeholder still on
     ok    saved: new boxes get the report tool
           to change it: report = false in /opt/pwn-broker/config.toml
     ok    python-3.13 3.13.18 installed (runtime, 34 MB)
-    ok    report 0.1.0 installed
+    ok    report 0.1.1 installed
     run   pwn-report   from any terminal
   ```
 

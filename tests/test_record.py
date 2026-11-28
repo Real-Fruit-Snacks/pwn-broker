@@ -237,7 +237,7 @@ def test_no_argument_and_no_last_target_records_for_the_first(make_env, opened, 
     assert recorded_for(env) == "recording this window for dc01 (forest)"
 
 
-# -- an address that is not a target (section 7.3) --
+# -- an address that is not a target --
 
 
 def test_declining_to_add_records_nothing(make_env, opened, dc01, asciinema):

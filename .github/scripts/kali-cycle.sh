@@ -37,10 +37,10 @@ RUNTIME_SIZE=35596130
 RUNTIME_SHA256=f2d2199eb25880e07863b391cf7124e7ffa1338b0d65600dfcec117c4223a7fb
 RUNTIME_ARCHIVE="$WORK/downloads/python.tar.gz"
 # pwn-shop's report package as published, with the size and SHA-256 its index gives it
-REPORT_URL="https://github.com/Real-Fruit-Snacks/pwn-shop/releases/download/report-v0.1.0-1/report-0.1.0-1.zip"
-REPORT_SIZE=33016
-REPORT_SHA256=2b74b0c40db80918410458c3c17c20964266872ad45c5da26db97112a90eb9fc
-REPORT_PACKAGE="$WORK/downloads/report-0.1.0-1.zip"
+REPORT_URL="https://github.com/Real-Fruit-Snacks/pwn-shop/releases/download/report-v0.1.1-1/report-0.1.1-1.zip"
+REPORT_SIZE=31448
+REPORT_SHA256=94b939f198995a1e0d931d4347e48acdbcfa223bc498e3323ff65dd32c8bacdb
+REPORT_PACKAGE="$WORK/downloads/report-0.1.1-1.zip"
 
 export HOME=/root
 export DEBIAN_FRONTEND=noninteractive
