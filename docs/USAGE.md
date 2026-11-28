@@ -115,7 +115,7 @@ The two `install ...?` questions come only with the first new box on a machine. 
 
 - Unit suite on Windows 11 (Python 3.13) and Ubuntu 24.04 CI (Python 3.11–3.14 + root), warnings as errors.
 - Full offline end-to-end box lifecycle in the official Kali 2026.3 image in CI (OpenVPN + `tun0`, virtual display + `xterm`), plus bare `debian:stable-slim` with no Python and no network.
-- End-to-end manual runs in Kali 2026.2 under WSL 2 (root and normal user with `sudo`, `qterminal`) across releases `v0.1.0` through `v0.1.14`.
+- End-to-end manual runs in Kali 2026.2 under WSL 2 (root and normal user with `sudo`, `qterminal`) across releases `v0.1.0` through `v0.1.15`.
 
 See [tested.md](tested.md) for the full record.
 
