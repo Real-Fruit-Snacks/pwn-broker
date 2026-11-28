@@ -1,6 +1,7 @@
 import gzip
 import hashlib
 import os
+import re
 import secrets
 import shutil
 import stat
@@ -9,7 +10,7 @@ import tempfile
 import tomllib
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -21,6 +22,8 @@ from pwn_broker.paths import BOX_FOLDER, AppPaths
 from pwn_broker.store import MAX_SMALL_TOML_BYTES, MAX_TOML_BYTES, SCHEMA, write_toml
 
 MANIFEST = "manifest.toml"
+# the manifest's list of the scans that were still running when the box was packed
+RUNNING_SCANS = "running_scans"
 # the most an archive is read at once: see _Capped
 _PIECE = 64 * 1024
 _MIB = 1024 * 1024
@@ -46,6 +49,21 @@ _MAX_OWNER = 2**32 - 1
 
 class ArchiveError(Exception):
     pass
+
+
+class Shrunk(ArchiveError):
+    """A file got shorter while it was being read into the archive, which cannot be put right
+    in an archive already part written: the pack has to start again."""
+
+
+@dataclass(frozen=True)
+class Packed:
+    """One file as it went into an archive: how many bytes, their SHA-256, and the file's time
+    when they were read."""
+
+    size: int
+    sha256: str
+    mtime: float
 
 
 KINDS = ("finished", "exported")
@@ -98,7 +116,17 @@ def archive_path(paths: AppPaths, box: Box, kind: str) -> Path:
     return paths.wrapped / f"{free_name(paths, box.path.name, box.id)}.{kind}.tar.gz"
 
 
-def write_manifest(box: Box, records: list[FileRecord], *, kind: str, now: datetime) -> Path:
+def write_manifest(
+    box: Box,
+    records: list[FileRecord],
+    *,
+    kind: str,
+    now: datetime,
+    running_scans: list[dict] | None = None,
+) -> Path:
+    """Writes manifest.toml into the box: what kind of archive, when, whose, and each file with
+    its size and SHA-256. `running_scans` names the scans that were still writing into the box
+    when it was packed, each by target, plan and start; the key is left out when there were none."""
     described = {
         "id": box.id,
         "name": box.name,
@@ -109,17 +137,49 @@ def write_manifest(box: Box, records: list[FileRecord], *, kind: str, now: datet
         "finished": box.finished,
     }
     path = box.path / MANIFEST
-    write_toml(
-        path,
-        {
-            "schema": SCHEMA,
-            "kind": kind,
-            "packed": now,
-            "box": {k: v for k, v in described.items() if v is not None},
-            "file": [asdict(r) for r in records],
-        },
-    )
+    data = {
+        "schema": SCHEMA,
+        "kind": kind,
+        "packed": now,
+        "box": {k: v for k, v in described.items() if v is not None},
+    }
+    if running_scans:
+        data[RUNNING_SCANS] = running_scans
+    # the files last, as they always were: every reader finds each key by its name
+    data["file"] = [asdict(r) for r in records]
+    write_toml(path, data)
     return path
+
+
+# what a scan's plan reads as: its modes in order, as scanning writes them into its marker
+_PLAN = re.compile(r"[a-z]{1,16}( then [a-z]{1,16}){0,7}")
+_TARGET = re.compile(r"[a-z0-9][a-z0-9.-]{0,254}")
+
+
+def running_scans(folder: Path) -> list[dict]:
+    """The scans a box's manifest.toml says were still running when it was packed, each with
+    its target and plan. A manifest without the list, one that cannot be read, and a row that
+    is not as the app writes it give none: this is said to the user, and decides nothing."""
+    try:
+        path = folder / MANIFEST
+        if path.stat().st_size > _MANIFEST_LIMIT:
+            return []
+        rows = tomllib.loads(path.read_text(encoding="utf-8")).get(RUNNING_SCANS, [])
+    except (OSError, ValueError, RecursionError, MemoryError):
+        return []
+    found = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        target, plan = row.get("target"), row.get("plan")
+        if (
+            isinstance(target, str)
+            and isinstance(plan, str)
+            and _TARGET.fullmatch(target)
+            and _PLAN.fullmatch(plan)
+        ):
+            found.append({"target": target, "plan": plan})
+    return found
 
 
 def _left_out(rel_path: str) -> bool:
@@ -170,16 +230,18 @@ def _discard(path: Path) -> None:
 
 
 class _Head:
-    """A file read no further than its first `size` bytes."""
+    """A file read no further than its first `size` bytes, with the SHA-256 of what was read."""
 
     def __init__(self, fh, size: int) -> None:
         self._fh = fh
-        self._left = size
+        self.left = size
+        self.digest = hashlib.sha256()
 
     def read(self, n: int = -1) -> bytes:
-        n = self._left if n is None or n < 0 else min(n, self._left)
+        n = self.left if n is None or n < 0 else min(n, self.left)
         data = self._fh.read(n)
-        self._left -= len(data)
+        self.left -= len(data)
+        self.digest.update(data)
         return data
 
 
@@ -203,32 +265,58 @@ def _info(tar: tarfile.TarFile, full: Path, arcname: str, rel: str, root: str) -
     return info
 
 
-def _add(tar: tarfile.TarFile, full: Path, arcname: str, rel: str, root: str) -> None:
+def _add(
+    tar: tarfile.TarFile, full: Path, arcname: str, rel: str, root: str, size: int | None = None
+) -> Packed | None:
+    """Adds one file or folder, and for a file returns what went in.
+
+    A file is packed as long as it is at the moment it is opened, or up to `size` when one is
+    given (a recording still being written, up to its last whole line). Something may be
+    writing to it: what it gains after that moment is not packed, and the bytes that are
+    packed are the bytes hashed, so the manifest made from this can only agree with the archive.
+    """
     info = _info(tar, full, arcname, rel, root)
-    if info.isreg():
-        with open(full, "rb") as fh:
-            # tarfile fails on its own if the file is cut short while it is read
-            tar.addfile(info, fh)
-    else:
+    if not info.isreg():
         tar.addfile(info)
-
-
-def _add_cut(
-    tar: tarfile.TarFile, full: Path, arcname: str, rel: str, root: str, size: int
-) -> None:
-    info = _info(tar, full, arcname, rel, root)
-    if info.size < size:
-        raise ArchiveError(f"{rel} is shorter than the {size} bytes recorded for it")
-    info.size = size
+        return None
     with open(full, "rb") as fh:
-        # tarfile fails on its own if the file is cut short while it is read
-        tar.addfile(info, _Head(fh, size))
+        found = os.fstat(fh.fileno())
+        if size is None:
+            size = found.st_size
+        elif found.st_size < size:
+            raise ArchiveError(f"{rel} is shorter than the {size} bytes recorded for it")
+        # the header says how long the entry is before any of it is read
+        info.size = size
+        info.mtime = found.st_mtime
+        head = _Head(fh, size)
+        try:
+            tar.addfile(info, head)
+        except OSError as exc:
+            if head.left:
+                # tarfile stops when the file ends before its header's length: the entry is
+                # cut short in the archive, which cannot be mended from here
+                raise Shrunk(f"{rel} got shorter while it was being packed") from exc
+            raise
+    return Packed(size, head.digest.hexdigest(), found.st_mtime)
 
 
-def pack(box: Box, dest: Path, cut: Mapping[str, int] | None = None) -> list[str]:
+def pack(
+    box: Box,
+    dest: Path,
+    cut: Mapping[str, int] | None = None,
+    manifest: Callable[[dict[str, Packed]], object] | None = None,
+) -> list[str]:
     """Write the box to dest; a path in `cut` is packed only up to that many bytes.
 
-    Returns the links and special files that were left out, relative to the box.
+    `manifest` is how the archive comes to describe itself. Every other file is packed first;
+    then it is called with what went in, each file's size, SHA-256 and time by its path in the
+    box, and writes the box's manifest.toml from that; the manifest is then packed last. So a
+    file something is still writing to, a scan's output for one, is listed as it was packed and
+    not as it was when the box was last read. Without it the manifest.toml already in the box
+    is packed where it falls, like any file.
+
+    A file that is gone by the time it is reached is left out, as it is from what `manifest`
+    is given. Returns the links and special files that were left out, relative to the box.
     """
     cut = cut or {}
     part = dest.with_name(dest.name + ".part")
@@ -245,12 +333,22 @@ def pack(box: Box, dest: Path, cut: Mapping[str, int] | None = None) -> list[str
                 f"the box holds {len(entries)} files and folders, and an archive holds {MAX_ENTRIES} at most"
             )
         with private.create(part) as out, tarfile.open(part, "w:gz", fileobj=out) as tar:
+            packed: dict[str, Packed] = {}
             for rel, full in entries:
+                if manifest is not None and rel == MANIFEST:
+                    # the one a packing before this left: this archive's own goes in last
+                    continue
                 arcname = f"{top}/{rel}" if rel else top
-                if rel in cut:
-                    _add_cut(tar, full, arcname, rel, root, cut[rel])
-                else:
-                    _add(tar, full, arcname, rel, root)
+                try:
+                    done = _add(tar, full, arcname, rel, root, cut.get(rel))
+                except FileNotFoundError:
+                    # removed since the box was walked: nothing of it has been written
+                    continue
+                if done is not None:
+                    packed[rel] = done
+            if manifest is not None:
+                manifest(packed)
+                _add(tar, box.path / MANIFEST, f"{top}/{MANIFEST}", MANIFEST, root)
         verify(part)
         os.replace(part, dest)
     except BaseException as exc:

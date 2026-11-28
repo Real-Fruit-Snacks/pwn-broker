@@ -53,6 +53,7 @@ def register() -> None:
     for hooks, hook in (
         (lifecycle.BLOCK_HOOKS, recording_block),
         (lifecycle.BLOCK_HOOKS, cmd_scan.block),
+        (lifecycle.RUNNING_HOOKS, cmd_scan.still_running),
         (lifecycle.PRE_PACK_HOOKS, recordings_pre_pack),
         (lifecycle.SUMMARY_HOOKS, hostflow.summary),
         (lifecycle.SUMMARY_HOOKS, cmd_serve.summary),

@@ -517,7 +517,8 @@ def fix_recorder(calls):
 def test_export_order(session, monkeypatch):
     calls = record_calls(monkeypatch)
     export_box(session, fix=fix_recorder(calls))
-    assert calls == ["fix", "refresh", "rescan-hash", "write_manifest", "pack"]
+    # the manifest is written by the pack, from what went into the archive
+    assert calls == ["fix", "refresh", "rescan-hash", "pack", "write_manifest"]
 
 
 def test_finish_order(session, monkeypatch):
@@ -525,7 +526,7 @@ def test_finish_order(session, monkeypatch):
     answers(session, "y", "n")
     finish_box(session, fix=fix_recorder(calls), unsaved=lambda b: False)
     assert calls == [
-        "rescan", "fix", "save-finished", "refresh", "rescan-hash", "write_manifest", "pack",
+        "rescan", "fix", "save-finished", "refresh", "rescan-hash", "pack", "write_manifest",
     ]  # fmt: skip
 
 
@@ -621,8 +622,8 @@ def pack_leaving_out(monkeypatch, count):
     real = lifecycle.pack
     names = [f"loot/link{i:02}" for i in range(count)]
 
-    def fake(box, dest, cut=None):
-        real(box, dest, cut=cut)
+    def fake(box, dest, cut=None, manifest=None):
+        real(box, dest, cut=cut, manifest=manifest)
         return list(names)
 
     monkeypatch.setattr(lifecycle, "pack", fake)
@@ -775,7 +776,7 @@ def test_pre_pack_hooks_run_after_ownership_and_before_refresh(session, monkeypa
     calls = record_calls(monkeypatch)
     monkeypatch.setattr(lifecycle, "PRE_PACK_HOOKS", [lambda s: calls.append("hook")])
     export_box(session, fix=fix_recorder(calls))
-    assert calls == ["fix", "hook", "refresh", "rescan-hash", "write_manifest", "pack"]
+    assert calls == ["fix", "hook", "refresh", "rescan-hash", "pack", "write_manifest"]
     del calls[:]
     answers(session, "y", "n")
     finish_box(session, fix=fix_recorder(calls), unsaved=lambda b: False)
