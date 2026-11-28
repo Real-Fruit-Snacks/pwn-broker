@@ -406,13 +406,35 @@ def test_restore_warns_for_a_build_the_index_does_not_list(tooled):
     assert load_installed(tooled.paths) == {}
 
 
-def test_restore_skips_a_build_whose_sha256_changed(tooled):
+def test_restore_skips_a_build_whose_sha256_changed(tooled, shop):
     wipe(tooled)
     tooled.box.tools = [record(sha="cd" * 32)]
     say(tooled, "y")
     toolhooks.restore(tooled)
-    assert any("SHA-256" in t for t in lines(tooled, "warn"))
+    # the build and both hashes, as when it is this machine that has seen another
+    assert lines(tooled, "warn") == [
+        f"kerbrute 1.0.3-1: the index gives it the SHA-256 {shop.entry.sha256}, and the box "
+        f"recorded {'cd' * 32}; skipped"
+    ]
     assert load_installed(tooled.paths) == {}
+
+
+def test_restore_takes_nothing_from_an_index_that_changed_a_build_this_machine_has_seen(
+    tooled, shop
+):
+    # the box's row and the machine agree; it is the index that now says otherwise
+    toolindex.load_index(tooled.paths, tooled.settings, now=NOW)
+    wipe(tooled)
+    _zip, rebuilt = toolkit.make_entry(shop.folder, files={"files/kerbrute": b"made again"})
+    toolkit.write_index(shop.folder, [rebuilt])
+    say(tooled, "y")
+    toolhooks.restore(tooled)
+    (said,) = lines(tooled, "warn")
+    assert said.startswith("the tool index could not be loaded: kerbrute 1.0.3-1: ")
+    assert shop.entry.sha256 in said and rebuilt.sha256 in said
+    assert "tool forget kerbrute@1.0.3-1" in said
+    assert load_installed(tooled.paths) == {}
+    assert not (tooled.paths.cache / rebuilt.file).exists()
 
 
 def test_restore_carries_on_after_a_tool_error(tooled, monkeypatch):
@@ -668,8 +690,12 @@ def test_import_with_a_changed_sha256_warns_and_skips(tooled, tmp_path):
     )
     paths = fresh_paths(tooled, tmp_path)
     console = FakeConsole(["y"])
+    recorded = tooled_sha(tooled)
     assert import_box(paths, tooled.settings, console, archive, lambda: NOW) is not None
-    assert any(k == "warn" and "SHA-256" in t for k, t in console.lines)
+    assert [t for k, t in console.lines if k == "warn"] == [
+        f"kerbrute 1.0.3-1: the index gives it the SHA-256 {'ef' * 32}, and the box recorded "
+        f"{recorded}; skipped"
+    ]
     assert load_installed(paths) == {}
 
 

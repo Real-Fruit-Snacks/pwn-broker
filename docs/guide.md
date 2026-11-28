@@ -155,6 +155,7 @@ Everything the app prints is indented two spaces, apart from the prompt line, th
 | `target use <target>` | Switch to a target |
 | `tool cache clear` | Empty the download cache |
 | `tool doctor <name>` | Show a tool's dependencies, backend commands and enabled features without changing anything |
+| `tool forget <name>@<version>-<build>` | Forget the SHA-256 kept for one build |
 | `tool history` | List every tool this box has had, removed ones too |
 | `tool info <name>` | Show a tool's details, how to run it and its examples |
 | `tool install <name>[@<version>[-<build>]] [--full]` | Install a tool and its dependencies; `--full` selects its optional backends |
@@ -346,7 +347,7 @@ Those are the shape of the output, not recorded runs. The runtime's size is its 
 
 A package is one zip for one build of one tool: a manifest, the upstream licence, the tool's own files exactly as upstream published them, and, for a Python tool, every dependency as a wheel with its SHA-256 recorded. A package holds no install script, and nothing from it runs during install.
 
-- Every download and every cached zip is checked against the size and SHA-256 in the index before it is used. The index itself is not signed, so the check catches corruption and a swapped zip, not who published the index.
+- Every download and every cached zip is checked against the size and SHA-256 in the index before it is used. The index itself is not signed, so the check catches corruption and a swapped zip, not who published the index. The SHA-256 an index first gives for a build is kept on the machine, and an index that later gives that build another is refused: see [the tools index](#the-tools-index).
 - A package download is cut off at the size the index gives and gets five minutes in all, however slowly the server sends. The index may give a package no more than 1,082,130,432 bytes: the 1 GiB a package may unpack to, and 8 MiB for the lists of its entries. An index that gives more is refused.
 - A Python tool gets its own virtual environment, built from the bundled wheels with no network access, wheels only and hash checking on. Its `wheels.lock` is checked line by line before pip reads it.
 - The first set of packages is x86_64 only, and a package built for another architecture is refused at install.
@@ -537,6 +538,36 @@ tools_index = "~/pwn-shop/dist"
 ```
 
 The app keeps a copy of a downloaded index in `/opt/pwn-broker/cache/`, refreshes it when it is more than a day old and the source answers within two seconds, and otherwise uses what it has. `tool refresh` fetches it now. `tool list`, `tool search` and `tool info` read the index: with a URL index they use the cached copy when the source does not answer in time, and a folder index is read directly. With no index and no cached copy, every `tool` command prints one `fail` line that says where it looked and how to set `tools_index`.
+
+pwn-shop never changes or replaces a build once it is published, and the index is not signed. So the app keeps the SHA-256 an index first gives for each build, in `/opt/pwn-broker/tools/seen.toml`, with the time and the index that gave it. Every index is held to that list each time it is read: the published one, a mirror or a folder set with `tools_index`, the cached copy, and the one `tool refresh` fetches. An index that gives a build another SHA-256 than the one kept is refused whole, with one `fail` line that names the build and both hashes:
+
+```
+forest/dc01 > tool refresh
+
+  fail  kerbrute 1.0.3-1: the index gives it the SHA-256 a3182435482239deca8267b13156b1af60db49d5189b5fd89ef6c6d348a571dc, and this machine has kept ffe9f399b48aec0bf5856e25e7db654440616f9263cd03f2e1aad18a0b155da2 since 2026-11-27. A published build is never changed, so nothing is taken from /home/kali/pwn-shop/dist/index.toml. If the build was made again on purpose, tool forget kerbrute@1.0.3-1 forgets the SHA-256 kept
+```
+
+- Nothing is installed from such an index, it does not replace the cached copy, and no cached zip is dropped for it. A box opened again or imported is held to it too: after `install these tools again?` it prints `warn  the tool index could not be loaded: ...` with the same text, and the box opens without its tools.
+- Nothing is kept before the first index is read. The first one read after an upgrade from 0.1.15 or earlier is taken as it is, and every build in it is kept from then on.
+- With the published index, that line means the index or one of its builds is not what it was. Install nothing from it, and report it to pwn-shop as its [security policy](https://github.com/Real-Fruit-Snacks/pwn-shop/security/policy) says.
+- With an index of your own, it is what a package built again under the same build number looks like. A new build number avoids it. To keep the number, `tool forget <name>@<version>-<build>` shows the SHA-256 kept, with when and where it was first seen, asks, and forgets that one build; the next index that lists the build says what it is. A cached copy of a downloaded index is no longer taken as fresh after that, so the next `tool` command fetches the index. Nothing else forgets a build, and there is no setting that turns the check off.
+
+```
+forest/dc01 > tool forget kerbrute@1.0.3-1
+
+  build   kerbrute 1.0.3-1
+  sha256  ffe9f399b48aec0bf5856e25e7db654440616f9263cd03f2e1aad18a0b155da2
+  seen    2026-11-27 22:10   /home/kali/pwn-shop/dist/index.toml
+
+  forget the SHA-256 kept for kerbrute 1.0.3-1? [y/N] > y
+
+  ok    kerbrute 1.0.3-1 forgotten; the next index that lists it says what it is
+```
+
+Both are from one run on Kali with a folder index and a test package; only the folder's path is changed here.
+
+- Forgetting changes nothing that is installed. A box that installed the earlier build still records its SHA-256, and so does the machine's list of installed tools. In such a box `tool install <name>` says the tool is already installed; `tool remove <name>`, then `tool install <name>`, takes the build as it is now. A finished box or an archive with the earlier build prints `warn  <name> <version>-<build>: the index gives it the SHA-256 <hex>, and the box recorded <hex>; skipped` when it is opened, and installing a tool that depends on an installed copy of the earlier build is refused with `... and the installed copy has <hex>`.
+- `seen.toml` is not in `cache/`, and `tool cache clear` leaves it alone. If it cannot be read, every `tool` command that reads the index stops and names it: correct it, or delete it to take every build as the index gives it now.
 
 ## Searching
 

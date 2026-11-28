@@ -82,7 +82,7 @@ def install_for(box, shop, entry, paths):
 def test_commands_are_registered_with_help():
     for name in (
         "tool list", "tool search", "tool info", "tool install", "tool remove",
-        "tool history", "tool refresh", "tool cache clear",
+        "tool history", "tool refresh", "tool cache clear", "tool forget",
     ):  # fmt: skip
         assert COMMANDS[name][1]
 
@@ -1189,7 +1189,10 @@ def damage_the_runtime(session):
 
 
 def files_under(folder):
-    return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*"))
+    # the tools' own files: seen.toml is the list of builds an index has given, which reading
+    # an index adds to whatever the install then does
+    found = sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*"))
+    return [name for name in found if name != "seen.toml"]
 
 
 def test_a_damaged_runtime_tools_require_is_installed_again_at_its_own_build(
@@ -1576,3 +1579,126 @@ def test_a_log_that_cannot_be_written_warns_once_and_the_removal_goes_on(session
     assert lines(session.console, "warn") == []
     assert lines(session.console, "ok")[0] == "kerbrute removed; its files are deleted"
     assert toolstate.load_installed(session.paths).keys() == {"ligolo-ng"}
+
+
+# ---- a build's SHA-256 is kept, and tool forget
+
+
+def rebuild_kerbrute(shop):
+    """The same build of kerbrute made again with other contents, as a folder index rebuilt
+    under one build number would have it; returns the entry as it was and as it is now."""
+    before = shop.entries[1]
+    _zip, after = toolkit.make_entry(
+        shop.folder,
+        {"version": "1.0.3", "examples": [EXAMPLE], "data": {"home": [".kerbrute"]}},
+        {"files/kerbrute": b"#!/bin/sh\necho rebuilt\n"},
+    )
+    assert (after.version, after.build) == (before.version, before.build)
+    assert after.sha256 != before.sha256
+    toolkit.write_index(shop.folder, [shop.entries[0], after, shop.entries[2]])
+    return before, after
+
+
+def assert_refuses_the_change(console, before, after):
+    (said,) = lines(console, "fail")
+    assert "kerbrute 1.0.3-1" in said and before.sha256 in said and after.sha256 in said
+    assert "tool forget kerbrute@1.0.3-1" in said
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "tool list", "tool search kerb", "tool info kerbrute", "tool doctor kerbrute",
+        "tool install kerbrute", "tool install ligolo-ng", "tool refresh",
+    ],
+)  # fmt: skip
+def test_every_command_that_reads_the_index_refuses_one_that_changed_a_build(session, shop, line):
+    run(session, "tool list")
+    before, after = rebuild_kerbrute(shop)
+    console = run(session, line)
+    assert_refuses_the_change(console, before, after)
+    assert lines(console, "ok") == [] and console.tables == []
+    assert current_tools(session.box) == []
+    assert not (session.paths.cache / after.file).exists()
+
+
+def test_a_changed_build_is_not_installed_over_its_cached_copy(session, shop):
+    run(session, "tool install kerbrute")
+    run(session, "tool remove kerbrute", "y")
+    cached = session.paths.cache / shop.entries[1].file
+    kept = cached.read_bytes()
+    before, after = rebuild_kerbrute(shop)
+    console = run(session, "tool install kerbrute")
+    assert_refuses_the_change(console, before, after)
+    # the copy that passed its check when it was fetched is not dropped for the new hash
+    assert cached.read_bytes() == kept
+    assert "kerbrute" not in toolstate.load_installed(session.paths)
+
+
+def test_forget_shows_the_build_asks_and_defaults_to_no(session, shop):
+    run(session, "tool list")
+    before, _after = rebuild_kerbrute(shop)
+    console = run(session, "tool forget kerbrute@1.0.3-1", "")
+    assert console.asked == ["forget the SHA-256 kept for kerbrute 1.0.3-1?"]
+    shown = "\n".join(lines(console, "field"))
+    assert "kerbrute 1.0.3-1" in shown and before.sha256 in shown
+    assert "2026-11-14 13:00" in shown and str(shop.folder / "index.toml") in shown
+    assert lines(console, "info") == ["nothing forgotten"]
+    assert lines(run(session, "tool refresh"), "ok") == []
+
+
+def test_forget_then_the_index_is_taken_and_the_build_installs(session, shop):
+    run(session, "tool list")
+    _before, after = rebuild_kerbrute(shop)
+    console = run(session, "tool forget kerbrute@1.0.3-1", "y")
+    # the index that would be refused is not read to forget the build that refuses it
+    assert lines(console, "fail") == []
+    assert lines(console, "ok") == [
+        "kerbrute 1.0.3-1 forgotten; the next index that lists it says what it is"
+    ]
+    assert lines(run(session, "tool refresh"), "ok") == ["index refreshed: 2 tools"]
+    assert lines(run(session, "tool install kerbrute"), "ok") == ["kerbrute 1.0.3 installed"]
+    assert current_tools(session.box)[0].sha256 == after.sha256
+    # and that is the build the machine now holds every index to
+    console = run(session, "tool forget kerbrute@1.0.3-1", "n")
+    assert after.sha256 in "\n".join(lines(console, "field"))
+
+
+def test_forget_leaves_every_other_build_kept(session, shop):
+    run(session, "tool list")
+    run(session, "tool forget kerbrute@1.0.3-1", "y")
+    kept = cmd_tool.toolseen.load(session.paths)
+    assert sorted(kept) == [("kerbrute", "1.0.2", 1), ("ligolo-ng", "0.9.2", 1)]
+
+
+def test_forget_of_a_build_that_is_not_kept_names_the_ones_that_are(session, shop):
+    run(session, "tool list")
+    console = run(session, "tool forget kerbrute@9.9-1", "y")
+    assert lines(console, "fail") == [
+        "no SHA-256 is kept for kerbrute@9.9-1; the builds kept for kerbrute: 1.0.2-1, 1.0.3-1"
+    ]
+    assert console.asked == []
+    # a version alone is not a build: forgetting is for one build, named whole
+    assert lines(run(session, "tool forget kerbrute@1.0.3", "y"), "fail") == [
+        "no SHA-256 is kept for kerbrute@1.0.3; the builds kept for kerbrute: 1.0.2-1, 1.0.3-1"
+    ]
+    assert lines(run(session, "tool forget nmap@1-1", "y"), "fail") == [
+        "no SHA-256 is kept for nmap@1-1"
+    ]
+    assert len(cmd_tool.toolseen.load(session.paths)) == 3
+
+
+@pytest.mark.parametrize("spec", ["kerbrute", "kerbrute@", "@1.0.3-1"])
+def test_forget_needs_a_whole_build(session, shop, spec):
+    console = run(session, f"tool forget {spec}", "y")
+    assert lines(console, "fail") == [f"expected <name>@<version>-<build>, not {spec}"]
+    assert lines(console, "detail") == ["usage: tool forget <name>@<version>-<build>"]
+
+
+def test_forget_with_a_list_that_cannot_be_read_names_the_file(session, shop):
+    run(session, "tool list")
+    session.paths.tools_seen.write_text("schema = 1\n[[build", encoding="utf-8")
+    for line in ("tool forget kerbrute@1.0.3-1", "tool list", "tool install kerbrute"):
+        (said,) = lines(run(session, line, "y"), "fail")
+        assert str(session.paths.tools_seen) in said and "delete it" in said
+    assert current_tools(session.box) == []

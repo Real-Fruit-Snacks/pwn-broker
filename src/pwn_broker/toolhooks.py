@@ -3,7 +3,16 @@ from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
-from pwn_broker import lifecycle, tooldata, tooldeps, toolindex, toolinstall, toollog, toolstate
+from pwn_broker import (
+    lifecycle,
+    tooldata,
+    tooldeps,
+    toolindex,
+    toolinstall,
+    toollog,
+    toolseen,
+    toolstate,
+)
 from pwn_broker.console import Cancelled, Console
 from pwn_broker.model import Box, RuntimeRecord, ToolRecord, current_tools
 from pwn_broker.paths import AppPaths
@@ -631,7 +640,10 @@ def _restore(session: Session) -> None:
                 console.warn(f"{label}   not in the tool index; skipped")
                 continue
             if entry.sha256.lower() != record.sha256.lower():
-                console.warn(f"{label}   the index lists a different SHA-256 than the box; skipped")
+                # the index has passed the builds this machine has seen; the box's row is one
+                # more witness of this build, and is said the same way
+                said = toolseen.differs(entry, held=record.sha256, holder="the box recorded")
+                console.warn(f"{said}; skipped")
                 continue
             ran_on = record.runtime
             # the row says what this box had: whether the tool was asked for, and the backends
