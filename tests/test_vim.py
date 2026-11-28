@@ -544,8 +544,8 @@ if !empty(ids)
 endif
 """)
     assert "Help()" in got["map"]
-    keys = [line.split()[0] for line in got["lines"] if line[:1] in (",", "F", "z", ":")]
-    assert keys == [",h", ",t", ",i", ",c", ",x", "F8", ":Pb", "za", "zo", "zR"]
+    keys = [line.split()[0] for line in got["lines"] if line[:1] in (",", "F", "z", ":", "@")]
+    assert keys == [",h", ",t", ",i", ",c", ",x", "F8", ":Pb", "@q", "za", "zo", "zR"]
     assert got["popups"] == 1
     assert got["shown"] == got["lines"] + ["", "any key closes this"]
     assert got["title"] == " note keys "
@@ -909,3 +909,237 @@ def test_vim_changes_the_mode_of_no_other_file_it_writes(box, note, work, loose_
     other = tmp_path / "other.txt"
     run_vim(box.path, work, f"edit {other.as_posix()}\ncall setline(1, 'mine')\nwrite\n")
     assert other.read_text(encoding="utf-8") == "mine\n" and _mode(other) == 0o644
+
+
+# ---- the run block takes a value as the text it is
+
+
+def fill_script(
+    work, values: dict[str, str], *, lines_after: str = "", yank: str = 'normal! V}"qy', drop: bool = True
+) -> str:
+    """Reads the smb playbook into dc01's section, puts each value over its <Replace>, deletes
+    the replace lines left unfilled (unless `drop` is false), yanks the run block and runs it
+    with @q. The values go through a file, so nothing here has to quote them."""
+    (work / "values.json").write_text(json.dumps(values, ensure_ascii=False), encoding="utf-8")
+    unfilled = "silent! global/^:'y,'zs\\/<[^>]*>\\/<Replace>\\/ge$/delete" if drop else ""
+    return rf"""
+let values = json_decode(join(readfile('{(work / "values.json").as_posix()}'), ''))
+let outer = Find('^Target: dc01 ') - 1
+execute outer . 'foldopen'
+call cursor(Find('^login as '), 1)
+Pb smb
+let first = line('.')
+for name in keys(values)
+  let at = search('^:''y,''zs/<' . name . '>/', 'W')
+  call setline(at, ":'y,'zs/<" . name . '>/' . values[name] . '/ge')
+  call cursor(first, 1)
+endfor
+{unfilled}
+{lines_after}
+call cursor(first, 1)
+{yank}
+let v:errmsg = ''
+silent! normal @q
+call Put('error', v:errmsg)
+call Put('cursor', line('.') - first)
+call Put('marks', [line("'y") - first, getline("'z")])
+call Put('lines', getline(first, search('^END OF smb PLAYBOOK$', 'nW')))
+call Put('modified', &modified)
+"""
+
+
+def filled(got: dict) -> list[str]:
+    """The playbook's lines below its run block."""
+    lines = got["lines"]
+    return lines[lines.index("'y") + 1 :]
+
+
+CANARY = "PWNED-BY-A-VALUE"
+
+# what a password, a path or a line taken from a target can hold
+VALUES = [
+    "10.10.10.0/24",
+    "http://10.10.10.5:8080/a/b/",
+    r"C:\Users\svc-alfresco\Desktop",
+    r"\\dc01\SYSVOL\x",
+    "Tom & Jerry && more",
+    "~/loot ~ and ~",
+    "a|b || c",
+    "it's \"quoted\" and 'again'",
+    "  two  spaces  each  side  ",
+    "$HOME $(id) ${PATH}",
+    "`id` and `uname -a`",
+    "pässwörd-日本語-🔑",
+    r"\=system('id')",
+    r"\r\n\t\0\1\& \/ \\",
+    "ends/ge",
+    "/",
+    "//ge/ge",
+    "%:p #1 <cword> <cfile>",
+    "a\tb",
+    "<Username>",
+    "P@ss/w0rd&~\\|'\"$`é",
+    "",
+]
+
+
+@pytest.mark.parametrize("value", VALUES)
+def test_a_value_goes_into_the_playbook_as_the_text_it_is(box, note, work, notes_file, value):
+    got = run_vim(box.path, work, with_notes(notes_file, fill_script(work, {"TargetIP": value})))
+    assert got["error"] == ""
+    body = filled(got)
+    assert f"Fill in:  {value}  <Username>" in body
+    assert f"nxc smb {value} -u '' -p ''" in body
+    assert f"nxc smb {value} -u <Username> -p ''" in body
+    assert not any("<TargetIP>" in line for line in body)
+    assert got["modified"] == 1
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # each ends the replacement of a :s and goes on as a command, when it is run as keys
+        f"x/|call writefile(['run'], '{CANARY}')|\"",
+        f"x/e|!touch {CANARY}",
+        f"x/|silent !touch {CANARY}\n",
+        f"x/ge | call writefile(['run'], '{CANARY}') | s/a/b",
+        f"x\\/|!touch {CANARY}|/",
+    ],
+)
+def test_a_value_is_never_run_as_a_command(box, note, work, notes_file, value):
+    value = value.rstrip("\n")
+    got = run_vim(box.path, work, with_notes(notes_file, fill_script(work, {"TargetIP": value})))
+    assert not (box.path / CANARY).exists()
+    assert got["error"] == "" and f"nxc smb {value} -u '' -p ''" in filled(got)
+
+
+def test_both_values_go_in_and_a_line_left_as_replace_puts_replace_in(box, note, work, notes_file):
+    script = fill_script(work, {"TargetIP": "10.10.10.5/32"}, drop=False)
+    got = run_vim(box.path, work, with_notes(notes_file, script))
+    body = filled(got)
+    # as the :s of that line always did: the line was not deleted, so its placeholder is filled
+    assert "nxc smb 10.10.10.5/32 -u <Replace> -p ''" in body
+    assert "Fill in:  10.10.10.5/32  <Replace>" in body
+
+
+def test_values_are_filled_in_the_order_of_their_lines(box, note, work, notes_file):
+    got = run_vim(
+        box.path, work,
+        with_notes(notes_file, fill_script(work, {"TargetIP": "<Username>@10.10.10.5", "Username": "svc/a&b"})),
+    )  # fmt: skip
+    # the second line fills what the first put there too, as two :s in a row do
+    assert "nxc smb svc/a&b@10.10.10.5 -u svc/a&b -p ''" in filled(got)
+
+
+def test_the_run_leaves_the_marks_and_the_cursor_where_its_keys_would(box, note, work, notes_file):
+    got = run_vim(box.path, work, with_notes(notes_file, fill_script(work, {"TargetIP": "a/b"})))
+    # y on the my line and z on the END OF line; the cursor two lines below y, for the Enter
+    # that ends 'y and the blank line V} takes with it
+    assert got["marks"] == [0, "END OF smb PLAYBOOK"] and got["cursor"] == 2
+
+
+def test_a_value_that_spans_lines_is_refused_and_nothing_of_it_is_typed(box, note, work, notes_file):
+    # pasted over <Replace>, a value of two lines leaves a line that is no line of a run block;
+    # run as keys, that line is typed into vim, and this one is a command
+    after = rf"""
+let at = search('^:''y,''zs/<TargetIP>/', 'W')
+call setline(at, ":'y,'zs/<TargetIP>/first line")
+call append(at, [":call writefile(['run'], '{CANARY}')", "second line/ge"])
+"""
+    got = run_vim(box.path, work, with_notes(notes_file, fill_script(work, {}, lines_after=after, drop=False)))
+    assert not (box.path / CANARY).exists()
+    assert got["error"] == (
+        "run block: line 4 is not :'y,'zs/<Name>/a value/ge, with the value on that one line; "
+        "nothing was filled in"
+    )
+    assert sum("<TargetIP>" in line for line in got["lines"]) == 4
+    assert got["modified"] == 1  # the edits to the block itself, and no more
+
+
+@pytest.mark.parametrize(
+    ("yank", "why"),
+    [
+        # from the first replace line down: the block's own lines, without the three above them
+        ('normal! 3jV}"qy', "its first three lines are not there; select it from its my line with V}"),
+        # the block without its last line
+        ('normal! V3j"qy', "its last line, 'y, is not there; select it down to its blank line with V}"),
+        # and with the lines after its blank line
+        ('normal! V8j"qy', "there is text after its last line, 'y"),
+    ],
+)
+def test_a_run_block_that_is_not_whole_is_refused(box, note, work, notes_file, yank, why):
+    script = fill_script(work, {"TargetIP": f"x/|call writefile(['run'], '{CANARY}')|\""}, yank=yank)
+    got = run_vim(box.path, work, with_notes(notes_file, script))
+    assert got["error"] == f"run block: {why}; nothing was filled in"
+    assert not (box.path / CANARY).exists()
+    # the replace line itself, the Fill in line and the two lines of the body
+    assert sum("<TargetIP>" in line for line in got["lines"]) == 4
+
+
+def test_a_replace_line_whose_end_was_changed_is_refused(box, note, work, notes_file):
+    after = r"""
+let at = search('^:''y,''zs/<Username>/', 'W')
+call setline(at, ":'y,'zs/<Username>/svc/g")
+"""
+    script = fill_script(work, {"TargetIP": "a"}, lines_after=after, drop=False)
+    got = run_vim(box.path, work, with_notes(notes_file, script))
+    assert got["error"].startswith("run block: line 5 is not :'y,'zs/<Name>/a value/ge")
+    assert "nxc smb <TargetIP> -u <Username> -p ''" in got["lines"]
+
+
+def test_any_register_holds_a_run_block_and_at_at_runs_it_again(box, note, work, notes_file):
+    script = fill_script(work, {"TargetIP": "a/b"}, yank='normal! V}"ay').replace(
+        "silent! normal @q", "silent! normal @a"
+    ) + r"""
+call Put('first', getline(first + 10))
+call cursor(first, 1)
+call setreg('a', substitute(getreg('a'), '<TargetIP>/a/b', '<Username>/c\\d', ''))
+silent! normal @@
+call Put('again', getline(first + 10))
+"""
+    got = run_vim(box.path, work, with_notes(notes_file, script))
+    assert got["first"] == "nxc smb a/b -u <Username> -p ''"
+    assert got["again"] == r"nxc smb a/b -u c\d -p ''"
+
+
+def test_a_register_that_holds_no_run_block_runs_as_it_always_did(box, note, work):
+    got = run_vim(box.path, work, r"""
+call cursor(line('$'), 1)
+let start = line('$')
+let @q = "ohello\<Esc>"
+normal @q
+call Put('once', [line('$') - start, getline('$')])
+normal 2@q
+call Put('count', line('$') - start)
+normal @@
+call Put('again', line('$') - start)
+let @w = "\"zyy"
+normal @w
+call Put('yanked', @z)
+" @: is passed on as it is: headless, vim has no last command line, and says so either way
+let v:errmsg = ''
+silent! normal! @:
+call Put('native', v:errmsg)
+let v:errmsg = ''
+silent! normal @:
+call Put('mapped', v:errmsg)
+call Put('map', maparg('@', 'n'))
+""")
+    assert got["once"] == [1, "hello"]
+    # a count, @@ for the register run last, and a register of normal-mode keys
+    assert got["count"] == 3 and got["again"] == 4
+    assert got["yanked"] == "hello\n"
+    assert got["mapped"] == got["native"] and got["native"].startswith("E30")
+    assert "At()" in got["map"]
+
+
+def test_the_keys_of_a_playbook_s_own_lines_still_run_outside_a_run_block(box, note, work):
+    # a macro of the user's own that happens to use :s is theirs, and is run as keys
+    got = run_vim(box.path, work, r"""
+call append(line('$'), 'alpha beta')
+call cursor(line('$'), 1)
+let @q = ":s/alpha/gamma/\<CR>"
+normal @q
+call Put('line', getline('.'))
+""")
+    assert got["line"] == "gamma beta"

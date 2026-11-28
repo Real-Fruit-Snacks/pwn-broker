@@ -461,11 +461,15 @@ Fill in:  <TargetIP>  <Username>
 
 1. On each replace line, put the value over `<Replace>`: `ca>` on it removes the word and its angle brackets and starts insert mode. Delete with `dd` each replace line you are not filling.
 2. On the `my` line, `V}` selects the run block down to its blank line, and `"qy` copies it into register `q`.
-3. `@q` runs it: it marks the block's first line `y`, finds this playbook's `END OF` line, marks it `z`, replaces each placeholder between the two, and ends back at the run block.
+3. `@q` fills the playbook in: the block's first line is marked `y`, this playbook's `END OF` line is found and marked `z`, each value is put in place of its placeholder between the two, and the cursor ends back at the run block.
 
 Afterwards the `Fill in:` line shows the values used, and a placeholder still on it is one not filled yet. The same playbook read in for two targets fills only the copy the block belongs to. Pasting the block from the terminal does not run it: vim inserts pasted text as text, which is why it goes through a register.
 
-- A value holding `/`, `&`, `\` or `~` breaks or changes the replacement unless you escape it (`\/`, `\&`). That matters mostly for passwords.
+- **A value goes in as the text you typed.** `/`, `\`, `&`, `~`, `|`, quotes, spaces, `$`, backticks and letters outside ASCII are all just text, and need no backslash; one you type is kept, so `\/` puts `\/` in. The block's lines look like vim commands, and are: pwn-playbooks writes them so. From 0.1.16 the note's vim does not run them. For a register that holds a run block, `@` reads the lines as what they say and does the filling in itself. Before that, they were typed into vim as keys, a `/` in a value ended the replacement, and vim ran whatever followed it as a command: `x/|!touch /tmp/x|/` over a `<Replace>` ran `touch`.
+- **A value is never run, and has to be on one line.** The block is taken only when every line of it is one of its own. A value of two lines pasted over `<Replace>` leaves a line that is not, and `@q` then fills nothing in and says which: `run block: line 4 is not :'y,'zs/<Name>/a value/ge, with the value on that one line; nothing was filled in`. A block yanked without its first three lines, or without its last, is refused the same way.
+- **Any other register runs as it always did.** `@a`, `@@`, a count before it and `@:` are vim's own; a macro of yours that uses `:s` is run as keys, as you wrote it.
+- **This is the note's own vim.** In a vim started without the app's vimrc, or by pwn-broker 0.1.15 or earlier, `@q` runs the block as keys, and a `/` in a value still ends the replacement there.
+- A `'` in a value is still yours to look at before you run a filled-in line: the playbooks put values in single quotes, as in `-p '<Password>'`, and a quote in the value ends them in the shell.
 - A replace line left as `<Replace>` turns that placeholder into `<Replace>` throughout the playbook.
 - Marks `y` and `z` are overwritten each time a run block runs.
 - The search looks only below the run block (`\%>'y`), so a playbook whose `END OF` line you deleted stops there and changes nothing, even with another copy above it. With another copy of the same playbook below it, the fill runs down to that copy's end, your own lines between included.
