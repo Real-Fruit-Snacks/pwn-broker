@@ -6,7 +6,16 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from pwn_broker import hosts, tooldata, tooldeps, toolhooks, toolindex, toolinstall, toolstate
+from pwn_broker import (
+    hosts,
+    tooldata,
+    tooldeps,
+    toolhooks,
+    toolindex,
+    toolinstall,
+    toolseen,
+    toolstate,
+)
 from pwn_broker.model import current_tools
 from pwn_broker.session import Session, current_tunnel
 from pwn_broker.shell.commands import ArgumentError, command, take_args
@@ -628,6 +637,36 @@ def tool_refresh(session: Session, args: list[str]) -> None:
         session.paths, session.settings, now=session.clock(), force=True
     )
     session.console.ok(f"index refreshed: {_count(len(_tools(index)), 'tool')}")
+
+
+@command("tool forget", "forget the SHA-256 kept for one build", "<name>@<version>-<build>")
+def tool_forget(session: Session, args: list[str]) -> None:
+    (spec,) = take_args(args, required=("build",))
+    name, at, wanted = spec.partition("@")
+    if not name or not at or not wanted:
+        raise ArgumentError(f"expected <name>@<version>-<build>, not {spec}")
+    console = session.console
+    # the index is not read: one that gives this build another hash is refused, and this is
+    # how that is put right
+    kept = toolseen.of_tool(session.paths, name)
+    item = next((k for k in kept if build_id(k.version, k.build) == wanted), None)
+    if item is None:
+        builds = ", ".join(build_id(k.version, k.build) for k in kept)
+        known = f"; the builds kept for {name}: {builds}" if kept else ""
+        raise ToolError(f"no SHA-256 is kept for {spec}{known}")
+    console.fields(
+        [
+            ("build", f"{item.name} {wanted}"),
+            ("sha256", item.sha256),
+            ("seen", f"{_shown_time(session, item.seen)}   {item.source}"),
+        ]
+    )
+    if not console.confirm(f"forget the SHA-256 kept for {item.name} {wanted}?"):
+        console.info("nothing forgotten")
+        return
+    if not toolindex.forget_build(session.paths, item):
+        raise ToolError(f"the SHA-256 kept for {spec} is no longer the one shown; nothing forgotten")
+    console.ok(f"{item.name} {wanted} forgotten; the next index that lists it says what it is")
 
 
 @command("tool cache clear", "empty the download cache")

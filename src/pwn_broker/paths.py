@@ -56,6 +56,11 @@ class AppPaths:
         return self.tools / "installed.toml"
 
     @property
+    def tools_seen(self) -> Path:
+        # the SHA-256 an index first gave for each build; not in cache/, which may be emptied
+        return self.tools / "seen.toml"
+
+    @property
     def run_box(self) -> Path:
         return self.run / "box"
 

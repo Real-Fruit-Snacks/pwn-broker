@@ -575,7 +575,18 @@ def installed_list() -> dict[str, dict]:
 
 def tools_left() -> None:
     left = sorted(p.name for p in TOOLS.iterdir())
-    check(left == ["installed.toml"], f"{TOOLS} holds nothing but installed.toml", repr(left))
+    # toolseen: the SHA-256 the index gave for each build stays when the tools go
+    check(
+        left == ["installed.toml", "seen.toml"],
+        f"{TOOLS} holds nothing but installed.toml and seen.toml",
+        repr(left),
+    )
+    seen = {(row["name"], row["version"], row["build"]) for row in read_toml(TOOLS / "seen.toml").get("build", [])}
+    check(
+        (TOOL, TOOL_VERSION, TOOL_BUILD) in seen,
+        f"seen.toml keeps the SHA-256 of {TOOL} {TOOL_VERSION}-{TOOL_BUILD}",
+        repr(sorted(seen)),
+    )
     check(installed_list() == {}, "installed.toml lists nothing", (TOOLS / "installed.toml").read_text())
 
 

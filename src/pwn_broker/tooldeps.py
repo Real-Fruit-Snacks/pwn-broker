@@ -11,6 +11,7 @@ from pathlib import Path
 from pwn_broker.model import Box, ToolRecord, current_tools
 from pwn_broker.toolindex import BuildEntry, Index, pick_build
 from pwn_broker.toolpkg import ToolError, build_id
+from pwn_broker.toolseen import differs
 from pwn_broker.toolstate import Installed
 
 
@@ -40,7 +41,7 @@ def _existing_build(index: Index, entry: BuildEntry, installed: dict[str, Instal
             if build_id(build.version, build.build) == wanted:
                 if build.sha256.lower() != current.sha256.lower():
                     raise ToolError(
-                        f"{entry.name} {wanted}: the index lists a different SHA-256 than the install"
+                        differs(build, held=current.sha256, holder="the installed copy has")
                     )
                 return build
     raise ToolError(f"{entry.name} {wanted}: the installed build is not in the index")

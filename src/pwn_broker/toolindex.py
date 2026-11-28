@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from pwn_broker import config
+from pwn_broker import config, toolseen
 from pwn_broker.config import Settings
 from pwn_broker.paths import AppPaths
 from pwn_broker.store import write_text
@@ -463,6 +463,24 @@ def _is_fresh(paths: AppPaths, where: str, now: datetime) -> bool:
         return False
 
 
+def _seen(paths: AppPaths, index: Index, where: str, now: datetime) -> Index:
+    builds = [build for tool in index.tools for build in tool.builds]
+    toolseen.check(paths, builds, where=where, now=now)
+    return index
+
+
+def forget_build(paths: AppPaths, item: toolseen.Seen) -> bool:
+    """Forgets the SHA-256 kept for one build; false when it was not kept any more.
+
+    The copy of a downloaded index is no longer taken as fresh either. It is the index that
+    agreed with the hash just forgotten, and read again it would only bring that hash back.
+    """
+    gone = toolseen.forget(paths, item)
+    if gone:
+        _remove(paths.cache / STAMP_FILE)
+    return gone
+
+
 def load_index(
     paths: AppPaths,
     settings: Settings,
@@ -471,29 +489,37 @@ def load_index(
     fetch: Callable[[str, float], bytes] = _fetch_index,
     force: bool = False,
 ) -> Index:
+    """The index, from wherever tools_index says, held to the builds this machine has seen.
+
+    Every index goes through _seen before it is returned: a folder's, one just downloaded, and
+    the cached copy. One that gives a build another SHA-256 than the one kept raises
+    BuildChanged, is never the answer, and never replaces the cached copy.
+    """
     where = location(settings)
     if not is_url(where):
         file = Path(where) / INDEX_FILE
         try:
-            return _parse_bytes(file.read_bytes())
+            index = _parse_bytes(file.read_bytes())
         except OSError as exc:
             raise _not_found(str(file), str(exc)) from exc
         except ToolError as exc:
             raise _not_found(str(file), str(exc)) from exc
+        return _seen(paths, index, str(file), now)
 
     cached = _read_cached(paths, where)
     if cached is not None and not force and _is_fresh(paths, where, now):
-        return cached
+        return _seen(paths, cached, where, now)
     try:
         raw = _with_deadline(fetch, where, FORCED_TIMEOUT if force else QUICK_TIMEOUT)
         fresh = _parse_bytes(raw)
     except Exception as exc:
         close_response(exc)
         if cached is not None and not force:
-            return cached
+            return _seen(paths, cached, where, now)
         raise _not_found(where, str(exc) or type(exc).__name__) from exc
-    # the download parsed, so it may replace the cached copy; a cache that cannot be
-    # written costs only the saving, not the answer
+    _seen(paths, fresh, where, now)
+    # the download parsed and changed no build, so it may replace the cached copy; a cache
+    # that cannot be written costs only the saving, not the answer
     try:
         write_text(paths.cache / INDEX_FILE, raw.decode("utf-8"))
         write_text(paths.cache / STAMP_FILE, f"{now.isoformat()}\n{where}\n")
@@ -627,6 +653,11 @@ def fetch_zip(
             f"{entry.name} {entry.version}: the index gives it {entry.size} bytes, more than "
             f"the {MAX_ZIP_BYTES} a package can be"
         )
+    where = location(settings)
+    # the build's hash as this machine first saw it: an entry that gives another is refused
+    # before its hash can judge the cached copy, which would be dropped as a bad one
+    index_file = where if is_url(where) else str(Path(where) / INDEX_FILE)
+    toolseen.check_one(paths, entry, where=index_file)
     target = paths.cache / entry.file
     if target.is_file():
         try:
@@ -636,7 +667,6 @@ def fetch_zip(
             # nothing unverified is ever returned: a bad copy is dropped and fetched afresh
             _remove(target)
 
-    where = location(settings)
     if is_url(where):
         if not entry.url:
             raise ToolError(f"{entry.name} {entry.version}: the index gives no download address")

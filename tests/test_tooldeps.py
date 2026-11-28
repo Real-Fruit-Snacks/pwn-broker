@@ -782,3 +782,19 @@ def test_a_recorded_backend_the_build_does_not_declare_is_not_installed(full, gr
     assert set(toolstate.load_installed(full.paths)) == {
         "leaf-tool", "mid-tool", "netexec", "root-tool", "solo-tool",
     }
+
+
+def test_an_installed_dependency_whose_sha256_is_not_the_index_s_is_refused_with_both(
+    session, graph
+):
+    run(session, "tool install leaf-tool")
+    installed = toolstate.load_installed(session.paths)
+    installed["leaf-tool"].sha256 = "cd" * 32
+    toolstate.save_installed(session.paths, installed)
+    console = run(session, "tool install mid-tool")
+    # said as it is when this machine, or a box, holds another hash for the build
+    assert lines_matching(console, "fail") == [
+        f"leaf-tool 1.0.3-1: the index gives it the SHA-256 {graph.entries['leaf-tool'].sha256}, "
+        f"and the installed copy has {'cd' * 32}"
+    ]
+    assert set(toolstate.load_installed(session.paths)) == {"leaf-tool"}

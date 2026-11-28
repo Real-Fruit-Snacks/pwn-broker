@@ -1377,3 +1377,174 @@ def test_find_tool_never_suggests_a_runtime():
     assert "did you mean" not in str(err.value)
     with pytest.raises(ToolError, match="did you mean certipy"):
         toolindex.find_tool(index, "certipi")
+
+
+# ---- a build's hash is kept, and an index that changes it is refused
+
+OTHER_HASH = "b" * 64
+
+
+def changed_text():
+    return index_text(tool_row(builds=[build_row(sha256=OTHER_HASH)]))
+
+
+def kept_hashes(paths):
+    return {key: row.sha256 for key, row in toolindex.toolseen.load(paths).items()}
+
+
+def assert_names_the_change(err):
+    said = str(err.value)
+    assert isinstance(err.value, toolindex.toolseen.BuildChanged)
+    assert "kerbrute 1.0.3-1" in said and HASH in said and OTHER_HASH in said
+    assert "tool forget kerbrute@1.0.3-1" in said
+    # it is not the answer for an index that is missing: tools_index points at the right place
+    assert "no usable tool index" not in said and "set tools_index" not in said
+
+
+def test_the_first_index_read_has_every_build_kept(paths):
+    # as on the first run after an upgrade: nothing is kept yet, so the first sight is
+    both = tool_row(builds=[build_row(), build_row("1.0.2", 2, sha256=OTHER_HASH)])
+    toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text(both).encode()))
+    assert kept_hashes(paths) == {
+        ("kerbrute", "1.0.3", 1): HASH, ("kerbrute", "1.0.2", 2): OTHER_HASH,
+    }  # fmt: skip
+    row = toolindex.toolseen.load(paths)[("kerbrute", "1.0.3", 1)]
+    assert (row.seen, row.source) == (NOW, URL)
+
+
+def test_a_folder_index_that_changes_a_build_is_refused(paths, tmp_path):
+    settings = Settings(tools_index=str(tmp_path))
+    file = tmp_path / "index.toml"
+    file.write_text(index_text(), encoding="utf-8")
+    toolindex.load_index(paths, settings, now=NOW)
+    file.write_text(changed_text(), encoding="utf-8")
+    for force in (False, True):
+        with pytest.raises(ToolError) as err:
+            toolindex.load_index(paths, settings, now=NOW, force=force)
+        assert_names_the_change(err)
+        # named once: the index refused is the one that first gave the build
+        assert str(err.value).count(str(file)) == 1 and "since 2026-11-14." in str(err.value)
+    assert kept_hashes(paths) == {("kerbrute", "1.0.3", 1): HASH}
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_a_download_that_changes_a_build_is_refused_and_never_replaces_the_cache(paths, force):
+    toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode()))
+    cached = (paths.cache / "index.toml").read_bytes()
+    stamp = (paths.cache / "index.fetched").read_bytes()
+    later = NOW + timedelta(days=2)
+    with pytest.raises(ToolError) as err:
+        toolindex.load_index(
+            paths, url_settings(), now=later, fetch=Fetcher(changed_text().encode()), force=force
+        )
+    assert_names_the_change(err)
+    # the good copy is not used in its place without a word, and is not written over
+    assert (paths.cache / "index.toml").read_bytes() == cached
+    assert (paths.cache / "index.fetched").read_bytes() == stamp
+    assert kept_hashes(paths) == {("kerbrute", "1.0.3", 1): HASH}
+
+
+def test_a_mirror_that_gives_another_hash_for_a_build_is_refused(paths):
+    toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode()))
+    mirror = Settings(tools_index="https://mirror.invalid/index.toml")
+    with pytest.raises(ToolError) as err:
+        toolindex.load_index(paths, mirror, now=NOW, fetch=Fetcher(changed_text().encode()))
+    assert_names_the_change(err)
+    assert URL in str(err.value) and "https://mirror.invalid/index.toml" in str(err.value)
+    # the copy on disk is still the first index's
+    assert URL in (paths.cache / "index.fetched").read_text(encoding="utf-8")
+
+
+def test_a_mirror_that_gives_the_same_builds_is_taken(paths):
+    toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode()))
+    mirror = Settings(tools_index="https://mirror.invalid/index.toml")
+    index = toolindex.load_index(paths, mirror, now=NOW, fetch=Fetcher(index_text().encode()))
+    assert index.tools[0].name == "kerbrute"
+    assert toolindex.toolseen.load(paths)[("kerbrute", "1.0.3", 1)].source == URL
+
+
+def test_the_cached_copy_is_held_to_the_builds_kept_too(paths):
+    # the copy on disk is an index like any other: written by hand, or left by another version
+    toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode()))
+    (paths.cache / "index.toml").write_text(changed_text(), encoding="utf-8")
+    fetch = Fetcher(fail=True)
+    with pytest.raises(ToolError) as err:
+        toolindex.load_index(paths, url_settings(), now=NOW, fetch=fetch)
+    assert_names_the_change(err)
+    assert fetch.calls == []
+    # and when the source does not answer and the copy stands in for it
+    with pytest.raises(ToolError) as err:
+        toolindex.load_index(paths, url_settings(), now=NOW + timedelta(days=2), fetch=fetch)
+    assert_names_the_change(err)
+    assert len(fetch.calls) == 1
+
+
+def test_a_refused_index_has_none_of_its_new_builds_kept(paths):
+    toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode()))
+    newer = tool_row(
+        latest="1.0.4-1", builds=[build_row(sha256=OTHER_HASH), build_row("1.0.4", 1)]
+    )
+    with pytest.raises(ToolError):
+        toolindex.load_index(
+            paths, url_settings(), now=NOW, fetch=Fetcher(index_text(newer).encode()), force=True
+        )
+    assert kept_hashes(paths) == {("kerbrute", "1.0.3", 1): HASH}
+
+
+def test_a_list_of_builds_that_cannot_be_read_stops_every_index(paths, tmp_path):
+    paths.tools.mkdir(parents=True)
+    paths.tools_seen.write_text("schema = 1\n[[build", encoding="utf-8")
+    (tmp_path / "index.toml").write_text(index_text(), encoding="utf-8")
+    for settings, fetch in (
+        (Settings(tools_index=str(tmp_path)), Fetcher(fail=True)),
+        (url_settings(), Fetcher(index_text().encode())),
+    ):
+        with pytest.raises(ToolError) as err:
+            toolindex.load_index(paths, settings, now=NOW, fetch=fetch)
+        assert str(paths.tools_seen) in str(err.value) and "set tools_index" not in str(err.value)
+    # an index that could not be held to the list is not kept as the copy to fall back on
+    assert not (paths.cache / "index.toml").exists()
+
+
+def test_forgetting_a_build_lets_the_next_index_say_what_it_is(paths):
+    toolindex.load_index(paths, url_settings(), now=NOW, fetch=Fetcher(index_text().encode()))
+    (item,) = toolindex.toolseen.of_tool(paths, "kerbrute")
+    assert toolindex.forget_build(paths, item) is True
+    # the copy on disk agreed with the hash forgotten, so it is not taken as fresh: the index
+    # is fetched, though a moment ago it was
+    fetch = Fetcher(changed_text().encode())
+    index = toolindex.load_index(paths, url_settings(), now=NOW, fetch=fetch)
+    assert len(fetch.calls) == 1 and index.tools[0].builds[0].sha256 == OTHER_HASH
+    assert kept_hashes(paths) == {("kerbrute", "1.0.3", 1): OTHER_HASH}
+    # the row that was shown is gone: what is kept now is another hash, and stays
+    assert toolindex.forget_build(paths, item) is False
+    assert kept_hashes(paths) == {("kerbrute", "1.0.3", 1): OTHER_HASH}
+    assert (paths.cache / "index.fetched").exists()
+
+
+def test_fetch_zip_refuses_an_entry_whose_hash_is_not_the_one_kept(paths, tmp_path):
+    entry = make_zip_entry(tmp_path)
+    paths.cache.mkdir(parents=True)
+    (paths.cache / entry.file).write_bytes(b"zip bytes")
+    toolindex.toolseen.check(paths, [entry], where=URL, now=NOW)
+    other = b"other bytes"
+    changed = replace(entry, size=len(other), sha256=hashlib.sha256(other).hexdigest())
+    download = Downloader(other)
+    with pytest.raises(ToolError) as err:
+        toolindex.fetch_zip(paths, url_settings(), changed, download=download)
+    said = str(err.value)
+    assert "kerbrute 1.0.3-1" in said and entry.sha256 in said and changed.sha256 in said
+    # nothing was fetched, and the copy that matches the build kept is not dropped for it
+    assert download.calls == []
+    assert (paths.cache / entry.file).read_bytes() == b"zip bytes"
+    got = toolindex.fetch_zip(paths, url_settings(), entry, download=download)
+    assert got == paths.cache / entry.file and download.calls == []
+
+
+def test_fetch_zip_still_replaces_a_damaged_copy_of_a_build_it_has_kept(paths, tmp_path):
+    entry = make_zip_entry(tmp_path)
+    toolindex.toolseen.check(paths, [entry], where=URL, now=NOW)
+    paths.cache.mkdir(parents=True)
+    (paths.cache / entry.file).write_bytes(b"cut sho")
+    got = toolindex.fetch_zip(paths, url_settings(), entry, download=Downloader(b"zip bytes"))
+    assert got.read_bytes() == b"zip bytes"
